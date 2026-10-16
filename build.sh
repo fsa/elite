@@ -8,6 +8,6 @@ cd "$(dirname "$0")"
 
 mkdir -p build
 python3 tools/ida2sjasm.py zx_src/elite.asm build/elite.s.asm
-tools/sjasmplus --raw=elite.bin --sym=build/elite.sym build/elite.s.asm
+tools/sjasmplus --raw=zx_bin/elite.bin --sym=build/elite.sym build/elite.s.asm
 
 echo "built zx_bin/elite.bin"
