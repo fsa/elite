@@ -28,6 +28,16 @@ pub struct Spectrum {
     pub wwatch_hist: std::collections::BTreeMap<u16, u64>,
     pub spat: std::collections::BTreeMap<u16, u64>,
     pub dump_at: Vec<u16>,
+    /// Частота дискретизации синтезируемого звука (Гц).
+    pub audio_rate: u32,
+    /// Переходы бипера (порт 0xFE, бит 4) в текущем кадре: (такт CPU, уровень).
+    beeper_edges: Vec<(u64, bool)>,
+    /// Уровень бипера на начало текущего кадра.
+    beeper_frame_start: bool,
+    /// Такт CPU на начало текущего кадра.
+    audio_cycle_base: u64,
+    /// Такт CPU на начало текущей инструкции (обновляется в `run_frame`).
+    cycle_clock: u64,
 }
 
 impl Spectrum {
@@ -57,6 +67,11 @@ impl Spectrum {
             wwatch_hist: std::collections::BTreeMap::new(),
             spat: std::collections::BTreeMap::new(),
             dump_at: Vec::new(),
+            audio_rate: crate::audio::SAMPLE_RATE,
+            beeper_edges: Vec::new(),
+            beeper_frame_start: false,
+            audio_cycle_base: 0,
+            cycle_clock: 0,
         }
     }
 
@@ -100,6 +115,10 @@ impl Spectrum {
     pub fn run_frame(&mut self) {
         let target = self.frame_start + CYCLES_PER_FRAME;
         let mut cpu = std::mem::take(&mut self.cpu);
+        self.beeper_edges.clear();
+        self.beeper_frame_start = self.beeper;
+        self.audio_cycle_base = self.frame_start;
+        self.cycle_clock = cpu.cycles;
         cpu.interrupt(self, 0xFF);
         while cpu.cycles < target {
             let pc = cpu.pc;
@@ -153,6 +172,7 @@ impl Spectrum {
                     );
                 }
             }
+            self.cycle_clock = cpu.cycles;
             cpu.step(self);
         }
         self.frame_start = target;
@@ -173,6 +193,26 @@ impl Spectrum {
                 let palette = if on { ink } else { paper };
                 out[y as usize * 256 + x as usize] = ZX_PALETTE[(palette | bright) as usize];
             }
+        }
+    }
+
+    /// Synthesize one frame of 1-bit beeper audio (mono, [`AUDIO_RATE`]) into
+    /// `out`. Call after [`Spectrum::run_frame`].
+    pub fn render_audio(&mut self, out: &mut Vec<i16>) {
+        const AMP: i16 = 4000;
+        let samples = (self.audio_rate as usize) / 50;
+        out.clear();
+        out.reserve(samples);
+        let base = self.audio_cycle_base;
+        let mut idx = 0usize;
+        let mut level = self.beeper_frame_start;
+        for i in 0..samples {
+            let cycle = base + (i as u64 * CYCLES_PER_FRAME) / samples as u64;
+            while idx < self.beeper_edges.len() && self.beeper_edges[idx].0 <= cycle {
+                level = self.beeper_edges[idx].1;
+                idx += 1;
+            }
+            out.push(if level { AMP } else { -AMP });
         }
     }
 }
@@ -254,7 +294,11 @@ impl Bus for Spectrum {
         }
         if port & 0x01 == 0 {
             self.border = val & 0x07;
-            self.beeper = val & 0x10 != 0;
+            let beep = val & 0x10 != 0;
+            if beep != self.beeper {
+                self.beeper = beep;
+                self.beeper_edges.push((self.cycle_clock, beep));
+            }
         }
     }
 }
@@ -290,4 +334,26 @@ pub fn install_stub_rom(rom: &mut [u8]) {
     // Tape load/save stubs (LD-BYTES 0x0562, SA-BYTES 0x04C6): RET.
     rom[0x0562] = 0xC9;
     rom[0x04C6] = 0xC9;
+}
+
+#[cfg(test)]
+mod audio_tests {
+    use super::*;
+
+    #[test]
+    fn beeper_edges_become_audio() {
+        let mut m = Spectrum::new(None);
+        // DI ; loop: ld a,0x10 ; out (0xfe),a ; ld a,0 ; out (0xfe),a ; jr loop
+        let prog = [
+            0xF3, 0x3E, 0x10, 0xD3, 0xFE, 0x3E, 0x00, 0xD3, 0xFE, 0x18, 0xF6,
+        ];
+        m.load(0x8000, &prog);
+        m.cpu.pc = 0x8000;
+        m.run_frame();
+        let mut out = Vec::new();
+        m.render_audio(&mut out);
+        assert_eq!(out.len(), m.audio_rate as usize / 50);
+        assert!(out.iter().any(|&s| s > 0), "no beeper-high samples");
+        assert!(out.iter().any(|&s| s < 0), "no beeper-low samples");
+    }
 }

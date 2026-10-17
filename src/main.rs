@@ -1,6 +1,8 @@
+mod audio;
 mod machine;
 mod z80;
 
+use audio::Audio;
 use machine::Spectrum;
 use minifb::{Key, Scale, ScaleMode, Window, WindowOptions};
 use std::env;
@@ -41,6 +43,12 @@ struct Options {
     headless: bool,
     frames: u64,
     dump: Option<String>,
+    /// Отключить звук (PipeWire).
+    mute: bool,
+    /// Включить звук и в headless-режиме (реальное время).
+    audio: bool,
+    /// Сохранить сведённый звук в WAV-файл.
+    wav: Option<String>,
     /// Базовая версия проекта — Кладова. `--elite` переключает на оригинал.
     kladov: bool,
 }
@@ -52,6 +60,9 @@ fn parse_args() -> Options {
         headless: false,
         frames: 600,
         dump: None,
+        mute: false,
+        audio: false,
+        wav: None,
         kladov: true,
     };
     let mut args = env::args().skip(1);
@@ -66,11 +77,17 @@ fn parse_args() -> Options {
                 opts.headless = true;
             }
             "--headless" => opts.headless = true,
+            "--mute" => opts.mute = true,
+            "--audio" => opts.audio = true,
+            "--wav" => opts.wav = args.next(),
             "-h" | "--help" => {
                 println!(
-                    "usage: elite [game.bin] [--elite] [--rom rom.bin] [--headless] [--frames N] [--dump out.ppm]"
+                    "usage: elite [game.bin] [--elite] [--rom rom.bin] [--headless] [--frames N] [--dump out.ppm] [--mute] [--audio] [--wav out.wav]"
                 );
                 println!("  по умолчанию запускается версия Кладова (zx_bin/kladov.bin)");
+                println!("  --mute     отключить вывод звука через PipeWire");
+                println!("  --audio    выводить звук и в headless-режиме (реальное время)");
+                println!("  --wav FILE сохранить звук в WAV-файл");
                 exit(0);
             }
             other => opts.game = other.to_string(),
@@ -237,6 +254,47 @@ fn main() {
     run_window(machine, &opts);
 }
 
+/// Start the PipeWire audio output unless muted. Returns `None` (with a
+/// warning) if the audio backend cannot be initialized.
+fn start_audio(opts: &Options) -> Option<Audio> {
+    if opts.mute {
+        return None;
+    }
+    match Audio::start() {
+        Ok(audio) => Some(audio),
+        Err(e) => {
+            eprintln!("audio: cannot start PipeWire output: {e}");
+            None
+        }
+    }
+}
+
+/// Write mono `samples` (at `rate` Hz) as a 16-bit PCM WAV file.
+fn write_wav(path: &str, samples: &[i16], rate: u32) {
+    let data_len = (samples.len() * 2) as u32;
+    let mut out = Vec::with_capacity(44 + samples.len() * 2);
+    out.extend_from_slice(b"RIFF");
+    out.extend_from_slice(&(36 + data_len).to_le_bytes());
+    out.extend_from_slice(b"WAVEfmt ");
+    out.extend_from_slice(&16u32.to_le_bytes());
+    out.extend_from_slice(&1u16.to_le_bytes()); // PCM
+    out.extend_from_slice(&1u16.to_le_bytes()); // mono
+    out.extend_from_slice(&rate.to_le_bytes());
+    out.extend_from_slice(&(rate * 2).to_le_bytes()); // byte rate
+    out.extend_from_slice(&2u16.to_le_bytes()); // block align
+    out.extend_from_slice(&16u16.to_le_bytes()); // bits per sample
+    out.extend_from_slice(b"data");
+    out.extend_from_slice(&data_len.to_le_bytes());
+    for s in samples {
+        out.extend_from_slice(&s.to_le_bytes());
+    }
+    if let Err(e) = fs::write(path, &out) {
+        eprintln!("cannot write wav {path}: {e}");
+    } else {
+        println!("wrote {path}");
+    }
+}
+
 fn run_headless(machine: &mut Spectrum, opts: &Options) {
     let trace = env::var("ELITE_TRACE").is_ok();
     let sp_from: Option<u64> = env::var("ELITE_SP").ok().and_then(|s| s.parse().ok());
@@ -275,7 +333,11 @@ fn run_headless(machine: &mut Spectrum, opts: &Options) {
                 .collect()
         })
         .unwrap_or_default();
+    let mut wav_samples: Option<Vec<i16>> = opts.wav.as_ref().map(|_| Vec::new());
+    let audio = if opts.audio { start_audio(opts) } else { None };
+    let frame_time = std::time::Duration::from_micros(1_000_000 / 50);
     for f in 0..opts.frames {
+        let frame_started = std::time::Instant::now();
         machine.release_all_keys();
         machine.release_joystick();
         for &(down, up, row, bit) in &keys_specs {
@@ -312,6 +374,22 @@ fn run_headless(machine: &mut Spectrum, opts: &Options) {
             }
         }
         machine.run_frame();
+        if audio.is_some() || wav_samples.is_some() {
+            let mut frame = Vec::new();
+            machine.render_audio(&mut frame);
+            if let Some(audio) = &audio {
+                audio.push(&frame);
+            }
+            if let Some(wav) = &mut wav_samples {
+                wav.extend_from_slice(&frame);
+            }
+        }
+        if audio.is_some() {
+            let elapsed = frame_started.elapsed();
+            if frame_time > elapsed {
+                std::thread::sleep(frame_time - elapsed);
+            }
+        }
     }
     println!(
         "frames={} pc=0x{:04X} cycles={} sp=0x{:04X}",
@@ -355,6 +433,9 @@ fn run_headless(machine: &mut Spectrum, opts: &Options) {
         let _ = fs::write(format!("{dir}/font.bin"), &machine.mem[0x5D70..0x5D70 + 0x2D8]);
         println!("wrote {dir}/screen.bin buf.bin buf800.bin font.bin");
     }
+    if let (Some(path), Some(samples)) = (&opts.wav, &wav_samples) {
+        write_wav(path, samples, audio::SAMPLE_RATE);
+    }
 }
 
 fn write_ppm(path: &str, buf: &[u32], w: usize, h: usize) {
@@ -368,7 +449,7 @@ fn write_ppm(path: &str, buf: &[u32], w: usize, h: usize) {
     let _ = fs::write(path, out);
 }
 
-fn run_window(mut machine: Spectrum, _opts: &Options) {
+fn run_window(mut machine: Spectrum, opts: &Options) {
     let mut window = Window::new(
         "Elite (ZX Spectrum)",
         256,
@@ -386,18 +467,31 @@ fn run_window(mut machine: Spectrum, _opts: &Options) {
     });
     window.set_target_fps(50);
 
+    let audio = start_audio(opts);
+    let mut wav_samples: Option<Vec<i16>> = opts.wav.as_ref().map(|_| Vec::new());
+    let mut audio_buf = Vec::new();
     let mut buf = vec![0u32; 256 * 192];
     while window.is_open() && !window.is_key_down(Key::Escape) {
         machine.release_all_keys();
         machine.release_joystick();
-        apply_keys(&mut machine, &window);
+        apply_keys(&mut machine, &window, opts.kladov);
         machine.run_frame();
+        machine.render_audio(&mut audio_buf);
+        if let Some(audio) = &audio {
+            audio.push(&audio_buf);
+        }
+        if let Some(wav) = &mut wav_samples {
+            wav.extend_from_slice(&audio_buf);
+        }
         machine.render_rgba(&mut buf);
         let _ = window.update_with_buffer(&buf, 256, 192);
     }
+    if let (Some(path), Some(samples)) = (&opts.wav, &wav_samples) {
+        write_wav(path, samples, audio::SAMPLE_RATE);
+    }
 }
 
-fn apply_keys(machine: &mut Spectrum, window: &Window) {
+fn apply_keys(machine: &mut Spectrum, window: &Window, kempston_as_keys: bool) {
     // (minifb key, half-row index, bit)
     const MAP: &[(Key, usize, u8)] = &[
         (Key::LeftShift, 0, 0), (Key::Z, 0, 1), (Key::X, 0, 2), (Key::C, 0, 3), (Key::V, 0, 4),
@@ -421,6 +515,27 @@ fn apply_keys(machine: &mut Spectrum, window: &Window) {
     machine.set_kempston(2, window.is_key_down(Key::Down));
     machine.set_kempston(3, window.is_key_down(Key::Up));
     machine.set_kempston(4, window.is_key_down(Key::RightCtrl));
+
+    // В версии Кладова опрос порта Kempston в игре убран: направления она читает
+    // только с клавиатуры (N/M/X/S), а огонь — по клавише A. Поэтому дублируем
+    // джойстик на эти же клавиши, чтобы стрелки и RightCtrl работали.
+    if kempston_as_keys {
+        if window.is_key_down(Key::Right) {
+            machine.set_key(7, 2, true);
+        }
+        if window.is_key_down(Key::Left) {
+            machine.set_key(7, 3, true);
+        }
+        if window.is_key_down(Key::Up) {
+            machine.set_key(1, 1, true);
+        }
+        if window.is_key_down(Key::Down) {
+            machine.set_key(0, 2, true);
+        }
+        if window.is_key_down(Key::RightCtrl) {
+            machine.set_key(1, 0, true);
+        }
+    }
 }
 
 #[cfg(test)]
