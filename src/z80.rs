@@ -166,7 +166,7 @@ impl Z80 {
         r
     }
     #[inline]
-    fn add16(&mut self, a: u16, b: u16) -> u16 {
+    pub(crate) fn add16(&mut self, a: u16, b: u16) -> u16 {
         let r32 = a as u32 + b as u32;
         let r = r32 as u16;
         self.f = (self.f & (SF | ZF | PF))
@@ -189,7 +189,7 @@ impl Z80 {
         r
     }
     #[inline]
-    fn sbc16(&mut self, a: u16, b: u16) -> u16 {
+    pub(crate) fn sbc16(&mut self, a: u16, b: u16) -> u16 {
         let carry = if self.f & CF != 0 { 1u32 } else { 0 };
         let r32 = (a as u32).wrapping_sub(b as u32).wrapping_sub(carry);
         let r = r32 as u16;

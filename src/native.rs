@@ -15,6 +15,8 @@ use crate::z80::Z80;
 /// Установить все нативные замены (хуки) на машину.
 pub fn install(m: &mut Spectrum) {
     m.hooks.insert(0x5DFB, font_base_hook);
+    m.hooks.insert(0xEB3E, eb3e_hook);
+    m.hooks.insert(0xD3CE, d3ce_hook);
 }
 
 /// Точное число тактов Z80, которое рутина `sub_5DFB` занимает для кода `a`
@@ -45,6 +47,27 @@ fn font_base_hook(cpu: &mut Z80, _m: &mut Spectrum) -> u64 {
 /// Счётчик обращений к хуку (только для тестов).
 #[cfg(test)]
 static FONT_BASE_CALLS: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+
+/// `sub_EB3E`: `ld d,0; ld e,a; add hl,de; ret` — прибавляет к `HL`
+/// беззнаковый `A` (через `DE`), выставляя флаги сложения. Флаги `S/Z/PV`
+/// 16-битного `ADD HL,rr` не трогает.
+fn eb3e_hook(cpu: &mut Z80, _m: &mut Spectrum) -> u64 {
+    cpu.d = 0;
+    cpu.e = cpu.a;
+    let r = cpu.add16(cpu.hl(), cpu.de());
+    cpu.h = (r >> 8) as u8;
+    cpu.l = r as u8;
+    32 // ld d,0(7) + ld e,a(4) + add hl,de(11) + ret(10)
+}
+
+/// `sub_D3CE`: `push hl; sbc hl,de; pop hl; ret` — выставляет флаги по
+/// `HL - DE - C` (16-битное вычитание с заёмом), но `HL` оставляет прежним.
+fn d3ce_hook(cpu: &mut Z80, _m: &mut Spectrum) -> u64 {
+    let hl = cpu.hl();
+    let de = cpu.de();
+    cpu.sbc16(hl, de);
+    46 // push hl(11) + sbc hl,de(15) + pop hl(10) + ret(10)
+}
 
 /// `sub_5DFB`: по коду символа в `A` выбирает базовый адрес шрифта.
 ///
@@ -149,6 +172,92 @@ mod tests {
             &hooked.mem[0x4000..0x5B00],
             "экран разошёлся"
         );
+    }
+
+    /// Снимок регистров и тактов для строгого сравнения.
+    #[derive(Debug, PartialEq)]
+    struct Snap {
+        a: u8,
+        f: u8,
+        b: u8,
+        c: u8,
+        d: u8,
+        e: u8,
+        h: u8,
+        l: u8,
+        cycles: u64,
+    }
+
+    fn snap(c: &Z80) -> Snap {
+        Snap {
+            a: c.a,
+            f: c.f,
+            b: c.b,
+            c: c.c,
+            d: c.d,
+            e: c.e,
+            h: c.h,
+            l: c.l,
+            cycles: c.cycles,
+        }
+    }
+
+    fn set(c: &mut Z80, a: u8, hl: u16, de: u16, f: u8) {
+        c.a = a;
+        c.f = f;
+        c.h = (hl >> 8) as u8;
+        c.l = hl as u8;
+        c.d = (de >> 8) as u8;
+        c.e = de as u8;
+    }
+
+    /// Прогон рутины на Z80 со счётчиком тактов от нуля.
+    fn z80_sub(m: &mut Spectrum, addr: u16) -> Snap {
+        m.cpu.cycles = 0;
+        run_routine(m, addr);
+        snap(&m.cpu)
+    }
+
+    /// Прогон нативной рутины через таблицу хуков.
+    fn hook_sub(m: &mut Spectrum, addr: u16) -> Snap {
+        let mut cpu = std::mem::take(&mut m.cpu);
+        cpu.cycles = 0;
+        let cyc = (m.hooks[&addr])(&mut cpu, m);
+        cpu.cycles = cyc;
+        m.cpu = cpu;
+        snap(&m.cpu)
+    }
+
+    /// Регистровые рутины обязаны совпасть с Z80 по ВСЕМ регистрам, флагам
+    /// и числу тактов.
+    #[test]
+    fn register_helpers_match_z80() {
+        let mut z = kladov();
+        let mut n = kladov();
+        install(&mut n);
+        let cases: &[(u8, u16, u16, u8)] = &[
+            (0x00, 0x0000, 0x0000, 0x00),
+            (0x01, 0x0001, 0x0000, 0x00),
+            (0xFF, 0x00FF, 0x0001, 0x01),
+            (0x80, 0xFF00, 0x00FF, 0x00),
+            (0x7F, 0x0FFF, 0x0001, 0x00),
+            (0x55, 0x8000, 0x8000, 0x01),
+            (0xAA, 0x1234, 0x5678, 0x00),
+            (0x00, 0xFFFF, 0x0001, 0x01),
+            (0x03, 0x00FF, 0xFF00, 0x00),
+        ];
+        for &(a, hl, de, f) in cases {
+            for &addr in &[0xEB3Eu16, 0xD3CEu16] {
+                set(&mut z.cpu, a, hl, de, f);
+                set(&mut n.cpu, a, hl, de, f);
+                let zs = z80_sub(&mut z, addr);
+                let ns = hook_sub(&mut n, addr);
+                assert_eq!(
+                    zs, ns,
+                    "рутина 0x{addr:04X}: вход a={a:02X} hl={hl:04X} de={de:04X} f={f:02X}"
+                );
+            }
+        }
     }
 
     #[test]
