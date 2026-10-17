@@ -7,6 +7,14 @@ pub const ROM_SIZE: usize = 0x4000;
 pub const MEM_SIZE: usize = 0x10000;
 pub const CYCLES_PER_FRAME: u64 = 69888;
 
+/// Нативная замена подпрограммы игры. При попадании `PC` на адрес-ключ
+/// вызывается эта функция (вместо выполнения кода на Z80). Она должна
+/// воспроизвести эффект рутины (регистры/память) и вернуть число тактов,
+/// которое эта рутина заняла бы на Z80, включая завершающий `RET`. Сам `RET`
+/// (возврат по адресу из стека) машина выполняет сама.
+pub type Hook = fn(&mut Z80, &mut Spectrum) -> u64;
+
+
 pub struct Spectrum {
     pub mem: Vec<u8>,
     pub cpu: Z80,
@@ -38,6 +46,8 @@ pub struct Spectrum {
     audio_cycle_base: u64,
     /// Такт CPU на начало текущей инструкции (обновляется в `run_frame`).
     cycle_clock: u64,
+    /// Нативные замены подпрограмм: `PC` → реализация на Rust.
+    pub hooks: std::collections::BTreeMap<u16, Hook>,
 }
 
 impl Spectrum {
@@ -72,6 +82,7 @@ impl Spectrum {
             beeper_frame_start: false,
             audio_cycle_base: 0,
             cycle_clock: 0,
+            hooks: std::collections::BTreeMap::new(),
         }
     }
 
@@ -123,6 +134,16 @@ impl Spectrum {
         while cpu.cycles < target {
             let pc = cpu.pc;
             self.pc_for_write = pc;
+            if let Some(hook) = self.hooks.get(&pc).copied() {
+                let cycles = hook(&mut cpu, self);
+                let lo = self.mem[cpu.sp as usize] as u16;
+                let hi = self.mem[cpu.sp.wrapping_add(1) as usize] as u16;
+                cpu.sp = cpu.sp.wrapping_add(2);
+                cpu.pc = lo | (hi << 8);
+                cpu.cycles += cycles;
+                self.cycle_clock = cpu.cycles;
+                continue;
+            }
             if !self.dump_at.is_empty() && self.dump_at.contains(&pc) {
                 println!(
                     "AT pc=0x{:04X} hl=0x{:04X} de=0x{:04X} bc=0x{:04X} a=0x{:02X} f=0x{:02X} sp=0x{:04X} ix=0x{:04X} iy=0x{:04X}",

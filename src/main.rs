@@ -52,6 +52,8 @@ struct Options {
     wav: Option<String>,
     /// Базовая версия проекта — Кладова. `--elite` переключает на оригинал.
     kladov: bool,
+    /// Включить нативные (Rust) замены подпрограмм игры вместо Z80.
+    native: bool,
 }
 
 fn parse_args() -> Options {
@@ -65,6 +67,7 @@ fn parse_args() -> Options {
         audio: false,
         wav: None,
         kladov: true,
+        native: false,
     };
     let mut args = env::args().skip(1);
     while let Some(a) = args.next() {
@@ -80,15 +83,17 @@ fn parse_args() -> Options {
             "--headless" => opts.headless = true,
             "--mute" => opts.mute = true,
             "--audio" => opts.audio = true,
+            "--native" => opts.native = true,
             "--wav" => opts.wav = args.next(),
             "-h" | "--help" => {
                 println!(
-                    "usage: elite [game.bin] [--elite] [--rom rom.bin] [--headless] [--frames N] [--dump out.ppm] [--mute] [--audio] [--wav out.wav]"
+                    "usage: elite [game.bin] [--elite] [--rom rom.bin] [--headless] [--frames N] [--dump out.ppm] [--mute] [--audio] [--wav out.wav] [--native]"
                 );
                 println!("  по умолчанию запускается версия Кладова (zx_bin/kladov.bin)");
                 println!("  --mute     отключить вывод звука через PipeWire");
                 println!("  --audio    выводить звук и в headless-режиме (реальное время)");
                 println!("  --wav FILE сохранить звук в WAV-файл");
+                println!("  --native   нативные замены подпрограмм (M5, уход от Z80)");
                 exit(0);
             }
             other => opts.game = other.to_string(),
@@ -198,6 +203,10 @@ fn main() {
             machine.mem[0x71F8] = 0x3E;
             machine.mem[0x71F9] = 0x02;
         }
+    }
+
+    if opts.native || env::var("ELITE_NATIVE").is_ok() {
+        native::install(&mut machine);
     }
 
     if let Ok(w) = env::var("ELITE_WATCH") {
