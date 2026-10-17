@@ -595,6 +595,11 @@ fn run_window(mut machine: Spectrum, opts: &Options) {
     let font: Vec<u8> = machine.mem[PAUSE_FONT_ADDR..PAUSE_FONT_ADDR + PAUSE_FONT_LEN].to_vec();
 
     let audio = start_audio(opts);
+    // Физические позиции клавиш (независимо от раскладки).
+    let mut phys = PhysicalKeys::new();
+    if phys.is_none() {
+        eprintln!("X11 недоступен: ввод через minifb (раскладка влияет на буквы)");
+    }
     let mut wav_samples: Option<Vec<i16>> = opts.wav.as_ref().map(|_| Vec::new());
     let mut audio_buf = Vec::new();
     let mut buf = vec![0u32; 256 * 192];
@@ -602,9 +607,20 @@ fn run_window(mut machine: Spectrum, opts: &Options) {
     // Открыто ли меню паузы (Esc).
     let mut menu = false;
     while window.is_open() {
-        // Ctrl+Q — выход из игры (Escape больше не закрывает окно).
-        let ctrl = window.is_key_down(Key::LeftCtrl) || window.is_key_down(Key::RightCtrl);
-        if ctrl && window.is_key_pressed(Key::Q, KeyRepeat::No) {
+        // Снимаем физическое состояние клавиш один раз за кадр.
+        if let Some(p) = &mut phys {
+            p.poll(window.is_active());
+        }
+        // Ctrl+Q — выход из игры (Escape больше не закрывает окно).  Читаем
+        // физические позиции, чтобы сочетание работало при любой раскладке.
+        let quit = match phys.as_ref() {
+            Some(p) => (p.down(KC_LCTRL) || p.down(KC_RCTRL)) && p.pressed(KC_Q),
+            None => {
+                (window.is_key_down(Key::LeftCtrl) || window.is_key_down(Key::RightCtrl))
+                    && window.is_key_pressed(Key::Q, KeyRepeat::No)
+            }
+        };
+        if quit {
             break;
         }
         // F5/F9 — прямые горячие клавиши сохранения/загрузки, работают в любой
@@ -635,7 +651,7 @@ fn run_window(mut machine: Spectrum, opts: &Options) {
         } else {
             machine.release_all_keys();
             machine.release_joystick();
-            apply_keys(&mut machine, &window, opts.kladov);
+            apply_keys(&mut machine, &window, opts.kladov, phys.as_ref());
             machine.run_frame();
             if machine.save_requested {
                 machine.save_requested = false;
@@ -727,20 +743,98 @@ fn draw_pause_menu(buf: &mut [u32], font: &[u8]) {
     }
 }
 
-fn apply_keys(machine: &mut Spectrum, window: &Window, kempston_as_keys: bool) {
-    // (minifb key, half-row index, bit)
-    const MAP: &[(Key, usize, u8)] = &[
-        (Key::LeftShift, 0, 0), (Key::Z, 0, 1), (Key::X, 0, 2), (Key::C, 0, 3), (Key::V, 0, 4),
-        (Key::A, 1, 0), (Key::S, 1, 1), (Key::D, 1, 2), (Key::F, 1, 3), (Key::G, 1, 4),
-        (Key::Q, 2, 0), (Key::W, 2, 1), (Key::E, 2, 2), (Key::R, 2, 3), (Key::T, 2, 4),
-        (Key::Key1, 3, 0), (Key::Key2, 3, 1), (Key::Key3, 3, 2), (Key::Key4, 3, 3), (Key::Key5, 3, 4),
-        (Key::Key0, 4, 0), (Key::Key9, 4, 1), (Key::Key8, 4, 2), (Key::Key7, 4, 3), (Key::Key6, 4, 4),
-        (Key::P, 5, 0), (Key::O, 5, 1), (Key::I, 5, 2), (Key::U, 5, 3), (Key::Y, 5, 4),
-        (Key::Enter, 6, 0), (Key::L, 6, 1), (Key::K, 6, 2), (Key::J, 6, 3), (Key::H, 6, 4),
-        (Key::Space, 7, 0), (Key::RightShift, 7, 1), (Key::M, 7, 2), (Key::N, 7, 3), (Key::B, 7, 4),
+/// X11 keycode-ы (evdev scan-код + 8) клавиш, используемых вне ZX-матрицы.
+const KC_Q: u8 = 24;
+const KC_LCTRL: u8 = 37;
+const KC_RCTRL: u8 = 105;
+
+/// Физическое состояние клавиатуры, снятое напрямую с X11.
+///
+/// minifb отдаёт клавиши по раскладке (в частности, Wayland-версия — по
+/// активной), поэтому при включённой русской раскладке буквы приходят
+/// кириллическими и не распознаются.  Для эмуляции ZX Spectrum нужны именно
+/// *позиции* клавиш, поэтому берём их напрямую: `XQueryKeymap` возвращает
+/// битовую карту физических keycode-ов, не зависящую от раскладки.
+///
+/// Если соединение с X11 открыть не удалось (нет `DISPLAY` и т.п.), структура
+/// просто не создаётся и ввод откатывается на обычные `minifb::Key`.
+struct PhysicalKeys {
+    xlib: x11_dl::xlib::Xlib,
+    display: *mut x11_dl::xlib::Display,
+    /// Текущее состояние клавиш (по биту на keycode).
+    state: [std::os::raw::c_char; 32],
+    /// Состояние на предыдущем кадре (для определения момента нажатия).
+    prev: [std::os::raw::c_char; 32],
+}
+
+impl PhysicalKeys {
+    fn new() -> Option<Self> {
+        let xlib = x11_dl::xlib::Xlib::open().ok()?;
+        let display = unsafe { (xlib.XOpenDisplay)(std::ptr::null()) };
+        if display.is_null() {
+            return None;
+        }
+        Some(Self { xlib, display, state: [0; 32], prev: [0; 32] })
+    }
+
+    /// Считать текущее состояние клавиш.  Если окно не в фокусе, считаем все
+    /// клавиши отпущенными: `XQueryKeymap` возвращает глобальное состояние, а
+    /// удержание клавиши в другом приложении не должно попадать в игру.
+    fn poll(&mut self, active: bool) {
+        self.prev = self.state;
+        if active {
+            unsafe { (self.xlib.XQueryKeymap)(self.display, self.state.as_mut_ptr()) };
+        } else {
+            self.state = [0; 32];
+        }
+    }
+
+    /// Нажата ли клавиша с данным X11 keycode (evdev scan-код + 8).
+    fn down(&self, keycode: u8) -> bool {
+        let i = keycode as usize;
+        (self.state[i / 8] as u8) & (1u8 << (i % 8)) != 0
+    }
+
+    /// Нажата ли клавиша именно в этом кадре (переход «отпущено → нажато»).
+    fn pressed(&self, keycode: u8) -> bool {
+        let i = keycode as usize;
+        self.down(keycode) && (self.prev[i / 8] as u8) & (1u8 << (i % 8)) == 0
+    }
+}
+
+impl Drop for PhysicalKeys {
+    fn drop(&mut self) {
+        unsafe { (self.xlib.XCloseDisplay)(self.display) };
+    }
+}
+
+fn apply_keys(
+    machine: &mut Spectrum,
+    window: &Window,
+    kempston_as_keys: bool,
+    phys: Option<&PhysicalKeys>,
+) {
+    // (minifb key, X11 keycode, half-row index, bit)
+    //
+    // X11 keycode = evdev scan-код + 8; позиции стандартной PC-клавиатуры, они
+    // не зависят от активной раскладки.  Если физическое состояние недоступно,
+    // берём клавишу у minifb.
+    const MAP: &[(Key, u8, usize, u8)] = &[
+        (Key::LeftShift, 50, 0, 0), (Key::Z, 52, 0, 1), (Key::X, 53, 0, 2), (Key::C, 54, 0, 3), (Key::V, 55, 0, 4),
+        (Key::A, 38, 1, 0), (Key::S, 39, 1, 1), (Key::D, 40, 1, 2), (Key::F, 41, 1, 3), (Key::G, 42, 1, 4),
+        (Key::Q, 24, 2, 0), (Key::W, 25, 2, 1), (Key::E, 26, 2, 2), (Key::R, 27, 2, 3), (Key::T, 28, 2, 4),
+        (Key::Key1, 10, 3, 0), (Key::Key2, 11, 3, 1), (Key::Key3, 12, 3, 2), (Key::Key4, 13, 3, 3), (Key::Key5, 14, 3, 4),
+        (Key::Key0, 19, 4, 0), (Key::Key9, 18, 4, 1), (Key::Key8, 17, 4, 2), (Key::Key7, 16, 4, 3), (Key::Key6, 15, 4, 4),
+        (Key::P, 33, 5, 0), (Key::O, 32, 5, 1), (Key::I, 31, 5, 2), (Key::U, 30, 5, 3), (Key::Y, 29, 5, 4),
+        (Key::Enter, 36, 6, 0), (Key::L, 46, 6, 1), (Key::K, 45, 6, 2), (Key::J, 44, 6, 3), (Key::H, 43, 6, 4),
+        (Key::Space, 65, 7, 0), (Key::RightShift, 62, 7, 1), (Key::M, 58, 7, 2), (Key::N, 57, 7, 3), (Key::B, 56, 7, 4),
     ];
-    for &(key, row, bit) in MAP {
-        machine.set_key(row, bit, window.is_key_down(key));
+    for &(key, code, row, bit) in MAP {
+        let down = match phys {
+            Some(p) => p.down(code),
+            None => window.is_key_down(key),
+        };
+        machine.set_key(row, bit, down);
     }
 
     // Kempston (порт 0x1F): курсорные клавиши = направления, RightCtrl = огонь.
