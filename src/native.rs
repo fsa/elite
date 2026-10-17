@@ -50,6 +50,19 @@ pub struct SaveLayout {
     /// `sub_D41B`) — на два байта больше: `PilotMission1_1` и
     /// `Pilot_CrdXTarget`.
     pub commander_len: usize,
+    /// Точка входа перезапуска игры после загрузки — ветка `jp nz` главного
+    /// цикла (см. комментарий к [`menu_save_load`]): в оригинале `loc_71BE`,
+    /// у Кладова `loc_7394`. Игра заново проходит стартовую последовательность
+    /// и оказывается пристыкованной на станции системы из загруженного сейва.
+    pub restart_entry: u16,
+    /// Буфер, из которого `InitGame` восстанавливает пилота, и его длина.
+    ///
+    /// В оригинале `RestorePilotFromMemory` копирует `PilotDataSaved`→
+    /// `PilotName` (102 байта), поэтому при загрузке нужно обновить и его —
+    /// иначе загруженные данные затрёт копия из памяти. У Кладова `InitGame`
+    /// копирует в обратную сторону (`PilotName`→рабочий буфер), поэтому
+    /// отдельного теневого буфера нет.
+    pub pilot_shadow: Option<(u16, usize)>,
     /// Нативная реализация `MenuSaveLoad` для этой версии.
     hook: Hook,
 }
@@ -60,6 +73,8 @@ pub const KLADOV_SAVE: SaveLayout = SaveLayout {
     control_key1: 0xFC08,
     pilot_name: 0xD232,
     commander_len: 0x66,
+    restart_entry: 0x7394,
+    pilot_shadow: None,
     hook: menu_save_load_kladov_hook,
 };
 
@@ -69,6 +84,8 @@ pub const ELITE_SAVE: SaveLayout = SaveLayout {
     control_key1: 0xFC0E,
     pilot_name: 0xA816,
     commander_len: 0x68,
+    restart_entry: 0x71BE,
+    pilot_shadow: Some((0xA910, 0x66)),
     hook: menu_save_load_elite_hook,
 };
 
@@ -93,7 +110,35 @@ pub fn commander_load(
     let n = data.len().min(layout.commander_len);
     let a = layout.pilot_name as usize;
     m.mem[a..a + n].copy_from_slice(&data[..n]);
+    // Синхронизировать теневой буфер, из которого `InitGame` восстанавливает
+    // пилота (оригинал), иначе загруженные данные затрёт копия из памяти.
+    if let Some((addr, len)) = layout.pilot_shadow {
+        let s = data.len().min(len);
+        let a = addr as usize;
+        m.mem[a..a + s].copy_from_slice(&data[..s]);
+    }
     Ok(())
+}
+
+/// Прервать текущий игровой процесс и перезапустить игру с только что
+/// загруженными данными командира.
+///
+/// Повторяет ветку `jp nz` главного цикла после `MenuSaveLoad` (в оригинале
+/// `loc_71BE`, у Кладова `loc_7394`): игра заново проходит стартовую
+/// последовательность (выбор корабля/устройства управления) и оказывается
+/// пристыкованной на станции системы из загруженного сейва.
+pub fn restart_after_load(m: &mut Spectrum, layout: SaveLayout) {
+    // Сбросить «залипшие» клавиши, как родная `ResetPressedKeys` в конце
+    // `MenuSaveLoad`: стартовая ветка ждёт отпускания клавиши, и без сброса
+    // можно застрять на этом ожидании.
+    let a = layout.control_key1 as usize;
+    m.mem[a..a + PRESSED_KEY_BYTES].fill(0);
+    m.save_requested = false;
+    // Стартовая последовательность использует `halt`, поэтому прерывания
+    // должны быть разрешены (в оригинале после загрузки с ленты идёт `ei`).
+    m.cpu.iff1 = true;
+    m.cpu.iff2 = true;
+    m.cpu.pc = layout.restart_entry;
 }
 
 /// Включить перехват игрового сохранения: при вызове `MenuSaveLoad` игра
@@ -580,5 +625,77 @@ mod tests {
             requests, 1,
             "оригинал: сохранение сработало {requests} раз вместо одного"
         );
+    }
+
+    /// Загрузка прерывает текущий процесс и перезапускает игру: пилот из файла
+    /// сохраняется, а после стартовой последовательности корабль пристыкован
+    /// (`IndDanger=0`) — то есть мы на станции. Проверяем обе версии.
+    #[test]
+    fn load_restarts_docked_with_saved_pilot() {
+        let base = env!("CARGO_MANIFEST_DIR");
+        let dir = format!("{base}/tmp");
+        std::fs::create_dir_all(&dir).unwrap();
+
+        for (layout, ind_danger, mut m) in [
+            (KLADOV_SAVE, 0x7104u16, boot_kladov()),
+            (ELITE_SAVE, 0x7062u16, boot_elite()),
+        ] {
+            install_save(&mut m, layout);
+
+            // Стартовая последовательность сначала ждёт отпускания клавиши, а
+            // затем её нажатия (выбор устройства управления). Подаём SPACE
+            // импульсами, чтобы попасть в оба состояния.
+            let impulse = |m: &mut Spectrum, f: u64| {
+                m.release_all_keys();
+                if f >= 30 && f % 16 < 6 {
+                    m.set_key(7, 0, true);
+                }
+            };
+
+            // Приводим игру в рабочее состояние и имитируем полёт.
+            for f in 0..150u64 {
+                impulse(&mut m, f);
+                m.run_frame();
+            }
+            m.mem[ind_danger as usize] = 4; // «в полёте» (вылет со станции)
+            assert_ne!(
+                m.mem[ind_danger as usize], 0,
+                "подготовка: корабль должен быть в полёте"
+            );
+
+            // Готовим файл: валидный командир из образа с помеченным именем.
+            let mut data = commander_block(&m, layout).to_vec();
+            data[0..8].copy_from_slice(b"TESTPILO");
+            let path = format!("{dir}/load_restart_{:04X}.zxelite", layout.pilot_name);
+            std::fs::write(&path, &data).unwrap();
+
+            commander_load(&mut m, &path, layout).unwrap();
+            restart_after_load(&mut m, layout);
+            assert_eq!(
+                m.cpu.pc, layout.restart_entry,
+                "перезапуск не инициирован (0x{:04X})",
+                layout.restart_entry
+            );
+
+            // Проходим стартовую последовательность до пристыковки.
+            for f in 0..700u64 {
+                impulse(&mut m, f);
+                m.run_frame();
+            }
+
+            assert_eq!(
+                &m.mem[layout.pilot_name as usize..][..8],
+                b"TESTPILO",
+                "загруженный пилот сброшен после перезапуска (0x{:04X})",
+                layout.pilot_name
+            );
+            assert_eq!(
+                m.mem[ind_danger as usize], 0,
+                "после загрузки корабль не пристыкован (IndDanger 0x{:04X})",
+                ind_danger
+            );
+
+            let _ = std::fs::remove_file(&path);
+        }
     }
 }

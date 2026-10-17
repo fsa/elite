@@ -562,6 +562,10 @@ fn do_load(machine: &mut Spectrum, opts: &Options, last: &mut String) {
         Ok(()) => {
             println!("Загружено из {}", path.display());
             *last = path.to_string_lossy().into_owned();
+            // Прервать текущий процесс и запустить игру с новыми данными:
+            // после стартовой последовательности корабль пристыкован на
+            // станции системы из сейва.
+            native::restart_after_load(machine, save_layout(opts));
         }
         Err(e) => eprintln!("Ошибка загрузки: {e}"),
     }
