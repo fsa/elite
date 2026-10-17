@@ -1,5 +1,6 @@
 mod audio;
 mod machine;
+mod native;
 mod z80;
 
 use audio::Audio;
