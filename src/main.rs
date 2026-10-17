@@ -217,8 +217,9 @@ fn main() {
     }
 
     // Нативный сейв/лоад командира: перехват `MenuSaveLoad` выставляет флаг,
-    // а главный цикл показывает диалог выбора файла (`.zxelite`).
-    native::install_save(&mut machine);
+    // а главный цикл показывает диалог выбора файла (`.zxelite`). Раскладка
+    // адресов зависит от версии игры.
+    native::install_save(&mut machine, save_layout(&opts));
 
     if let Ok(w) = env::var("ELITE_WATCH") {
         if let Some((a, b)) = w.split_once('-') {
@@ -273,6 +274,15 @@ fn main() {
         return;
     }
     run_window(machine, &opts);
+}
+
+/// Раскладка адресов сейва/лоада выбранной версии игры.
+fn save_layout(opts: &Options) -> native::SaveLayout {
+    if opts.kladov {
+        native::KLADOV_SAVE
+    } else {
+        native::ELITE_SAVE
+    }
 }
 
 /// Start the PipeWire audio output unless muted. Returns `None` (with a
@@ -401,7 +411,7 @@ fn run_headless(machine: &mut Spectrum, opts: &Options) {
                 .save
                 .clone()
                 .unwrap_or_else(default_save_name);
-            match native::commander_save(&machine, &path) {
+            match native::commander_save(&machine, &path, save_layout(opts)) {
                 Ok(()) => println!("Сохранено в {}", path),
                 Err(e) => eprintln!("Ошибка сохранения: {e}"),
             }
@@ -511,7 +521,7 @@ fn do_save(machine: &Spectrum, opts: &Options, last: &mut String) {
     let Some(path) = choose_save_path(opts, last) else {
         return;
     };
-    match native::commander_save(machine, &path.to_string_lossy()) {
+    match native::commander_save(machine, &path.to_string_lossy(), save_layout(opts)) {
         Ok(()) => {
             println!("Сохранено в {}", path.display());
             *last = path.to_string_lossy().into_owned();

@@ -9,7 +9,7 @@
 //! настоящий код из образа `zx_bin/kladov.bin` на эмуляторе и сверяет
 //! результат с нативной реализацией.
 
-use crate::machine::Spectrum;
+use crate::machine::{Hook, Spectrum};
 use crate::z80::{Z80, ZF};
 
 /// Установить все нативные замены (хуки) на машину.
@@ -20,34 +20,78 @@ pub fn install(m: &mut Spectrum) {
     m.hooks.insert(0xAB0B, mult_a_hib_c_hook);
 }
 
-/// Адрес блока данных командира (`PilotName`) в образе Кладова.
-pub const PILOT_NAME: u16 = 0xD232;
-/// Длина сохраняемого блока командира: 102 байта (`ld bc,102`).
-pub const COMMANDER_LEN: usize = 0x66;
-/// Точка входа родной рутины сохранения/загрузки игры (`MenuSaveLoad`).
+/// Сколько байт клавиш сбрасывает родная `ResetPressedKeys`.
+const PRESSED_KEY_BYTES: usize = 4;
+
+/// Раскладка сейва командира, зависящая от версии игры.
 ///
-/// Вызывается из главного цикла только при нажатии игровой клавиши
-/// сохранения (`0x749F: call 0xD04E`), поэтому перехват не срабатывает
-/// каждый кадр. Далее рутина прыгает на `0xD907` и уходит в TR-DOS
-/// (`jp 0x3D2F`) с пейджингом 128K — в 48K-ядре это не работает.
-const MENU_SAVE_LOAD: u16 = 0xD04E;
+/// Адреса рутин и переменных у Кладова и в оригинале разные (original:
+/// `MenuSaveLoad` = `0xD2E4`, `ControlKey1` = `0xFC0E`, `PilotName` = `0xA816`;
+/// Кладова: `0xD04E`, `0xFC08`, `0xD232`), поэтому выбираем раскладку по
+/// запущенной версии (`--elite`).
+#[derive(Clone, Copy)]
+pub struct SaveLayout {
+    /// Точка входа родной рутины сохранения/загрузки (`MenuSaveLoad`).
+    ///
+    /// Вызывается из главного цикла только при нажатии игровой клавиши
+    /// сохранения (у Кладова `0x749F: call 0xD04E`), поэтому перехват не
+    /// срабатывает каждый кадр. Родная рутина в версии Кладова уходит в TR-DOS
+    /// (`jp 0x3D2F`) с пейджингом 128K — в 48K-ядре это не работает.
+    pub menu_save_load: u16,
+    /// Первая из четырёх «залипающих» ячеек клавиш (`ControlKey1`).
+    ///
+    /// Родная `ResetPressedKeys` обнуляет четыре байта начиная отсюда:
+    /// `ControlKey1`, `ControlKeyMove`, `ControlKey2`, `ControlKey3`.
+    pub control_key1: u16,
+    /// Адрес блока данных командира (`PilotName`).
+    pub pilot_name: u16,
+    /// Длина блока командира. Кладова копирует 102 байта (`ld bc,66h` в
+    /// `DemoModeOn`), оригинал сохраняет 104 (`ld ix,PilotName; ld de,68h` в
+    /// `sub_D41B`) — на два байта больше: `PilotMission1_1` и
+    /// `Pilot_CrdXTarget`.
+    pub commander_len: usize,
+    /// Нативная реализация `MenuSaveLoad` для этой версии.
+    hook: Hook,
+}
+
+/// Раскладка версии Кладова (`zx_bin/kladov.bin`).
+pub const KLADOV_SAVE: SaveLayout = SaveLayout {
+    menu_save_load: 0xD04E,
+    control_key1: 0xFC08,
+    pilot_name: 0xD232,
+    commander_len: 0x66,
+    hook: menu_save_load_kladov_hook,
+};
+
+/// Раскладка оригинальной версии (`zx_bin/elite.bin`).
+pub const ELITE_SAVE: SaveLayout = SaveLayout {
+    menu_save_load: 0xD2E4,
+    control_key1: 0xFC0E,
+    pilot_name: 0xA816,
+    commander_len: 0x68,
+    hook: menu_save_load_elite_hook,
+};
 
 /// Блок сохранения командира в памяти.
-pub fn commander_block(m: &Spectrum) -> &[u8] {
-    let a = PILOT_NAME as usize;
-    &m.mem[a..a + COMMANDER_LEN]
+pub fn commander_block(m: &Spectrum, layout: SaveLayout) -> &[u8] {
+    let a = layout.pilot_name as usize;
+    &m.mem[a..a + layout.commander_len]
 }
 
 /// Записать блок командира в файл `path`.
-pub fn commander_save(m: &Spectrum, path: &str) -> std::io::Result<()> {
-    std::fs::write(path, commander_block(m))
+pub fn commander_save(m: &Spectrum, path: &str, layout: SaveLayout) -> std::io::Result<()> {
+    std::fs::write(path, commander_block(m, layout))
 }
 
 /// Прочитать блок командира из файла `path` и поместить в память.
-pub fn commander_load(m: &mut Spectrum, path: &str) -> std::io::Result<()> {
+pub fn commander_load(
+    m: &mut Spectrum,
+    path: &str,
+    layout: SaveLayout,
+) -> std::io::Result<()> {
     let data = std::fs::read(path)?;
-    let n = data.len().min(COMMANDER_LEN);
-    let a = PILOT_NAME as usize;
+    let n = data.len().min(layout.commander_len);
+    let a = layout.pilot_name as usize;
     m.mem[a..a + n].copy_from_slice(&data[..n]);
     Ok(())
 }
@@ -56,19 +100,40 @@ pub fn commander_load(m: &mut Spectrum, path: &str) -> std::io::Result<()> {
 /// выставляет флаг `machine.save_requested`, а главный цикл показывает диалог
 /// выбора файла и записывает блок командира (родная рутина требует
 /// 128K-пейджинга и в 48K-ядре не работает).
-pub fn install_save(m: &mut Spectrum) {
-    m.hooks.insert(MENU_SAVE_LOAD, menu_save_load_hook);
+pub fn install_save(m: &mut Spectrum, layout: SaveLayout) {
+    m.hooks.insert(layout.menu_save_load, layout.hook);
 }
 
-/// Нативная замена `MenuSaveLoad` (`0xD04E`): просит главный цикл сохранить
-/// блок командира (диалог выбора файла). Возвращает «не загружено» (A=0, Z=1),
-/// как и родная рутина при обычном возврате, чтобы главный цикл не уходил на
-/// ветку переинициализации вида (`jp nz, 0x7394`).
-fn menu_save_load_hook(cpu: &mut Z80, m: &mut Spectrum) -> u64 {
+/// Общий код нативной замены `MenuSaveLoad`: сбросить «залипшие» клавиши и
+/// попросить главный цикл сохранить блок командира.
+///
+/// Родная рутина заканчивается `jp ResetPressedKeys`, который обнуляет
+/// `ControlKey1`..`ControlKey3`. Это обязательная часть: главный цикл проверяет
+/// бит 5 `ControlKeyMove` (клавиша сохранения), и без сброса он остаётся
+/// установленным — сохранение повторяется на каждой итерации цикла (диалог
+/// открывается бесконечно). Хук подменяет рутину целиком, поэтому сброс
+/// делаем сами.
+///
+/// Возвращает «не загружено» (A=0, Z=1), как и родная рутина при обычном
+/// возврате, чтобы главный цикл не уходил на ветку переинициализации вида
+/// (`jp nz, 0x7394` у Кладова, `jp nz, loc_71BE` в оригинале).
+fn menu_save_load(cpu: &mut Z80, m: &mut Spectrum, layout: SaveLayout) -> u64 {
+    let a = layout.control_key1 as usize;
+    m.mem[a..a + PRESSED_KEY_BYTES].fill(0);
     m.save_requested = true;
     cpu.a = 0;
     cpu.f |= ZF;
     0
+}
+
+/// Нативная замена `MenuSaveLoad` в версии Кладова (`0xD04E`).
+fn menu_save_load_kladov_hook(cpu: &mut Z80, m: &mut Spectrum) -> u64 {
+    menu_save_load(cpu, m, KLADOV_SAVE)
+}
+
+/// Нативная замена `MenuSaveLoad` в оригинальной версии (`0xD2E4`).
+fn menu_save_load_elite_hook(cpu: &mut Z80, m: &mut Spectrum) -> u64 {
+    menu_save_load(cpu, m, ELITE_SAVE)
 }
 
 /// Точное число тактов Z80, которое рутина `sub_5DFB` занимает для кода `a`
@@ -227,6 +292,30 @@ mod tests {
         m
     }
 
+    /// Готовит машину к запуску оригинальной версии так же, как `main.rs`:
+    /// образ по адресу `0x6048`, таблица IM2 на обработчик `0xFF25` и подмена
+    /// опроса Kempston (`in a,(c)` -> `ld a,2` в `BeginGame`), без которой игра
+    /// останавливается на выборе устройства управления.
+    fn boot_elite() -> Spectrum {
+        let base = env!("CARGO_MANIFEST_DIR");
+        let rom = std::fs::read(format!("{base}/zx_bin/48.rom")).expect("zx_bin/48.rom");
+        let game = std::fs::read(format!("{base}/zx_bin/elite.bin"))
+            .expect("zx_bin/elite.bin (собрать: ./build.sh)");
+        let mut m = Spectrum::new(Some(&rom));
+        m.load(crate::GAME_LOAD_ADDR, &game);
+        let [lo, hi] = crate::INTERRUPT_HANDLER.to_le_bytes();
+        for i in 0..128u16 {
+            let a = crate::IM2_TABLE + i * 2;
+            m.mem[a as usize] = lo;
+            m.mem[a as usize + 1] = hi;
+        }
+        m.mem[0x71F8] = 0x3E;
+        m.mem[0x71F9] = 0x02;
+        m.cpu.pc = crate::GAME_ENTRY;
+        m.cpu.sp = crate::GAME_SP;
+        m
+    }
+
     /// Полный прогон с хуками обязан побайтово совпасть с обычным прогоном:
     /// такты, регистры и содержимое экранной области.
     #[test]
@@ -379,48 +468,117 @@ mod tests {
         }
     }
 
-    /// Сохранение и загрузка блока командира в файл — round-trip.
+    /// Сохранение и загрузка блока командира в файл — round-trip (обе версии).
     #[test]
     fn commander_roundtrip() {
         let base = env!("CARGO_MANIFEST_DIR");
         let dir = format!("{base}/tmp");
         std::fs::create_dir_all(&dir).unwrap();
-        let path = format!("{dir}/commander_roundtrip.zxelite");
 
-        let mut m = kladov();
-        let a = PILOT_NAME as usize;
-        m.mem[a] = b'T';
-        m.mem[a + 1] = b'E';
-        m.mem[a + 2] = b'S';
-        m.mem[a + 3] = b'T';
-        m.mem[a + COMMANDER_LEN - 1] = 0x5A;
-        let expected: Vec<u8> = commander_block(&m).to_vec();
+        for layout in [KLADOV_SAVE, ELITE_SAVE] {
+            let path = format!("{dir}/commander_roundtrip_{:04X}.zxelite", layout.pilot_name);
+            let mut m = kladov();
+            let a = layout.pilot_name as usize;
+            let n = layout.commander_len;
+            m.mem[a] = b'T';
+            m.mem[a + 1] = b'E';
+            m.mem[a + 2] = b'S';
+            m.mem[a + 3] = b'T';
+            m.mem[a + n - 1] = 0x5A;
+            let expected: Vec<u8> = commander_block(&m, layout).to_vec();
+            assert_eq!(expected.len(), n);
 
-        commander_save(&m, &path).unwrap();
-        for b in &mut m.mem[a..a + COMMANDER_LEN] {
-            *b = 0xAA;
+            commander_save(&m, &path, layout).unwrap();
+            for b in &mut m.mem[a..a + n] {
+                *b = 0xAA;
+            }
+            commander_load(&mut m, &path, layout).unwrap();
+            assert_eq!(
+                commander_block(&m, layout),
+                &expected[..],
+                "блок командира (0x{:04X}) не совпал",
+                layout.pilot_name
+            );
+
+            let _ = std::fs::remove_file(&path);
         }
-        commander_load(&mut m, &path).unwrap();
-        assert_eq!(commander_block(&m), &expected[..], "блок командира не совпал");
-
-        let _ = std::fs::remove_file(&path);
     }
 
-    /// Перехват `MenuSaveLoad`: хук должен выставить запрос на сохранение.
+    /// Перехват `MenuSaveLoad`: хук должен выставить запрос на сохранение и
+    /// сбросить «залипшие» клавиши (`ControlKey1`..`ControlKey3`), как это
+    /// делает родная рутина через `ResetPressedKeys`. Проверяем обе версии.
     #[test]
     fn menu_save_load_hook_sets_request() {
-        let mut m = kladov();
-        install_save(&mut m);
-        assert!(
-            m.hooks.contains_key(&MENU_SAVE_LOAD),
-            "хук MenuSaveLoad не установлен"
+        for layout in [KLADOV_SAVE, ELITE_SAVE] {
+            let mut m = kladov();
+            install_save(&mut m, layout);
+            assert!(
+                m.hooks.contains_key(&layout.menu_save_load),
+                "хук MenuSaveLoad 0x{:04X} не установлен",
+                layout.menu_save_load
+            );
+            assert!(!m.save_requested);
+            // Имитируем нажатие клавиши сохранения (Symbol Shift -> бит 5
+            // `ControlKeyMove`) и других залипших клавиш.
+            let a = layout.control_key1 as usize;
+            m.mem[a] = 0x50;
+            m.mem[a + 1] = 0x20;
+            m.mem[a + 2] = 0x80;
+            m.mem[a + 3] = 0x01;
+            let hook = m.hooks.get(&layout.menu_save_load).copied().unwrap();
+            let mut cpu = std::mem::take(&mut m.cpu);
+            let cycles = hook(&mut cpu, &mut m);
+            m.cpu = cpu;
+            assert_eq!(cycles, 0);
+            assert!(m.save_requested, "запрос на сохранение не выставлен");
+            assert_eq!(
+                &m.mem[a..a + PRESSED_KEY_BYTES],
+                &[0u8; PRESSED_KEY_BYTES][..],
+                "залипшие клавиши не сброшены (0x{:04X})",
+                layout.control_key1
+            );
+        }
+    }
+
+    /// Прогон сценария «нажали клавишу сохранения» и подсчёт запросов.
+    fn count_save_requests(m: &mut Spectrum) -> usize {
+        let mut requests = 0;
+        for f in 0..260 {
+            m.release_all_keys();
+            if (30..80).contains(&f) {
+                m.set_key(7, 0, true); // SPACE — старт полёта с титула
+            }
+            if f == 150 {
+                m.set_key(7, 1, true); // Symbol Shift — клавиша сохранения (1 кадр)
+            }
+            m.run_frame();
+            if m.save_requested {
+                m.save_requested = false;
+                requests += 1;
+            }
+        }
+        requests
+    }
+
+    /// Регрессия на бесконечный цикл сохранения: одно нажатие клавиши
+    /// сохранения (Symbol Shift) должно дать ровно один запрос, а не
+    /// повторяться на каждой итерации главного цикла. Проверяем обе версии.
+    #[test]
+    fn save_request_fires_once_per_press() {
+        let mut kladov = boot_kladov();
+        install_save(&mut kladov, KLADOV_SAVE);
+        let requests = count_save_requests(&mut kladov);
+        assert_eq!(
+            requests, 1,
+            "Кладова: сохранение сработало {requests} раз вместо одного"
         );
-        assert!(!m.save_requested);
-        let hook = m.hooks.get(&MENU_SAVE_LOAD).copied().unwrap();
-        let mut cpu = std::mem::take(&mut m.cpu);
-        let cycles = hook(&mut cpu, &mut m);
-        m.cpu = cpu;
-        assert_eq!(cycles, 0);
-        assert!(m.save_requested, "запрос на сохранение не выставлен");
+
+        let mut elite = boot_elite();
+        install_save(&mut elite, ELITE_SAVE);
+        let requests = count_save_requests(&mut elite);
+        assert_eq!(
+            requests, 1,
+            "оригинал: сохранение сработало {requests} раз вместо одного"
+        );
     }
 }
