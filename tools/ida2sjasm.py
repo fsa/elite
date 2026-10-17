@@ -44,6 +44,11 @@ def logical_lines(raw_lines):
         if code.rstrip().endswith("\\"):
             buf += code.rstrip()[:-1] + " "
             continue
+        # A comment-only line can sit *inside* a backslash continuation (IDA
+        # sometimes puts the XREF on its own line between two code fragments).
+        # Don't flush the open continuation on such a line.
+        if buf and not code.strip():
+            continue
         line = buf + code
         buf = ""
         out.append((line, first_comment))
@@ -188,6 +193,13 @@ def convert(src_path, out_path):
     for line, comment in filtered:
         stripped = line.strip()
         if not stripped:
+            # IDA "collapsed" functions hide their 3-byte body behind a comment.
+            # They are always `jp <target>` thunks named `j_<target>`.
+            m = re.search(r"COLLAPSED FUNCTION ([A-Za-z_][A-Za-z0-9_]*)", comment)
+            if m:
+                name = m.group(1)
+                target = name[2:] if name.startswith("j_") else name
+                out.append("%s: jp %s" % (name, target))
             continue
         if re.match(r"^segment\b", stripped, re.I):
             continue

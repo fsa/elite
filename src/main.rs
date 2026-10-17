@@ -2,7 +2,7 @@ mod machine;
 mod z80;
 
 use machine::Spectrum;
-use minifb::{Key, Scale, Window, WindowOptions};
+use minifb::{Key, Scale, ScaleMode, Window, WindowOptions};
 use std::env;
 use std::fs;
 use std::process::exit;
@@ -11,6 +11,29 @@ use std::process::exit;
 const GAME_LOAD_ADDR: u16 = 0x6048;
 /// Entry point (label `Start`).
 const GAME_ENTRY: u16 = 0x7000;
+/// Initial stack pointer for the original image.
+const GAME_SP: u16 = 0x6000;
+
+/// Версия Кладова (с дискеты `ELITE3HL.TRD`).  Полный 48K-образ памяти
+/// (0x4000-0xFFFF) готовит `tools/make_kladov_image.py` из снапшота
+/// `zx_src/kladov.snapshot` (в `zx_bin/kladov.bin`).  Файл `ELITE3  C` на
+/// дискете — это слепок уже работающей игры, без согласованной точки
+/// холодного старта, поэтому мы не проходим загрузчик, а возобновляем
+/// исполнение ровно там, где был прерван обработчик прерывания в снапшоте:
+/// IM2, `I=0xFD`, обработчик 0xFEFE (таблица векторов уже в образе).
+const KLADOV_LOAD_ADDR: u16 = 0x4000;
+const KLADOV_I: u8 = 0xFD;
+const KLADOV_STATE_PC: u16 = 0xFEFE;
+const KLADOV_STATE_SP: u16 = 0x4114;
+const KLADOV_STATE_AF: u16 = 0x0045;
+const KLADOV_STATE_BC: u16 = 0x0012;
+const KLADOV_STATE_DE: u16 = 0x482E;
+const KLADOV_STATE_HL: u16 = 0xC80E;
+const KLADOV_STATE_IX: u16 = 0x6159;
+const KLADOV_STATE_IY: u16 = 0x629B;
+const KLADOV_STATE_R: u8 = 0x3E;
+const KLADOV_STATE_A: u8 = (KLADOV_STATE_AF >> 8) as u8;
+const KLADOV_STATE_F: u8 = (KLADOV_STATE_AF & 0xFF) as u8;
 
 struct Options {
     game: String,
@@ -18,19 +41,24 @@ struct Options {
     headless: bool,
     frames: u64,
     dump: Option<String>,
+    /// Базовая версия проекта — Кладова. `--elite` переключает на оригинал.
+    kladov: bool,
 }
 
 fn parse_args() -> Options {
     let mut opts = Options {
-        game: "elite.bin".to_string(),
+        game: String::new(),
         rom: None,
         headless: false,
         frames: 600,
         dump: None,
+        kladov: true,
     };
     let mut args = env::args().skip(1);
     while let Some(a) = args.next() {
         match a.as_str() {
+            "--kladov" => opts.kladov = true,
+            "--elite" => opts.kladov = false,
             "--rom" => opts.rom = args.next(),
             "--frames" => opts.frames = args.next().and_then(|s| s.parse().ok()).unwrap_or(600),
             "--dump" => {
@@ -40,12 +68,20 @@ fn parse_args() -> Options {
             "--headless" => opts.headless = true,
             "-h" | "--help" => {
                 println!(
-                    "usage: elite [game.bin] [--rom rom.bin] [--headless] [--frames N] [--dump out.ppm]"
+                    "usage: elite [game.bin] [--elite] [--rom rom.bin] [--headless] [--frames N] [--dump out.ppm]"
                 );
+                println!("  по умолчанию запускается версия Кладова (zx_bin/kladov.bin)");
                 exit(0);
             }
             other => opts.game = other.to_string(),
         }
+    }
+    if opts.game.is_empty() {
+        opts.game = if opts.kladov {
+            "zx_bin/kladov.bin".to_string()
+        } else {
+            "zx_bin/elite.bin".to_string()
+        };
     }
     if opts.rom.is_none() {
         for cand in [
@@ -87,7 +123,9 @@ fn main() {
         Ok(d) => d,
         Err(e) => {
             eprintln!("cannot read game image {:?}: {}", opts.game, e);
-            if opts.game == "elite.bin" {
+            if opts.kladov {
+                eprintln!("hint: run python3 tools/make_kladov_image.py to build the Kladov RAM image");
+            } else if opts.game == "elite.bin" {
                 eprintln!("hint: run ./build.sh to assemble elite.bin from elite.asm");
             }
             exit(1);
@@ -102,10 +140,47 @@ fn main() {
     });
 
     let mut machine = Spectrum::new(rom.as_deref());
-    machine.load(GAME_LOAD_ADDR, &game);
-    install_im2_table(&mut machine);
-    machine.cpu.pc = GAME_ENTRY;
-    machine.cpu.sp = 0x6000;
+    if opts.kladov {
+        // Версия Кладова: полный 48K-образ (0x4000..0xFFFF) загружается как есть.
+        // Игра настраивает IM2 сама (I=0xFD, обработчик 0xFEFE), таблица векторов
+        // и рабочие данные уже находятся в образе. Образ снят с работающей игры
+        // (см. tools/make_kladov_image.py), поэтому стартуем не с холодной заставки,
+        // а возобновляем выполнение с сохранённого прерванного кадра.
+        machine.load(KLADOV_LOAD_ADDR, &game);
+        machine.cpu.a = KLADOV_STATE_A;
+        machine.cpu.f = KLADOV_STATE_F;
+        machine.cpu.b = (KLADOV_STATE_BC >> 8) as u8;
+        machine.cpu.c = (KLADOV_STATE_BC & 0xFF) as u8;
+        machine.cpu.d = (KLADOV_STATE_DE >> 8) as u8;
+        machine.cpu.e = (KLADOV_STATE_DE & 0xFF) as u8;
+        machine.cpu.h = (KLADOV_STATE_HL >> 8) as u8;
+        machine.cpu.l = (KLADOV_STATE_HL & 0xFF) as u8;
+        machine.cpu.ix = KLADOV_STATE_IX;
+        machine.cpu.iy = KLADOV_STATE_IY;
+        machine.cpu.sp = KLADOV_STATE_SP;
+        machine.cpu.pc = KLADOV_STATE_PC;
+        machine.cpu.i = KLADOV_I;
+        machine.cpu.r = KLADOV_STATE_R;
+        machine.cpu.im = 2;
+        machine.cpu.iff1 = true;
+        machine.cpu.iff2 = true;
+    } else {
+        machine.load(GAME_LOAD_ADDR, &game);
+        install_im2_table(&mut machine);
+        machine.cpu.pc = GAME_ENTRY;
+        machine.cpu.sp = GAME_SP;
+
+        // Выбор устройства управления. Игра определяет его эвристически при
+        // старте, опрашивая порт Kempston (0x1F). По умолчанию включаем Kempston,
+        // чтобы курсорные клавиши работали как джойстик: подменяем `in a,(c)`
+        // (ED 78) на `ld a,2` (3E 02) в BeginGame, из-за чего выбирается
+        // Kempston. `ELITE_CTRL=keyboard` возвращает штатное поведение игры.
+        let ctrl = env::var("ELITE_CTRL").unwrap_or_default();
+        if ctrl != "keyboard" {
+            machine.mem[0x71F8] = 0x3E;
+            machine.mem[0x71F9] = 0x02;
+        }
+    }
 
     if let Ok(w) = env::var("ELITE_WATCH") {
         if let Some((a, b)) = w.split_once('-') {
@@ -165,12 +240,67 @@ fn main() {
 fn run_headless(machine: &mut Spectrum, opts: &Options) {
     let trace = env::var("ELITE_TRACE").is_ok();
     let sp_from: Option<u64> = env::var("ELITE_SP").ok().and_then(|s| s.parse().ok());
+    // Key injection for tests: ELITE_KEYS="row:bit:down:up[,row:bit:down:up...]"
+    // presses keyboard (row,bit) from frame `down` (inclusive) to `up` (exclusive).
+    let keys_specs: Vec<(u64, u64, usize, u8)> = env::var("ELITE_KEYS")
+        .ok()
+        .map(|s| {
+            s.split(',')
+                .filter_map(|seg| {
+                    let n: Vec<u64> = seg.split(':').filter_map(|x| x.parse().ok()).collect();
+                    if n.len() == 4 {
+                        // row:bit:down:up
+                        Some((n[2], n[3], n[0] as usize, n[1] as u8))
+                    } else {
+                        None
+                    }
+                })
+                .collect()
+        })
+        .unwrap_or_default();
+    // ELITE_JOY="bit:down:up[,bit:down:up...]" — нажатие бита Kempston (0..4)
+    // с кадра `down` (включительно) до `up` (исключительно).
+    let joy_specs: Vec<(u64, u64, u8)> = env::var("ELITE_JOY")
+        .ok()
+        .map(|s| {
+            s.split(',')
+                .filter_map(|seg| {
+                    let n: Vec<u64> = seg.split(':').filter_map(|x| x.parse().ok()).collect();
+                    if n.len() == 3 {
+                        Some((n[1], n[2], n[0] as u8))
+                    } else {
+                        None
+                    }
+                })
+                .collect()
+        })
+        .unwrap_or_default();
     for f in 0..opts.frames {
-        machine.run_frame();
+        machine.release_all_keys();
+        machine.release_joystick();
+        for &(down, up, row, bit) in &keys_specs {
+            if f >= down && f < up {
+                machine.set_key(row, bit, true);
+            }
+        }
+        for &(down, up, bit) in &joy_specs {
+            if f >= down && f < up {
+                machine.set_kempston(bit, true);
+            }
+        }
         if trace && f < 120 {
             println!(
                 "frame {:3} pc=0x{:04X} sp=0x{:04X} presskey=0x{:02X}",
                 f, machine.cpu.pc, machine.cpu.sp, machine.mem[0xFC13]
+            );
+        }
+        if env::var("ELITE_KEYDBG").is_ok() {
+            println!(
+                "frame {:3} kb=[{:02X} {:02X} {:02X} {:02X} {:02X} {:02X} {:02X} {:02X}] presskey=0x{:02X}",
+                f,
+                machine.keyboard[0], machine.keyboard[1], machine.keyboard[2], machine.keyboard[3],
+                machine.keyboard[4], machine.keyboard[5], machine.keyboard[6], machine.keyboard[7],
+                machine.mem[0xFC13]
             );
         }
         if let Some(from) = sp_from {
@@ -181,10 +311,15 @@ fn run_headless(machine: &mut Spectrum, opts: &Options) {
                 );
             }
         }
+        machine.run_frame();
     }
     println!(
         "frames={} pc=0x{:04X} cycles={} sp=0x{:04X}",
         machine.frames, machine.cpu.pc, machine.cpu.cycles, machine.cpu.sp
+    );
+    println!(
+        "paging(0x7FFD) writes={} last=0x{:02X}",
+        machine.paging_writes, machine.paging_last
     );
     for (a, n) in &machine.counts {
         println!("  count pc=0x{:04X} = {}", a, n);
@@ -211,12 +346,14 @@ fn run_headless(machine: &mut Spectrum, opts: &Options) {
         write_ppm(path, &buf, 256, 192);
         println!("wrote {}", path);
     }
-    if env::var("ELITE_MEM").is_ok() {
-        let _ = fs::write("/tmp/opencode/screen.bin", &machine.mem[0x4000..0x5B00]);
-        let _ = fs::write("/tmp/opencode/buf.bin", &machine.mem[0xC000..0xD000]);
-        let _ = fs::write("/tmp/opencode/buf800.bin", &machine.mem[0xC800..0xD800]);
-        let _ = fs::write("/tmp/opencode/font.bin", &machine.mem[0x5D70..0x5D70 + 0x2D8]);
-        println!("wrote screen.bin buf.bin buf800.bin font.bin");
+    if let Ok(dir) = env::var("ELITE_MEM") {
+        let dir = if dir.is_empty() { "tmp".to_string() } else { dir };
+        let _ = fs::create_dir_all(&dir);
+        let _ = fs::write(format!("{dir}/screen.bin"), &machine.mem[0x4000..0x5B00]);
+        let _ = fs::write(format!("{dir}/buf.bin"), &machine.mem[0xC000..0xD000]);
+        let _ = fs::write(format!("{dir}/buf800.bin"), &machine.mem[0xC800..0xD800]);
+        let _ = fs::write(format!("{dir}/font.bin"), &machine.mem[0x5D70..0x5D70 + 0x2D8]);
+        println!("wrote {dir}/screen.bin buf.bin buf800.bin font.bin");
     }
 }
 
@@ -232,14 +369,14 @@ fn write_ppm(path: &str, buf: &[u32], w: usize, h: usize) {
 }
 
 fn run_window(mut machine: Spectrum, _opts: &Options) {
-    let scale = Scale::X2;
     let mut window = Window::new(
         "Elite (ZX Spectrum)",
         256,
         192,
         WindowOptions {
             resize: true,
-            scale,
+            scale: Scale::X2,
+            scale_mode: ScaleMode::AspectRatioStretch,
             ..WindowOptions::default()
         },
     )
@@ -252,6 +389,7 @@ fn run_window(mut machine: Spectrum, _opts: &Options) {
     let mut buf = vec![0u32; 256 * 192];
     while window.is_open() && !window.is_key_down(Key::Escape) {
         machine.release_all_keys();
+        machine.release_joystick();
         apply_keys(&mut machine, &window);
         machine.run_frame();
         machine.render_rgba(&mut buf);
@@ -262,17 +400,64 @@ fn run_window(mut machine: Spectrum, _opts: &Options) {
 fn apply_keys(machine: &mut Spectrum, window: &Window) {
     // (minifb key, half-row index, bit)
     const MAP: &[(Key, usize, u8)] = &[
-        (Key::Key1, 3, 4), (Key::Key2, 3, 3), (Key::Key3, 3, 2), (Key::Key4, 3, 1), (Key::Key5, 3, 0),
-        (Key::Key6, 4, 0), (Key::Key7, 4, 1), (Key::Key8, 4, 2), (Key::Key9, 4, 3), (Key::Key0, 4, 4),
-        (Key::Q, 2, 4), (Key::W, 2, 3), (Key::E, 2, 2), (Key::R, 2, 1), (Key::T, 2, 0),
-        (Key::A, 1, 4), (Key::S, 1, 3), (Key::D, 1, 2), (Key::F, 1, 1), (Key::G, 1, 0),
-        (Key::P, 5, 4), (Key::O, 5, 3), (Key::I, 5, 2), (Key::U, 5, 1), (Key::Y, 5, 0),
-        (Key::Enter, 6, 4), (Key::L, 6, 3), (Key::K, 6, 2), (Key::J, 6, 1), (Key::H, 6, 0),
-        (Key::Space, 7, 4), (Key::RightShift, 7, 3), (Key::M, 7, 2), (Key::N, 7, 1), (Key::B, 7, 0),
-        (Key::Z, 0, 3), (Key::X, 0, 2), (Key::C, 0, 1), (Key::V, 0, 0),
-        (Key::LeftShift, 0, 4),
+        (Key::LeftShift, 0, 0), (Key::Z, 0, 1), (Key::X, 0, 2), (Key::C, 0, 3), (Key::V, 0, 4),
+        (Key::A, 1, 0), (Key::S, 1, 1), (Key::D, 1, 2), (Key::F, 1, 3), (Key::G, 1, 4),
+        (Key::Q, 2, 0), (Key::W, 2, 1), (Key::E, 2, 2), (Key::R, 2, 3), (Key::T, 2, 4),
+        (Key::Key1, 3, 0), (Key::Key2, 3, 1), (Key::Key3, 3, 2), (Key::Key4, 3, 3), (Key::Key5, 3, 4),
+        (Key::Key0, 4, 0), (Key::Key9, 4, 1), (Key::Key8, 4, 2), (Key::Key7, 4, 3), (Key::Key6, 4, 4),
+        (Key::P, 5, 0), (Key::O, 5, 1), (Key::I, 5, 2), (Key::U, 5, 3), (Key::Y, 5, 4),
+        (Key::Enter, 6, 0), (Key::L, 6, 1), (Key::K, 6, 2), (Key::J, 6, 3), (Key::H, 6, 4),
+        (Key::Space, 7, 0), (Key::RightShift, 7, 1), (Key::M, 7, 2), (Key::N, 7, 3), (Key::B, 7, 4),
     ];
     for &(key, row, bit) in MAP {
         machine.set_key(row, bit, window.is_key_down(key));
+    }
+
+    // Kempston (порт 0x1F): курсорные клавиши = направления, RightCtrl = огонь.
+    // Скорость (Space / SymbolShift) в режиме Kempston всё ещё читается игрой
+    // с клавиатуры, поэтому Space здесь не трогаем.
+    machine.set_kempston(0, window.is_key_down(Key::Right));
+    machine.set_kempston(1, window.is_key_down(Key::Left));
+    machine.set_kempston(2, window.is_key_down(Key::Down));
+    machine.set_kempston(3, window.is_key_down(Key::Up));
+    machine.set_kempston(4, window.is_key_down(Key::RightCtrl));
+}
+
+#[cfg(test)]
+mod intro_tests {
+    use super::*;
+
+    /// Boot the real game image with the real ROM, as `main` does.
+    fn boot() -> Spectrum {
+        let base = env!("CARGO_MANIFEST_DIR");
+        let rom = fs::read(format!("{base}/zx_bin/48.rom")).expect("zx_bin/48.rom");
+        let game = fs::read(format!("{base}/zx_bin/elite.bin")).expect("zx_bin/elite.bin");
+        let mut m = Spectrum::new(Some(&rom));
+        m.load(GAME_LOAD_ADDR, &game);
+        install_im2_table(&mut m);
+        m.cpu.pc = GAME_ENTRY;
+        m.cpu.sp = 0x6000;
+        m
+    }
+
+    /// The intro used to crash: a wrong `CP` corrupted the line-drawing clip
+    /// logic, the drawer walked out of the screen buffer and self-modified
+    /// code at 0xBAF7, after which the message printer recursed and leaked SP.
+    #[test]
+    fn intro_runs_without_corruption_or_leak() {
+        let mut m = boot();
+        assert_eq!(m.mem[0xBAF7], 0x38, "precondition: dispatcher intact");
+        m.counts.push((0x71A2, 0)); // intro loop
+        for _ in 0..60 {
+            m.run_frame();
+        }
+        assert!(m.cpu.pc != 0, "CPU ran off the rails (pc=0)");
+        assert_eq!(m.mem[0xBAF7], 0x38, "code at 0xBAF7 was self-modified");
+        assert_eq!(m.mem[0xBAF5], 0xFE, "code at 0xBAF5 was self-modified");
+        assert!(m.cpu.sp >= 0x5F00, "stack leaked: sp=0x{:04X}", m.cpu.sp);
+        assert!(
+            m.counts[0].1 > 0,
+            "intro loop at 0x71A2 was never reached"
+        );
     }
 }

@@ -1229,7 +1229,9 @@ mod tests {
     #[ignore]
     fn zexdoc() {
         use std::io::Write;
-        let prog = std::fs::read("/tmp/opencode/zexdoc.com").expect("zexdoc.com not found");
+        let path = format!("{}/tmp/zexdoc.com", env!("CARGO_MANIFEST_DIR"));
+        let prog = std::fs::read(&path)
+            .unwrap_or_else(|_| panic!("{path} not found (see PLAN.md)"));
         let mut bus = TestBus::new();
         bus.mem[0x100..0x100 + prog.len()].copy_from_slice(&prog);
         let mut cpu = Z80::new();

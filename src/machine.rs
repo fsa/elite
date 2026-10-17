@@ -11,8 +11,14 @@ pub struct Spectrum {
     pub mem: Vec<u8>,
     pub cpu: Z80,
     pub keyboard: [u8; 8],
+    /// Kempston joystick state, active high: bit0=right, bit1=left, bit2=down,
+    /// bit3=up, bit4=fire. Read at port `0x1F` (A5=0).
+    pub kempston: u8,
     pub border: u8,
     pub beeper: bool,
+    /// Число записей в порт пейджинга 0x7FFD (для проверки использования 128K).
+    pub paging_writes: u32,
+    pub paging_last: u8,
     pub frame_start: u64,
     pub frames: u64,
     pub watch: Option<(u16, u16)>,
@@ -37,8 +43,11 @@ impl Spectrum {
             mem,
             cpu: Z80::new(),
             keyboard: [0xFF; 8],
+            kempston: 0,
             border: 0,
             beeper: false,
+            paging_writes: 0,
+            paging_last: 0,
             frame_start: 0,
             frames: 0,
             watch: None,
@@ -71,6 +80,19 @@ impl Spectrum {
 
     pub fn release_all_keys(&mut self) {
         self.keyboard = [0xFF; 8];
+    }
+
+    /// Set one Kempston bit (0=right, 1=left, 2=down, 3=up, 4=fire).
+    pub fn set_kempston(&mut self, bit: u8, pressed: bool) {
+        if pressed {
+            self.kempston |= 1 << bit;
+        } else {
+            self.kempston &= !(1 << bit);
+        }
+    }
+
+    pub fn release_joystick(&mut self) {
+        self.kempston = 0;
     }
 
     /// Run one PAL frame's worth of instructions, raising a maskable
@@ -206,6 +228,11 @@ impl Bus for Spectrum {
 
     fn input(&mut self, port: u16) -> u8 {
         let high = (port >> 8) as u8;
+        // Kempston joystick: selected when A5=0 (e.g. port 0x1F / 0xFF1F).
+        if port & 0x20 == 0 {
+            // Игра читает Kempston как active-high: бит4=огонь, биты0-3 = направления.
+            return self.kempston & 0x1F;
+        }
         if port & 0x01 == 0 {
             let mut res = 0xFFu8;
             for (r, row) in self.keyboard.iter().enumerate() {
@@ -220,6 +247,11 @@ impl Bus for Spectrum {
     }
 
     fn output(&mut self, port: u16, val: u8) {
+        if port & 0xC000 == 0x4000 && port & 0x0002 == 0 {
+            // Порт пейджинга памяти 0x7FFD (и родственный 0x1FFD).
+            self.paging_writes = self.paging_writes.wrapping_add(1);
+            self.paging_last = val;
+        }
         if port & 0x01 == 0 {
             self.border = val & 0x07;
             self.beeper = val & 0x10 != 0;
