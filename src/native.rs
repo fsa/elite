@@ -18,6 +18,7 @@ pub fn install(m: &mut Spectrum) {
     m.hooks.insert(0xEB3E, eb3e_hook);
     m.hooks.insert(0xD3CE, d3ce_hook);
     m.hooks.insert(0xAB0B, mult_a_hib_c_hook);
+    m.hooks.insert(0xE621, pix_crd_2_scr_adr_hook);
 }
 
 /// Сколько байт клавиш сбрасывает родная `ResetPressedKeys`.
@@ -261,6 +262,30 @@ fn mult_a_hib_c_hook(cpu: &mut Z80, m: &mut Spectrum) -> u64 {
     if no_borrow { 83 } else { 86 }
 }
 
+/// `sub_E621` (`PixCrd2ScrAdr` в оригинале): пиксельные координаты -> адрес
+/// экранной области ZX Spectrum.
+///
+/// Вход: `X = A` (пиксельная колонка 0..255), `Y = C` (пиксельная строка
+/// 0..191). Выход: `HL` — адрес байта битмапа, содержащего пиксель.
+pub fn pix_crd_2_scr_adr(x: u8, y: u8) -> u16 {
+    let l = ((y & 0x38) << 2) | ((x >> 3) & 0x1F);
+    let h = 0x40 | (y & 7) | ((y & 0xC0) >> 3);
+    ((h as u16) << 8) | l as u16
+}
+
+/// Нативная замена `sub_E621`. Рутина полностью линейная (ветвлений нет),
+/// поэтому такты фиксированы (120). Единственная операция, задающая итоговые
+/// флаги, — финальное `or h`; флаги `rra`/`and`/`add` до неё перезаписываются.
+fn pix_crd_2_scr_adr_hook(cpu: &mut Z80, _m: &mut Spectrum) -> u64 {
+    let hl = pix_crd_2_scr_adr(cpu.a, cpu.c);
+    let h = (hl >> 8) as u8;
+    let a_before = ((cpu.c & 0xC0) >> 3) & 0x1F; // результат `and 1Fh`
+    cpu.a = cpu.or8(a_before, h); // финальное `or h` (выставляет флаги)
+    cpu.h = h;
+    cpu.l = hl as u8;
+    120
+}
+
 /// `sub_5DFB`: по коду символа в `A` выбирает базовый адрес шрифта.
 ///
 /// Возвращает значение `HL`: `0x3D00` для «печатных» символов (пробел, цифры
@@ -494,6 +519,28 @@ mod tests {
                 let zs = z80_sub(&mut z, 0xAB0B);
                 let ns = hook_sub(&mut n, 0xAB0B);
                 assert_eq!(zs, ns, "Mult_A_hiB_C: b={b:02X} c={c:02X}");
+            }
+        }
+    }
+
+    /// `sub_E621` (`PixCrd2ScrAdr`) обязан совпасть с Z80 по всем регистрам,
+    /// флагам и тактам для всех пар `X` (A) и `Y` (C).
+    #[test]
+    fn pix_crd_2_scr_adr_matches_z80() {
+        let mut z = kladov();
+        let mut n = kladov();
+        install(&mut n);
+        for x in 0u8..=255 {
+            for y in 0u8..=255 {
+                z.cpu.a = x;
+                z.cpu.c = y;
+                z.cpu.f = x ^ y; // произвольные входные флаги
+                n.cpu.a = x;
+                n.cpu.c = y;
+                n.cpu.f = x ^ y;
+                let zs = z80_sub(&mut z, 0xE621);
+                let ns = hook_sub(&mut n, 0xE621);
+                assert_eq!(zs, ns, "PixCrd2ScrAdr: x={x:02X} y={y:02X}");
             }
         }
     }

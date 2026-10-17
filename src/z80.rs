@@ -154,7 +154,7 @@ impl Z80 {
         r
     }
     #[inline]
-    fn or8(&mut self, a: u8, v: u8) -> u8 {
+    pub(crate) fn or8(&mut self, a: u8, v: u8) -> u8 {
         let r = a | v;
         self.f = (r & (SF | XF | YF)) | if r == 0 { ZF } else { 0 } | if parity(r) { PF } else { 0 };
         r
