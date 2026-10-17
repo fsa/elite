@@ -20,6 +20,56 @@ pub fn install(m: &mut Spectrum) {
     m.hooks.insert(0xAB0B, mult_a_hib_c_hook);
 }
 
+/// Адрес блока данных командира (`PilotName`) в образе Кладова.
+pub const PILOT_NAME: u16 = 0xD232;
+/// Длина сохраняемого блока командира: 102 байта (`ld bc,102`).
+pub const COMMANDER_LEN: usize = 0x66;
+/// Точка входа меню сохранения/загрузки игры (`MenuSaveLoad`).
+const MENU_SAVE_LOAD: u16 = 0xD042;
+
+/// Блок сохранения командира в памяти.
+pub fn commander_block(m: &Spectrum) -> &[u8] {
+    let a = PILOT_NAME as usize;
+    &m.mem[a..a + COMMANDER_LEN]
+}
+
+/// Записать блок командира в файл `path`.
+pub fn commander_save(m: &Spectrum, path: &str) -> std::io::Result<()> {
+    std::fs::write(path, commander_block(m))
+}
+
+/// Прочитать блок командира из файла `path` и поместить в память.
+pub fn commander_load(m: &mut Spectrum, path: &str) -> std::io::Result<()> {
+    let data = std::fs::read(path)?;
+    let n = data.len().min(COMMANDER_LEN);
+    let a = PILOT_NAME as usize;
+    m.mem[a..a + n].copy_from_slice(&data[..n]);
+    Ok(())
+}
+
+/// Включить перехват игрового сохранения: при вызове `MenuSaveLoad` игра
+/// обратится к нативной записи блока командира в `machine.save_path` вместо
+/// родной рутины (которая требует 128K-пейджинга и в 48K не работает).
+pub fn install_save(m: &mut Spectrum) {
+    if !m.save_path.is_empty() {
+        m.hooks.insert(MENU_SAVE_LOAD, menu_save_load_hook);
+    }
+}
+
+/// Нативная замена `MenuSaveLoad` (`0xD042`): сохраняет блок командира в файл.
+fn menu_save_load_hook(cpu: &mut Z80, m: &mut Spectrum) -> u64 {
+    match commander_save(m, &m.save_path) {
+        Ok(()) => println!(
+            "Сохранение: блок командира ({} байт) записан в {}",
+            COMMANDER_LEN, m.save_path
+        ),
+        Err(e) => eprintln!("Сохранение не удалось: {e}"),
+    }
+    // Вызывающий код сразу перезаписывает флаги, поэтому они не восстанавливаются.
+    let _ = cpu;
+    0
+}
+
 /// Точное число тактов Z80, которое рутина `sub_5DFB` занимает для кода `a`
 /// (включая завершающий `RET`).
 fn font_base_cycles(a: u8) -> u64 {
@@ -326,5 +376,57 @@ mod tests {
                 "font_base(0x{a:02X}): native=0x{native:04X} z80=0x{z80:04X}"
             );
         }
+    }
+
+    /// Сохранение и загрузка блока командира в файл — round-trip.
+    #[test]
+    fn commander_roundtrip() {        let base = env!("CARGO_MANIFEST_DIR");
+        let dir = format!("{base}/tmp");
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = format!("{dir}/commander_roundtrip.sav");
+
+        let mut m = kladov();
+        let a = PILOT_NAME as usize;
+        m.mem[a] = b'T';
+        m.mem[a + 1] = b'E';
+        m.mem[a + 2] = b'S';
+        m.mem[a + 3] = b'T';
+        m.mem[a + COMMANDER_LEN - 1] = 0x5A;
+        let expected: Vec<u8> = commander_block(&m).to_vec();
+
+        commander_save(&m, &path).unwrap();
+        for b in &mut m.mem[a..a + COMMANDER_LEN] {
+            *b = 0xAA;
+        }
+        commander_load(&mut m, &path).unwrap();
+        assert_eq!(commander_block(&m), &expected[..], "блок командира не совпал");
+
+        let _ = std::fs::remove_file(&path);
+    }
+
+    /// Перехват `MenuSaveLoad`: хук должен записать блок командира в файл.
+    #[test]
+    fn menu_save_load_hook_writes_file() {
+        let base = env!("CARGO_MANIFEST_DIR");
+        let dir = format!("{base}/tmp");
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = format!("{dir}/commander_hook.sav");
+
+        let mut m = kladov();
+        assert!(!m.hooks.contains_key(&MENU_SAVE_LOAD), "хук включился без пути");
+        m.save_path = path.clone();
+        install_save(&mut m);
+        let hook = m.hooks.get(&MENU_SAVE_LOAD).copied().expect("хук не установлен");
+
+        let mut cpu = std::mem::take(&mut m.cpu);
+        let cycles = hook(&mut cpu, &mut m);
+        m.cpu = cpu;
+        assert_eq!(cycles, 0);
+
+        let data = std::fs::read(&path).unwrap();
+        assert_eq!(data.len(), COMMANDER_LEN);
+        assert_eq!(data, commander_block(&m));
+
+        let _ = std::fs::remove_file(&path);
     }
 }

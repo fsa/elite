@@ -5,7 +5,7 @@ mod z80;
 
 use audio::Audio;
 use machine::Spectrum;
-use minifb::{Key, Scale, ScaleMode, Window, WindowOptions};
+use minifb::{Key, KeyRepeat, Scale, ScaleMode, Window, WindowOptions};
 use std::env;
 use std::fs;
 use std::process::exit;
@@ -54,6 +54,8 @@ struct Options {
     kladov: bool,
     /// Включить нативные (Rust) замены подпрограмм игры вместо Z80.
     native: bool,
+    /// Путь к файлу сохранения командира (F5 — записать, F9 — прочитать).
+    save: String,
 }
 
 fn parse_args() -> Options {
@@ -68,6 +70,7 @@ fn parse_args() -> Options {
         wav: None,
         kladov: true,
         native: false,
+        save: "commander.sav".to_string(),
     };
     let mut args = env::args().skip(1);
     while let Some(a) = args.next() {
@@ -85,6 +88,7 @@ fn parse_args() -> Options {
             "--audio" => opts.audio = true,
             "--native" => opts.native = true,
             "--wav" => opts.wav = args.next(),
+            "--save" => opts.save = args.next().unwrap_or_else(|| "commander.sav".to_string()),
             "-h" | "--help" => {
                 println!(
                     "usage: elite [game.bin] [--elite] [--rom rom.bin] [--headless] [--frames N] [--dump out.ppm] [--mute] [--audio] [--wav out.wav] [--native]"
@@ -94,6 +98,7 @@ fn parse_args() -> Options {
                 println!("  --audio    выводить звук и в headless-режиме (реальное время)");
                 println!("  --wav FILE сохранить звук в WAV-файл");
                 println!("  --native   нативные замены подпрограмм (M5, уход от Z80)");
+                println!("  --save FILE  файл сохранения командира (F5 — сохранить, F9 — загрузить)");
                 exit(0);
             }
             other => opts.game = other.to_string(),
@@ -207,6 +212,12 @@ fn main() {
 
     if opts.native || env::var("ELITE_NATIVE").is_ok() {
         native::install(&mut machine);
+    }
+
+    // Нативный сейв/лоад командира: F5/F9 и перехват игрового `MenuSaveLoad`.
+    if !opts.save.is_empty() {
+        machine.save_path = opts.save.clone();
+        native::install_save(&mut machine);
     }
 
     if let Ok(w) = env::var("ELITE_WATCH") {
@@ -485,6 +496,20 @@ fn run_window(mut machine: Spectrum, opts: &Options) {
         machine.release_all_keys();
         machine.release_joystick();
         apply_keys(&mut machine, &window, opts.kladov);
+        if !opts.save.is_empty() {
+            if window.is_key_pressed(Key::F5, KeyRepeat::No) {
+                match native::commander_save(&machine, &opts.save) {
+                    Ok(()) => println!("Сохранено в {}", opts.save),
+                    Err(e) => eprintln!("Ошибка сохранения: {e}"),
+                }
+            }
+            if window.is_key_pressed(Key::F9, KeyRepeat::No) {
+                match native::commander_load(&mut machine, &opts.save) {
+                    Ok(()) => println!("Загружено из {}", opts.save),
+                    Err(e) => eprintln!("Ошибка загрузки: {e}"),
+                }
+            }
+        }
         machine.run_frame();
         machine.render_audio(&mut audio_buf);
         if let Some(audio) = &audio {

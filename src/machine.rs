@@ -48,6 +48,8 @@ pub struct Spectrum {
     cycle_clock: u64,
     /// Нативные замены подпрограмм: `PC` → реализация на Rust.
     pub hooks: std::collections::BTreeMap<u16, Hook>,
+    /// Путь к файлу сохранения командира. Пустая строка — сейв отключён.
+    pub save_path: String,
 }
 
 impl Spectrum {
@@ -83,6 +85,7 @@ impl Spectrum {
             audio_cycle_base: 0,
             cycle_clock: 0,
             hooks: std::collections::BTreeMap::new(),
+            save_path: String::new(),
         }
     }
 
