@@ -5,9 +5,10 @@ mod z80;
 
 use audio::Audio;
 use machine::Spectrum;
-use minifb::{Key, KeyRepeat, Scale, ScaleMode, Window, WindowOptions};
+use minifb::{Key, Scale, ScaleMode, Window, WindowOptions};
 use std::env;
 use std::fs;
+use std::path::{Path, PathBuf};
 use std::process::exit;
 
 /// Load address of the assembled game image.
@@ -54,8 +55,9 @@ struct Options {
     kladov: bool,
     /// Включить нативные (Rust) замены подпрограмм игры вместо Z80.
     native: bool,
-    /// Путь к файлу сохранения командира (F5 — записать, F9 — прочитать).
-    save: String,
+    /// Фиксированный путь сохранения командира. `None` — спрашивать через
+    /// нативный диалог выбора файла (по умолчанию, расширение `.zxelite`).
+    save: Option<String>,
 }
 
 fn parse_args() -> Options {
@@ -70,7 +72,7 @@ fn parse_args() -> Options {
         wav: None,
         kladov: true,
         native: false,
-        save: "commander.sav".to_string(),
+        save: None,
     };
     let mut args = env::args().skip(1);
     while let Some(a) = args.next() {
@@ -88,17 +90,17 @@ fn parse_args() -> Options {
             "--audio" => opts.audio = true,
             "--native" => opts.native = true,
             "--wav" => opts.wav = args.next(),
-            "--save" => opts.save = args.next().unwrap_or_else(|| "commander.sav".to_string()),
+            "--save" => opts.save = args.next(),
             "-h" | "--help" => {
                 println!(
-                    "usage: elite [game.bin] [--elite] [--rom rom.bin] [--headless] [--frames N] [--dump out.ppm] [--mute] [--audio] [--wav out.wav] [--native]"
+                    "usage: elite [game.bin] [--elite] [--rom rom.bin] [--headless] [--frames N] [--dump out.ppm] [--mute] [--audio] [--wav out.wav] [--native] [--save FILE]"
                 );
                 println!("  по умолчанию запускается версия Кладова (zx_bin/kladov.bin)");
                 println!("  --mute     отключить вывод звука через PipeWire");
                 println!("  --audio    выводить звук и в headless-режиме (реальное время)");
                 println!("  --wav FILE сохранить звук в WAV-файл");
-                println!("  --native   нативные замены подпрограмм (M5, уход от Z80)");
-                println!("  --save FILE  файл сохранения командира (F5 — сохранить, F9 — загрузить)");
+                println!("  --native   включить нативные (Rust) замены подпрограмм");
+                println!("  --save FILE фиксированный файл командира вместо диалога");
                 exit(0);
             }
             other => opts.game = other.to_string(),
@@ -214,11 +216,9 @@ fn main() {
         native::install(&mut machine);
     }
 
-    // Нативный сейв/лоад командира: F5/F9 и перехват игрового `MenuSaveLoad`.
-    if !opts.save.is_empty() {
-        machine.save_path = opts.save.clone();
-        native::install_save(&mut machine);
-    }
+    // Нативный сейв/лоад командира: перехват `MenuSaveLoad` выставляет флаг,
+    // а главный цикл показывает диалог выбора файла (`.zxelite`).
+    native::install_save(&mut machine);
 
     if let Ok(w) = env::var("ELITE_WATCH") {
         if let Some((a, b)) = w.split_once('-') {
@@ -395,6 +395,17 @@ fn run_headless(machine: &mut Spectrum, opts: &Options) {
             }
         }
         machine.run_frame();
+        if machine.save_requested {
+            machine.save_requested = false;
+            let path = opts
+                .save
+                .clone()
+                .unwrap_or_else(default_save_name);
+            match native::commander_save(&machine, &path) {
+                Ok(()) => println!("Сохранено в {}", path),
+                Err(e) => eprintln!("Ошибка сохранения: {e}"),
+            }
+        }
         if audio.is_some() || wav_samples.is_some() {
             let mut frame = Vec::new();
             machine.render_audio(&mut frame);
@@ -470,6 +481,45 @@ fn write_ppm(path: &str, buf: &[u32], w: usize, h: usize) {
     let _ = fs::write(path, out);
 }
 
+/// Авто-имя файла сохранения: `elite-ГГГГ-ММ-ДД_ЧЧ-ММ-СС.zxelite`.
+fn default_save_name() -> String {
+    let now = chrono::Local::now();
+    format!("elite-{}.zxelite", now.format("%Y-%m-%d_%H-%M-%S"))
+}
+
+/// Диалог сохранения командира. `last` — прошлый путь (задаёт каталог).
+fn save_dialog(last: &str) -> Option<PathBuf> {
+    let mut d = rfd::FileDialog::new()
+        .add_filter("Elite (ZX)", &["zxelite"])
+        .set_file_name(default_save_name());
+    if let Some(dir) = Path::new(last).parent().filter(|p| !p.as_os_str().is_empty()) {
+        d = d.set_directory(dir);
+    }
+    d.save_file()
+}
+
+/// Путь сохранения: фиксированный `--save` или интерактивный диалог.
+fn choose_save_path(opts: &Options, last: &str) -> Option<PathBuf> {
+    match &opts.save {
+        Some(p) => Some(PathBuf::from(p)),
+        None => save_dialog(last),
+    }
+}
+
+/// Сохранить блок командира; при успехе запомнить путь в `last`.
+fn do_save(machine: &Spectrum, opts: &Options, last: &mut String) {
+    let Some(path) = choose_save_path(opts, last) else {
+        return;
+    };
+    match native::commander_save(machine, &path.to_string_lossy()) {
+        Ok(()) => {
+            println!("Сохранено в {}", path.display());
+            *last = path.to_string_lossy().into_owned();
+        }
+        Err(e) => eprintln!("Ошибка сохранения: {e}"),
+    }
+}
+
 fn run_window(mut machine: Spectrum, opts: &Options) {
     let mut window = Window::new(
         "Elite (ZX Spectrum)",
@@ -492,25 +542,16 @@ fn run_window(mut machine: Spectrum, opts: &Options) {
     let mut wav_samples: Option<Vec<i16>> = opts.wav.as_ref().map(|_| Vec::new());
     let mut audio_buf = Vec::new();
     let mut buf = vec![0u32; 256 * 192];
+    let mut last_path = String::new();
     while window.is_open() && !window.is_key_down(Key::Escape) {
         machine.release_all_keys();
         machine.release_joystick();
         apply_keys(&mut machine, &window, opts.kladov);
-        if !opts.save.is_empty() {
-            if window.is_key_pressed(Key::F5, KeyRepeat::No) {
-                match native::commander_save(&machine, &opts.save) {
-                    Ok(()) => println!("Сохранено в {}", opts.save),
-                    Err(e) => eprintln!("Ошибка сохранения: {e}"),
-                }
-            }
-            if window.is_key_pressed(Key::F9, KeyRepeat::No) {
-                match native::commander_load(&mut machine, &opts.save) {
-                    Ok(()) => println!("Загружено из {}", opts.save),
-                    Err(e) => eprintln!("Ошибка загрузки: {e}"),
-                }
-            }
-        }
         machine.run_frame();
+        if machine.save_requested {
+            machine.save_requested = false;
+            do_save(&machine, opts, &mut last_path);
+        }
         machine.render_audio(&mut audio_buf);
         if let Some(audio) = &audio {
             audio.push(&audio_buf);

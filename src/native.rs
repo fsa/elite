@@ -10,7 +10,7 @@
 //! результат с нативной реализацией.
 
 use crate::machine::Spectrum;
-use crate::z80::Z80;
+use crate::z80::{Z80, ZF};
 
 /// Установить все нативные замены (хуки) на машину.
 pub fn install(m: &mut Spectrum) {
@@ -24,8 +24,13 @@ pub fn install(m: &mut Spectrum) {
 pub const PILOT_NAME: u16 = 0xD232;
 /// Длина сохраняемого блока командира: 102 байта (`ld bc,102`).
 pub const COMMANDER_LEN: usize = 0x66;
-/// Точка входа меню сохранения/загрузки игры (`MenuSaveLoad`).
-const MENU_SAVE_LOAD: u16 = 0xD042;
+/// Точка входа родной рутины сохранения/загрузки игры (`MenuSaveLoad`).
+///
+/// Вызывается из главного цикла только при нажатии игровой клавиши
+/// сохранения (`0x749F: call 0xD04E`), поэтому перехват не срабатывает
+/// каждый кадр. Далее рутина прыгает на `0xD907` и уходит в TR-DOS
+/// (`jp 0x3D2F`) с пейджингом 128K — в 48K-ядре это не работает.
+const MENU_SAVE_LOAD: u16 = 0xD04E;
 
 /// Блок сохранения командира в памяти.
 pub fn commander_block(m: &Spectrum) -> &[u8] {
@@ -48,25 +53,21 @@ pub fn commander_load(m: &mut Spectrum, path: &str) -> std::io::Result<()> {
 }
 
 /// Включить перехват игрового сохранения: при вызове `MenuSaveLoad` игра
-/// обратится к нативной записи блока командира в `machine.save_path` вместо
-/// родной рутины (которая требует 128K-пейджинга и в 48K не работает).
+/// выставляет флаг `machine.save_requested`, а главный цикл показывает диалог
+/// выбора файла и записывает блок командира (родная рутина требует
+/// 128K-пейджинга и в 48K-ядре не работает).
 pub fn install_save(m: &mut Spectrum) {
-    if !m.save_path.is_empty() {
-        m.hooks.insert(MENU_SAVE_LOAD, menu_save_load_hook);
-    }
+    m.hooks.insert(MENU_SAVE_LOAD, menu_save_load_hook);
 }
 
-/// Нативная замена `MenuSaveLoad` (`0xD042`): сохраняет блок командира в файл.
+/// Нативная замена `MenuSaveLoad` (`0xD04E`): просит главный цикл сохранить
+/// блок командира (диалог выбора файла). Возвращает «не загружено» (A=0, Z=1),
+/// как и родная рутина при обычном возврате, чтобы главный цикл не уходил на
+/// ветку переинициализации вида (`jp nz, 0x7394`).
 fn menu_save_load_hook(cpu: &mut Z80, m: &mut Spectrum) -> u64 {
-    match commander_save(m, &m.save_path) {
-        Ok(()) => println!(
-            "Сохранение: блок командира ({} байт) записан в {}",
-            COMMANDER_LEN, m.save_path
-        ),
-        Err(e) => eprintln!("Сохранение не удалось: {e}"),
-    }
-    // Вызывающий код сразу перезаписывает флаги, поэтому они не восстанавливаются.
-    let _ = cpu;
+    m.save_requested = true;
+    cpu.a = 0;
+    cpu.f |= ZF;
     0
 }
 
@@ -380,10 +381,11 @@ mod tests {
 
     /// Сохранение и загрузка блока командира в файл — round-trip.
     #[test]
-    fn commander_roundtrip() {        let base = env!("CARGO_MANIFEST_DIR");
+    fn commander_roundtrip() {
+        let base = env!("CARGO_MANIFEST_DIR");
         let dir = format!("{base}/tmp");
         std::fs::create_dir_all(&dir).unwrap();
-        let path = format!("{dir}/commander_roundtrip.sav");
+        let path = format!("{dir}/commander_roundtrip.zxelite");
 
         let mut m = kladov();
         let a = PILOT_NAME as usize;
@@ -404,29 +406,21 @@ mod tests {
         let _ = std::fs::remove_file(&path);
     }
 
-    /// Перехват `MenuSaveLoad`: хук должен записать блок командира в файл.
+    /// Перехват `MenuSaveLoad`: хук должен выставить запрос на сохранение.
     #[test]
-    fn menu_save_load_hook_writes_file() {
-        let base = env!("CARGO_MANIFEST_DIR");
-        let dir = format!("{base}/tmp");
-        std::fs::create_dir_all(&dir).unwrap();
-        let path = format!("{dir}/commander_hook.sav");
-
+    fn menu_save_load_hook_sets_request() {
         let mut m = kladov();
-        assert!(!m.hooks.contains_key(&MENU_SAVE_LOAD), "хук включился без пути");
-        m.save_path = path.clone();
         install_save(&mut m);
-        let hook = m.hooks.get(&MENU_SAVE_LOAD).copied().expect("хук не установлен");
-
+        assert!(
+            m.hooks.contains_key(&MENU_SAVE_LOAD),
+            "хук MenuSaveLoad не установлен"
+        );
+        assert!(!m.save_requested);
+        let hook = m.hooks.get(&MENU_SAVE_LOAD).copied().unwrap();
         let mut cpu = std::mem::take(&mut m.cpu);
         let cycles = hook(&mut cpu, &mut m);
         m.cpu = cpu;
         assert_eq!(cycles, 0);
-
-        let data = std::fs::read(&path).unwrap();
-        assert_eq!(data.len(), COMMANDER_LEN);
-        assert_eq!(data, commander_block(&m));
-
-        let _ = std::fs::remove_file(&path);
+        assert!(m.save_requested, "запрос на сохранение не выставлен");
     }
 }

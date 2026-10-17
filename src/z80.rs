@@ -16,7 +16,7 @@ const PF: u8 = 0x04;
 const XF: u8 = 0x08;
 const HF: u8 = 0x10;
 const YF: u8 = 0x20;
-const ZF: u8 = 0x40;
+pub(crate) const ZF: u8 = 0x40;
 const SF: u8 = 0x80;
 
 #[derive(Clone)]

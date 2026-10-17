@@ -4,5 +4,7 @@ version = "0.1.0"
 edition = "2024"
 
 [dependencies]
+chrono = { version = "0.4.45", default-features = false, features = ["clock"] }
 minifb = "0.29.0"
 pipewire = { version = "0.10", features = ["v0_3_49"] }
+rfd = "0.17.2"
