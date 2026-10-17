@@ -5,7 +5,7 @@ mod z80;
 
 use audio::Audio;
 use machine::Spectrum;
-use minifb::{Key, Scale, ScaleMode, Window, WindowOptions};
+use minifb::{Key, KeyRepeat, Scale, ScaleMode, Window, WindowOptions};
 use std::env;
 use std::fs;
 use std::path::{Path, PathBuf};
@@ -101,6 +101,12 @@ fn parse_args() -> Options {
                 println!("  --wav FILE сохранить звук в WAV-файл");
                 println!("  --native   включить нативные (Rust) замены подпрограмм");
                 println!("  --save FILE фиксированный файл командира вместо диалога");
+                println!();
+                println!("Управление:");
+                println!("  Esc        меню: сохранить / загрузить / выйти");
+                println!("  F5         сохранить командира");
+                println!("  F9         загрузить командира");
+                println!("  Ctrl+Q     выход из игры");
                 exit(0);
             }
             other => opts.game = other.to_string(),
@@ -530,6 +536,37 @@ fn do_save(machine: &Spectrum, opts: &Options, last: &mut String) {
     }
 }
 
+/// Диалог открытия файла командира. `last` — прошлый путь (задаёт каталог).
+fn load_dialog(last: &str) -> Option<PathBuf> {
+    let mut d = rfd::FileDialog::new().add_filter("Elite (ZX)", &["zxelite"]);
+    if let Some(dir) = Path::new(last).parent().filter(|p| !p.as_os_str().is_empty()) {
+        d = d.set_directory(dir);
+    }
+    d.pick_file()
+}
+
+/// Путь загрузки: фиксированный `--save` или интерактивный диалог открытия.
+fn choose_load_path(opts: &Options, last: &str) -> Option<PathBuf> {
+    match &opts.save {
+        Some(p) => Some(PathBuf::from(p)),
+        None => load_dialog(last),
+    }
+}
+
+/// Загрузить блок командира из файла; при успехе запомнить путь в `last`.
+fn do_load(machine: &mut Spectrum, opts: &Options, last: &mut String) {
+    let Some(path) = choose_load_path(opts, last) else {
+        return;
+    };
+    match native::commander_load(machine, &path.to_string_lossy(), save_layout(opts)) {
+        Ok(()) => {
+            println!("Загружено из {}", path.display());
+            *last = path.to_string_lossy().into_owned();
+        }
+        Err(e) => eprintln!("Ошибка загрузки: {e}"),
+    }
+}
+
 fn run_window(mut machine: Spectrum, opts: &Options) {
     let mut window = Window::new(
         "Elite (ZX Spectrum)",
@@ -547,33 +584,142 @@ fn run_window(mut machine: Spectrum, opts: &Options) {
         exit(1);
     });
     window.set_target_fps(50);
+    window.set_title("Elite — Esc: меню, F5: сохранить, F9: загрузить, Ctrl+Q: выход");
+
+    // Шрифт знакогенератора из ПЗУ (0x3D00, коды 0x20..0x7F) — копируем один
+    // раз, чтобы наложение меню не зависело от содержимого памяти в рантайме.
+    let font: Vec<u8> = machine.mem[PAUSE_FONT_ADDR..PAUSE_FONT_ADDR + PAUSE_FONT_LEN].to_vec();
 
     let audio = start_audio(opts);
     let mut wav_samples: Option<Vec<i16>> = opts.wav.as_ref().map(|_| Vec::new());
     let mut audio_buf = Vec::new();
     let mut buf = vec![0u32; 256 * 192];
     let mut last_path = String::new();
-    while window.is_open() && !window.is_key_down(Key::Escape) {
-        machine.release_all_keys();
-        machine.release_joystick();
-        apply_keys(&mut machine, &window, opts.kladov);
-        machine.run_frame();
-        if machine.save_requested {
-            machine.save_requested = false;
+    // Открыто ли меню паузы (Esc).
+    let mut menu = false;
+    while window.is_open() {
+        // Ctrl+Q — выход из игры (Escape больше не закрывает окно).
+        let ctrl = window.is_key_down(Key::LeftCtrl) || window.is_key_down(Key::RightCtrl);
+        if ctrl && window.is_key_pressed(Key::Q, KeyRepeat::No) {
+            break;
+        }
+        // F5/F9 — прямые горячие клавиши сохранения/загрузки, работают в любой
+        // момент (независимо от состояния игры).
+        if window.is_key_pressed(Key::F5, KeyRepeat::No) {
             do_save(&machine, opts, &mut last_path);
         }
-        machine.render_audio(&mut audio_buf);
-        if let Some(audio) = &audio {
-            audio.push(&audio_buf);
+        if window.is_key_pressed(Key::F9, KeyRepeat::No) {
+            do_load(&mut machine, opts, &mut last_path);
         }
-        if let Some(wav) = &mut wav_samples {
-            wav.extend_from_slice(&audio_buf);
+        // Esc — открыть/закрыть меню паузы.
+        if window.is_key_pressed(Key::Escape, KeyRepeat::No) {
+            menu = !menu;
+        }
+        if menu {
+            // В меню игра не выполняется; клавиши выбирают пункт.
+            if window.is_key_pressed(Key::Key1, KeyRepeat::No) {
+                do_save(&machine, opts, &mut last_path);
+                menu = false;
+            } else if window.is_key_pressed(Key::Key2, KeyRepeat::No) {
+                do_load(&mut machine, opts, &mut last_path);
+                menu = false;
+            } else if window.is_key_pressed(Key::Key3, KeyRepeat::No) {
+                break;
+            }
+            machine.release_all_keys();
+            machine.release_joystick();
+        } else {
+            machine.release_all_keys();
+            machine.release_joystick();
+            apply_keys(&mut machine, &window, opts.kladov);
+            machine.run_frame();
+            if machine.save_requested {
+                machine.save_requested = false;
+                do_save(&machine, opts, &mut last_path);
+            }
+            machine.render_audio(&mut audio_buf);
+            if let Some(audio) = &audio {
+                audio.push(&audio_buf);
+            }
+            if let Some(wav) = &mut wav_samples {
+                wav.extend_from_slice(&audio_buf);
+            }
         }
         machine.render_rgba(&mut buf);
+        if menu {
+            draw_pause_menu(&mut buf, &font);
+        }
         let _ = window.update_with_buffer(&buf, 256, 192);
     }
     if let (Some(path), Some(samples)) = (&opts.wav, &wav_samples) {
         write_wav(path, samples, audio::SAMPLE_RATE);
+    }
+}
+
+/// Нарисовать закрашенный прямоугольник поверх кадра.
+fn fill_rect(buf: &mut [u32], x0: usize, y0: usize, x1: usize, y1: usize, color: u32) {
+    for y in y0..=y1 {
+        for x in x0..=x1 {
+            if x < 256 && y < 192 {
+                buf[y * 256 + x] = color;
+            }
+        }
+    }
+}
+
+/// Адрес знакогенератора ZX Spectrum в ПЗУ (коды символов 0x20..0x7F).
+const PAUSE_FONT_ADDR: usize = 0x3D00;
+/// Длина знакогенератора: 96 символов по 8 байт.
+const PAUSE_FONT_LEN: usize = 0x300;
+
+/// Нарисовать строку шрифтом ПЗУ (8x8, знакогенератор ZX Spectrum) поверх
+/// кадра. Рисуются только установленные биты (фон не закрашивается).
+fn draw_text(buf: &mut [u32], font: &[u8], x: usize, y: usize, s: &str, color: u32) {
+    let mut cx = x;
+    for b in s.bytes() {
+        let ch = b.clamp(0x20, 0x7F) as usize;
+        let off = (ch - 0x20) * 8;
+        if off + 8 > font.len() {
+            break;
+        }
+        for (row, bits) in font[off..off + 8].iter().enumerate() {
+            for col in 0..8 {
+                if bits & (0x80 >> col) != 0 {
+                    let (px, py) = (cx + col, y + row);
+                    if px < 256 && py < 192 {
+                        buf[py * 256 + px] = color;
+                    }
+                }
+            }
+        }
+        cx += 8;
+    }
+}
+
+/// Наложение меню паузы: рамка и пункты «1 сохранить / 2 загрузить / 3 выйти».
+fn draw_pause_menu(buf: &mut [u32], font: &[u8]) {
+    const FG: u32 = 0x00D7_D7D7; // белый
+    const BG: u32 = 0x0000_0000; // чёрный
+    let (x0, y0, x1, y1) = (40usize, 52usize, 216usize, 140usize);
+    fill_rect(buf, x0, y0, x1, y1, BG);
+    // Рамка: внешняя и внутренняя линии.
+    for x in x0..=x1 {
+        buf[y0 * 256 + x] = FG;
+        buf[y1 * 256 + x] = FG;
+    }
+    for y in y0..=y1 {
+        buf[y * 256 + x0] = FG;
+        buf[y * 256 + x1] = FG;
+    }
+    let lines = [
+        (y0 + 8, "ELITE - PAUSED"),
+        (y0 + 24, "1  SAVE GAME"),
+        (y0 + 36, "2  LOAD GAME"),
+        (y0 + 48, "3  QUIT GAME"),
+        (y0 + 68, "ESC RESUME"),
+    ];
+    for (y, s) in lines {
+        draw_text(buf, font, x0 + 12, y, s, FG);
     }
 }
 
@@ -660,5 +806,30 @@ mod intro_tests {
             m.counts[0].1 > 0,
             "intro loop at 0x71A2 was never reached"
         );
+    }
+
+    /// Меню паузы (Esc) рисуется поверх кадра: рамка и текст шрифтом ПЗУ.
+    /// `ELITE_DUMP_MENU=<file>` сохраняет кадр в PPM для визуальной проверки.
+    #[test]
+    fn pause_menu_overlay_renders() {
+        let m = boot();
+        let mut buf = vec![0u32; 256 * 192];
+        m.render_rgba(&mut buf);
+        let before = buf.clone();
+        let font = &m.mem[PAUSE_FONT_ADDR..PAUSE_FONT_ADDR + PAUSE_FONT_LEN];
+        draw_pause_menu(&mut buf, font);
+
+        const WHITE: u32 = 0x00D7_D7D7;
+        // Угол рамки панели — белый (панель x0=40,y0=52).
+        assert_eq!(buf[52 * 256 + 40], WHITE, "panel border not drawn");
+        // Внутри панели нарисован текст: заметное число белых пикселей.
+        let white = buf.iter().filter(|&&p| p == WHITE).count();
+        assert!(white > 200, "menu text too sparse: white={white}");
+        // Меню действительно поверх прежнего кадра.
+        assert!(buf != before, "overlay did not change the frame");
+
+        if let Ok(path) = env::var("ELITE_DUMP_MENU") {
+            write_ppm(&path, &buf, 256, 192);
+        }
     }
 }
