@@ -137,7 +137,7 @@ impl Z80 {
         r
     }
     #[inline]
-    fn sub8(&mut self, a: u8, v: u8, carry: u8) -> u8 {
+    pub(crate) fn sub8(&mut self, a: u8, v: u8, carry: u8) -> u8 {
         let r = a.wrapping_sub(v).wrapping_sub(carry);
         self.f = NF
             | if r == 0 { ZF } else { 0 }

@@ -17,6 +17,7 @@ pub fn install(m: &mut Spectrum) {
     m.hooks.insert(0x5DFB, font_base_hook);
     m.hooks.insert(0xEB3E, eb3e_hook);
     m.hooks.insert(0xD3CE, d3ce_hook);
+    m.hooks.insert(0xAB0B, mult_a_hib_c_hook);
 }
 
 /// Точное число тактов Z80, которое рутина `sub_5DFB` занимает для кода `a`
@@ -67,6 +68,36 @@ fn d3ce_hook(cpu: &mut Z80, _m: &mut Spectrum) -> u64 {
     let de = cpu.de();
     cpu.sbc16(hl, de);
     46 // push hl(11) + sbc hl,de(15) + pop hl(10) + ret(10)
+}
+
+/// Таблица умножения (`0xBF00`), к которой обращается `Mult_A_hiB_C`.
+const MULT_TABLE: usize = 0xBF00;
+
+/// Нативная замена `Mult_A_hiB_C` (`0xAB0B`).
+///
+/// Табличное умножение через таблицу квадратов по адресу `0xBF00`.
+///
+/// ```text
+/// ld a,b ; sub c ; jr nc,keep ; neg ; keep:
+/// srl a ; ld h,0BFh ; ld l,a ; ld d,(hl)
+/// ld a,b ; add a,c ; rra ; ld l,a ; ld a,(hl) ; sub d ; ret
+/// ```
+///
+/// Вход: `B`, `C`. Выход: `A = table[(B+C)/2] - table[|B-C|/2]`, `H=0xBF`,
+/// `L=(B+C)/2`, `D=table[|B-C|/2]`. `B`, `C` не изменяются.
+fn mult_a_hib_c_hook(cpu: &mut Z80, m: &mut Spectrum) -> u64 {
+    let (b, c) = (cpu.b, cpu.c);
+    let no_borrow = b >= c; // результат `sub c`: CF=0
+    let diff = if no_borrow { b - c } else { c - b };
+    let d = m.mem[MULT_TABLE + (diff >> 1) as usize];
+    let idx = ((b as u16 + c as u16) >> 1) as u8; // `add a,c` + `rra`
+    let a2 = m.mem[MULT_TABLE + idx as usize];
+    cpu.a = cpu.sub8(a2, d, 0);
+    cpu.h = 0xBF;
+    cpu.l = idx;
+    cpu.d = d;
+    // `jr nc` — taken при отсутствии заёма (b >= c), тогда `neg` не выполняется.
+    if no_borrow { 83 } else { 86 }
 }
 
 /// `sub_5DFB`: по коду символа в `A` выбирает базовый адрес шрифта.
@@ -256,6 +287,28 @@ mod tests {
                     zs, ns,
                     "рутина 0x{addr:04X}: вход a={a:02X} hl={hl:04X} de={de:04X} f={f:02X}"
                 );
+            }
+        }
+    }
+
+    /// `Mult_A_hiB_C` обязан совпасть с Z80 на всех 256×256 парах `B`,`C`
+    /// по всем регистрам, флагам и числу тактов.
+    #[test]
+    fn mult_a_hib_c_matches_z80() {
+        let mut z = kladov();
+        let mut n = kladov();
+        install(&mut n);
+        for b in 0u8..=255 {
+            for c in 0u8..=255 {
+                z.cpu.b = b;
+                z.cpu.c = c;
+                z.cpu.f = b ^ c;
+                n.cpu.b = b;
+                n.cpu.c = c;
+                n.cpu.f = b ^ c;
+                let zs = z80_sub(&mut z, 0xAB0B);
+                let ns = hook_sub(&mut n, 0xAB0B);
+                assert_eq!(zs, ns, "Mult_A_hiB_C: b={b:02X} c={c:02X}");
             }
         }
     }
