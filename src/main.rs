@@ -5,11 +5,20 @@ mod z80;
 
 use audio::Audio;
 use machine::Spectrum;
-use minifb::{Key, KeyRepeat, Scale, ScaleMode, Window, WindowOptions};
+use softbuffer::{Context, Surface};
 use std::env;
 use std::fs;
+use std::num::NonZeroU32;
 use std::path::{Path, PathBuf};
 use std::process::exit;
+use std::rc::Rc;
+use std::time::{Duration, Instant};
+use winit::application::ApplicationHandler;
+use winit::dpi::LogicalSize;
+use winit::event::{ElementState, WindowEvent};
+use winit::event_loop::{ActiveEventLoop, ControlFlow, EventLoop};
+use winit::keyboard::{KeyCode, ModifiersState, PhysicalKey};
+use winit::window::{Window, WindowId};
 
 /// Load address of the assembled game image.
 const GAME_LOAD_ADDR: u16 = 0x6048;
@@ -571,108 +580,319 @@ fn do_load(machine: &mut Spectrum, opts: &Options, last: &mut String) {
     }
 }
 
-fn run_window(mut machine: Spectrum, opts: &Options) {
-    let mut window = Window::new(
-        "Elite (ZX Spectrum)",
-        256,
-        192,
-        WindowOptions {
-            resize: true,
-            scale: Scale::X2,
-            scale_mode: ScaleMode::AspectRatioStretch,
-            ..WindowOptions::default()
-        },
-    )
-    .unwrap_or_else(|e| {
-        eprintln!("cannot open window: {}", e);
-        exit(1);
-    });
-    window.set_target_fps(50);
-    window.set_title("Elite — Esc: меню, F5: сохранить, F9: загрузить, Ctrl+Q: выход");
+/// Размер кадра игры (ZX Spectrum).
+const SRC_W: usize = 256;
+const SRC_H: usize = 192;
 
-    // Шрифт знакогенератора из ПЗУ (0x3D00, коды 0x20..0x7F) — копируем один
-    // раз, чтобы наложение меню не зависело от содержимого памяти в рантайме.
-    let font: Vec<u8> = machine.mem[PAUSE_FONT_ADDR..PAUSE_FONT_ADDR + PAUSE_FONT_LEN].to_vec();
+/// Частота кадров ZX Spectrum: 50 кадров в секунду (кадр каждые 20 мс).
+const FRAME_TIME: Duration = Duration::from_micros(1_000_000 / 50);
 
-    let audio = start_audio(opts);
-    // Физические позиции клавиш (независимо от раскладки).
-    let mut phys = PhysicalKeys::new();
-    if phys.is_none() {
-        eprintln!("X11 недоступен: ввод через minifb (раскладка влияет на буквы)");
-    }
-    let mut wav_samples: Option<Vec<i16>> = opts.wav.as_ref().map(|_| Vec::new());
-    let mut audio_buf = Vec::new();
-    let mut buf = vec![0u32; 256 * 192];
-    let mut last_path = String::new();
-    // Открыто ли меню паузы (Esc).
-    let mut menu = false;
-    while window.is_open() {
-        // Снимаем физическое состояние клавиш один раз за кадр.
-        if let Some(p) = &mut phys {
-            p.poll(window.is_active());
+fn run_window(machine: Spectrum, opts: &Options) {
+    let event_loop = match EventLoop::new() {
+        Ok(el) => el,
+        Err(e) => {
+            eprintln!("cannot create event loop: {e}");
+            exit(1);
         }
-        // Ctrl+Q — выход из игры (Escape больше не закрывает окно).  Читаем
-        // физические позиции, чтобы сочетание работало при любой раскладке.
-        let quit = match phys.as_ref() {
-            Some(p) => (p.down(KC_LCTRL) || p.down(KC_RCTRL)) && p.pressed(KC_Q),
-            None => {
-                (window.is_key_down(Key::LeftCtrl) || window.is_key_down(Key::RightCtrl))
-                    && window.is_key_pressed(Key::Q, KeyRepeat::No)
+    };
+    event_loop.set_control_flow(ControlFlow::Wait);
+    let mut app = App::new(machine, opts);
+    let result = event_loop.run_app(&mut app);
+    app.finish();
+    if let Err(e) = result {
+        eprintln!("event loop error: {e}");
+        exit(1);
+    }
+}
+
+/// Оконное приложение на winit: окно, кадр 256x192 и состояние клавиатуры.
+///
+/// Клавиши читаются как `physical_key` (позиция клавиши), поэтому активная
+/// раскладка (в частности русская) на управление не влияет.
+struct App<'a> {
+    machine: Spectrum,
+    opts: &'a Options,
+    font: Vec<u8>,
+    audio: Option<Audio>,
+    audio_buf: Vec<i16>,
+    wav_samples: Option<Vec<i16>>,
+    last_path: String,
+    /// Открыто ли меню паузы (Esc) — игра не выполняется.
+    menu: bool,
+    quit: bool,
+    buf: Vec<u32>,
+    window: Option<Rc<Window>>,
+    context: Option<Context<Rc<Window>>>,
+    surface: Option<Surface<Rc<Window>, Rc<Window>>>,
+    /// Состояние ZX-матрицы (полуряд, бит) — обновляется событиями клавиш.
+    matrix: [[bool; 5]; 8],
+    /// Состояние джойстика Kempston (5 бит).
+    kempston: [bool; 5],
+    ctrl: bool,
+    next_frame: Instant,
+}
+
+impl<'a> App<'a> {
+    fn new(machine: Spectrum, opts: &'a Options) -> Self {
+        // Шрифт знакогенератора из ПЗУ (0x3D00, коды 0x20..0x7F) — копируем один
+        // раз, чтобы наложение меню не зависело от содержимого памяти в рантайме.
+        let font = machine.mem[PAUSE_FONT_ADDR..PAUSE_FONT_ADDR + PAUSE_FONT_LEN].to_vec();
+        Self {
+            machine,
+            opts,
+            font,
+            audio: start_audio(opts),
+            audio_buf: Vec::new(),
+            wav_samples: opts.wav.as_ref().map(|_| Vec::new()),
+            last_path: String::new(),
+            menu: false,
+            quit: false,
+            buf: vec![0u32; SRC_W * SRC_H],
+            window: None,
+            context: None,
+            surface: None,
+            matrix: [[false; 5]; 8],
+            kempston: [false; 5],
+            ctrl: false,
+            next_frame: Instant::now(),
+        }
+    }
+
+    /// Записать накопленный звук в WAV (если запрошено `--wav`).
+    fn finish(&mut self) {
+        if let (Some(path), Some(samples)) = (&self.opts.wav, &self.wav_samples) {
+            write_wav(path, samples, audio::SAMPLE_RATE);
+        }
+    }
+
+    fn create_window(&mut self, event_loop: &ActiveEventLoop) {
+        if self.window.is_some() {
+            return;
+        }
+        let attrs = Window::default_attributes()
+            .with_title("Elite — Esc: меню, F5: сохранить, F9: загрузить, Ctrl+Q: выход")
+            .with_inner_size(LogicalSize::new(2.0 * SRC_W as f64, 2.0 * SRC_H as f64));
+        let window = match event_loop.create_window(attrs) {
+            Ok(w) => Rc::new(w),
+            Err(e) => {
+                eprintln!("cannot open window: {e}");
+                exit(1);
             }
         };
-        if quit {
-            break;
-        }
-        // F5/F9 — прямые горячие клавиши сохранения/загрузки, работают в любой
-        // момент (независимо от состояния игры).
-        if window.is_key_pressed(Key::F5, KeyRepeat::No) {
-            do_save(&machine, opts, &mut last_path);
-        }
-        if window.is_key_pressed(Key::F9, KeyRepeat::No) {
-            do_load(&mut machine, opts, &mut last_path);
-        }
-        // Esc — открыть/закрыть меню паузы.
-        if window.is_key_pressed(Key::Escape, KeyRepeat::No) {
-            menu = !menu;
-        }
-        if menu {
-            // В меню игра не выполняется; клавиши выбирают пункт.
-            if window.is_key_pressed(Key::Key1, KeyRepeat::No) {
-                do_save(&machine, opts, &mut last_path);
-                menu = false;
-            } else if window.is_key_pressed(Key::Key2, KeyRepeat::No) {
-                do_load(&mut machine, opts, &mut last_path);
-                menu = false;
-            } else if window.is_key_pressed(Key::Key3, KeyRepeat::No) {
-                break;
+        let context = match Context::new(window.clone()) {
+            Ok(c) => c,
+            Err(e) => {
+                eprintln!("cannot init softbuffer: {e}");
+                exit(1);
             }
-            machine.release_all_keys();
-            machine.release_joystick();
-        } else {
-            machine.release_all_keys();
-            machine.release_joystick();
-            apply_keys(&mut machine, &window, opts.kladov, phys.as_ref());
-            machine.run_frame();
-            if machine.save_requested {
-                machine.save_requested = false;
-                do_save(&machine, opts, &mut last_path);
+        };
+        let surface = match Surface::new(&context, window.clone()) {
+            Ok(s) => s,
+            Err(e) => {
+                eprintln!("cannot create surface: {e}");
+                exit(1);
             }
-            machine.render_audio(&mut audio_buf);
-            if let Some(audio) = &audio {
-                audio.push(&audio_buf);
-            }
-            if let Some(wav) = &mut wav_samples {
-                wav.extend_from_slice(&audio_buf);
-            }
-        }
-        machine.render_rgba(&mut buf);
-        if menu {
-            draw_pause_menu(&mut buf, &font);
-        }
-        let _ = window.update_with_buffer(&buf, 256, 192);
+        };
+        self.window = Some(window);
+        self.context = Some(context);
+        self.surface = Some(surface);
+        self.next_frame = Instant::now();
     }
-    if let (Some(path), Some(samples)) = (&opts.wav, &wav_samples) {
-        write_wav(path, samples, audio::SAMPLE_RATE);
+
+    /// Обработать событие клавиши (по физической позиции, раскладка не важна).
+    fn key_event(&mut self, code: KeyCode, pressed: bool, repeat: bool) {
+        if let Some((row, bit)) = matrix_pos(code) {
+            self.matrix[row][bit as usize] = pressed;
+        }
+        if let Some(bit) = kempston_bit(code) {
+            self.kempston[bit as usize] = pressed;
+        }
+        if !pressed || repeat {
+            return;
+        }
+        // Ctrl+Q — выход из игры.
+        if code == KeyCode::KeyQ && self.ctrl {
+            self.quit = true;
+            return;
+        }
+        match code {
+            KeyCode::Escape => self.menu = !self.menu,
+            KeyCode::F5 => do_save(&self.machine, self.opts, &mut self.last_path),
+            KeyCode::F9 => do_load(&mut self.machine, self.opts, &mut self.last_path),
+            KeyCode::Digit1 if self.menu => {
+                do_save(&self.machine, self.opts, &mut self.last_path);
+                self.menu = false;
+            }
+            KeyCode::Digit2 if self.menu => {
+                do_load(&mut self.machine, self.opts, &mut self.last_path);
+                self.menu = false;
+            }
+            KeyCode::Digit3 if self.menu => self.quit = true,
+            _ => {}
+        }
+    }
+
+    /// Перенести состояние клавиатуры и джойстика в эмулятор.
+    fn apply_input(&mut self) {
+        self.machine.release_all_keys();
+        self.machine.release_joystick();
+        if self.menu {
+            return;
+        }
+        for (row, bits) in self.matrix.iter().enumerate() {
+            for (bit, &down) in bits.iter().enumerate() {
+                if down {
+                    self.machine.set_key(row, bit as u8, true);
+                }
+            }
+        }
+        for (bit, &down) in self.kempston.iter().enumerate() {
+            self.machine.set_kempston(bit as u8, down);
+        }
+        // В версии Кладова опрос порта Kempston в игре убран: направления она
+        // читает только с клавиатуры (N/M/X/S), а огонь — по клавише A.
+        // Дублируем джойстик на те же клавиши, чтобы стрелки и RightCtrl работали.
+        if self.opts.kladov {
+            if self.kempston[0] {
+                self.machine.set_key(7, 2, true); // вправо
+            }
+            if self.kempston[1] {
+                self.machine.set_key(7, 3, true); // влево
+            }
+            if self.kempston[2] {
+                self.machine.set_key(0, 2, true); // вниз
+            }
+            if self.kempston[3] {
+                self.machine.set_key(1, 1, true); // вверх
+            }
+            if self.kempston[4] {
+                self.machine.set_key(1, 0, true); // огонь
+            }
+        }
+    }
+
+    /// Один кадр: ввод, эмуляция, звук, отрисовка и показ.
+    fn frame(&mut self) {
+        if self.menu {
+            // В меню игра не выполняется, клавиши не попадают в эмулятор.
+            self.machine.release_all_keys();
+            self.machine.release_joystick();
+        } else {
+            self.apply_input();
+            self.machine.run_frame();
+            if self.machine.save_requested {
+                self.machine.save_requested = false;
+                do_save(&self.machine, self.opts, &mut self.last_path);
+            }
+            self.machine.render_audio(&mut self.audio_buf);
+            if let Some(audio) = &self.audio {
+                audio.push(&self.audio_buf);
+            }
+            if let Some(wav) = &mut self.wav_samples {
+                wav.extend_from_slice(&self.audio_buf);
+            }
+        }
+        self.machine.render_rgba(&mut self.buf);
+        if self.menu {
+            draw_pause_menu(&mut self.buf, &self.font);
+        }
+        self.present();
+    }
+
+    /// Показать кадр 256x192 в окне, сохраняя пропорции 4:3 (по центру).
+    fn present(&mut self) {
+        let Some(window) = self.window.clone() else {
+            return;
+        };
+        let size = window.inner_size();
+        let (w, h) = (size.width, size.height);
+        if w == 0 || h == 0 {
+            return;
+        }
+        let Some(surface) = self.surface.as_mut() else {
+            return;
+        };
+        if surface
+            .resize(NonZeroU32::new(w).unwrap(), NonZeroU32::new(h).unwrap())
+            .is_err()
+        {
+            return;
+        }
+        let src = &self.buf;
+        let Ok(mut out) = surface.buffer_mut() else {
+            return;
+        };
+        // Масштаб с сохранением пропорций, выравнивание по центру (letterbox).
+        let scale = (w as f64 / SRC_W as f64).min(h as f64 / SRC_H as f64);
+        let dw = ((SRC_W as f64 * scale).round() as u32).clamp(1, w);
+        let dh = ((SRC_H as f64 * scale).round() as u32).clamp(1, h);
+        let ox = (w - dw) / 2;
+        let oy = (h - dh) / 2;
+        let mut i = 0usize;
+        for y in 0..h {
+            let in_y = y >= oy && y < oy + dh;
+            let sy = if in_y { ((y - oy) as u64 * SRC_H as u64 / dh as u64) as usize } else { 0 };
+            for x in 0..w {
+                let inside = in_y && x >= ox && x < ox + dw;
+                out[i] = if inside {
+                    let sx = ((x - ox) as u64 * SRC_W as u64 / dw as u64) as usize;
+                    src[sy * SRC_W + sx]
+                } else {
+                    0
+                };
+                i += 1;
+            }
+        }
+        window.pre_present_notify();
+        let _ = out.present();
+    }
+}
+
+impl<'a> ApplicationHandler for App<'a> {
+    fn resumed(&mut self, event_loop: &ActiveEventLoop) {
+        self.create_window(event_loop);
+    }
+
+    fn window_event(&mut self, event_loop: &ActiveEventLoop, _id: WindowId, event: WindowEvent) {
+        match event {
+            WindowEvent::CloseRequested => event_loop.exit(),
+            WindowEvent::Focused(false) => {
+                // При потере фокуса не «залипаем» на нажатых клавишах.
+                self.matrix = [[false; 5]; 8];
+                self.kempston = [false; 5];
+                self.ctrl = false;
+            }
+            WindowEvent::ModifiersChanged(m) => {
+                self.ctrl = m.state().contains(ModifiersState::CONTROL);
+            }
+            WindowEvent::KeyboardInput { event, .. } => {
+                if let PhysicalKey::Code(code) = event.physical_key {
+                    let pressed = event.state == ElementState::Pressed;
+                    self.key_event(code, pressed, event.repeat);
+                }
+                if self.quit {
+                    event_loop.exit();
+                }
+            }
+            _ => {}
+        }
+    }
+
+    fn about_to_wait(&mut self, event_loop: &ActiveEventLoop) {
+        if self.quit {
+            event_loop.exit();
+            return;
+        }
+        let now = Instant::now();
+        if now >= self.next_frame {
+            self.frame();
+            self.next_frame += FRAME_TIME;
+            // Если не успеваем за реальным временем — не копим долг.
+            if self.next_frame <= now {
+                self.next_frame = now + FRAME_TIME;
+            }
+        }
+        event_loop.set_control_flow(ControlFlow::WaitUntil(self.next_frame));
     }
 }
 
@@ -743,129 +963,39 @@ fn draw_pause_menu(buf: &mut [u32], font: &[u8]) {
     }
 }
 
-/// X11 keycode-ы (evdev scan-код + 8) клавиш, используемых вне ZX-матрицы.
-const KC_Q: u8 = 24;
-const KC_LCTRL: u8 = 37;
-const KC_RCTRL: u8 = 105;
-
-/// Физическое состояние клавиатуры, снятое напрямую с X11.
+/// Позиция клавиши в матрице ZX Spectrum: (полуряд 0..8, бит 0..5).
 ///
-/// minifb отдаёт клавиши по раскладке (в частности, Wayland-версия — по
-/// активной), поэтому при включённой русской раскладке буквы приходят
-/// кириллическими и не распознаются.  Для эмуляции ZX Spectrum нужны именно
-/// *позиции* клавиш, поэтому берём их напрямую: `XQueryKeymap` возвращает
-/// битовую карту физических keycode-ов, не зависящую от раскладки.
-///
-/// Если соединение с X11 открыть не удалось (нет `DISPLAY` и т.п.), структура
-/// просто не создаётся и ввод откатывается на обычные `minifb::Key`.
-struct PhysicalKeys {
-    xlib: x11_dl::xlib::Xlib,
-    display: *mut x11_dl::xlib::Display,
-    /// Текущее состояние клавиш (по биту на keycode).
-    state: [std::os::raw::c_char; 32],
-    /// Состояние на предыдущем кадре (для определения момента нажатия).
-    prev: [std::os::raw::c_char; 32],
+/// Клавиши берутся по физической позиции (`physical_key`), поэтому активная
+/// раскладка (например русская) на управление не влияет.
+const MATRIX_MAP: &[(KeyCode, usize, u8)] = &[
+    (KeyCode::ShiftLeft, 0, 0), (KeyCode::KeyZ, 0, 1), (KeyCode::KeyX, 0, 2), (KeyCode::KeyC, 0, 3), (KeyCode::KeyV, 0, 4),
+    (KeyCode::KeyA, 1, 0), (KeyCode::KeyS, 1, 1), (KeyCode::KeyD, 1, 2), (KeyCode::KeyF, 1, 3), (KeyCode::KeyG, 1, 4),
+    (KeyCode::KeyQ, 2, 0), (KeyCode::KeyW, 2, 1), (KeyCode::KeyE, 2, 2), (KeyCode::KeyR, 2, 3), (KeyCode::KeyT, 2, 4),
+    (KeyCode::Digit1, 3, 0), (KeyCode::Digit2, 3, 1), (KeyCode::Digit3, 3, 2), (KeyCode::Digit4, 3, 3), (KeyCode::Digit5, 3, 4),
+    (KeyCode::Digit0, 4, 0), (KeyCode::Digit9, 4, 1), (KeyCode::Digit8, 4, 2), (KeyCode::Digit7, 4, 3), (KeyCode::Digit6, 4, 4),
+    (KeyCode::KeyP, 5, 0), (KeyCode::KeyO, 5, 1), (KeyCode::KeyI, 5, 2), (KeyCode::KeyU, 5, 3), (KeyCode::KeyY, 5, 4),
+    (KeyCode::Enter, 6, 0), (KeyCode::KeyL, 6, 1), (KeyCode::KeyK, 6, 2), (KeyCode::KeyJ, 6, 3), (KeyCode::KeyH, 6, 4),
+    (KeyCode::Space, 7, 0), (KeyCode::ShiftRight, 7, 1), (KeyCode::KeyM, 7, 2), (KeyCode::KeyN, 7, 3), (KeyCode::KeyB, 7, 4),
+];
+
+/// Позиция физической клавиши в матрице ZX Spectrum (полуряд, бит).
+fn matrix_pos(code: KeyCode) -> Option<(usize, u8)> {
+    MATRIX_MAP
+        .iter()
+        .find(|&&(c, _, _)| c == code)
+        .map(|&(_, row, bit)| (row, bit))
 }
 
-impl PhysicalKeys {
-    fn new() -> Option<Self> {
-        let xlib = x11_dl::xlib::Xlib::open().ok()?;
-        let display = unsafe { (xlib.XOpenDisplay)(std::ptr::null()) };
-        if display.is_null() {
-            return None;
-        }
-        Some(Self { xlib, display, state: [0; 32], prev: [0; 32] })
-    }
-
-    /// Считать текущее состояние клавиш.  Если окно не в фокусе, считаем все
-    /// клавиши отпущенными: `XQueryKeymap` возвращает глобальное состояние, а
-    /// удержание клавиши в другом приложении не должно попадать в игру.
-    fn poll(&mut self, active: bool) {
-        self.prev = self.state;
-        if active {
-            unsafe { (self.xlib.XQueryKeymap)(self.display, self.state.as_mut_ptr()) };
-        } else {
-            self.state = [0; 32];
-        }
-    }
-
-    /// Нажата ли клавиша с данным X11 keycode (evdev scan-код + 8).
-    fn down(&self, keycode: u8) -> bool {
-        let i = keycode as usize;
-        (self.state[i / 8] as u8) & (1u8 << (i % 8)) != 0
-    }
-
-    /// Нажата ли клавиша именно в этом кадре (переход «отпущено → нажато»).
-    fn pressed(&self, keycode: u8) -> bool {
-        let i = keycode as usize;
-        self.down(keycode) && (self.prev[i / 8] as u8) & (1u8 << (i % 8)) == 0
-    }
-}
-
-impl Drop for PhysicalKeys {
-    fn drop(&mut self) {
-        unsafe { (self.xlib.XCloseDisplay)(self.display) };
-    }
-}
-
-fn apply_keys(
-    machine: &mut Spectrum,
-    window: &Window,
-    kempston_as_keys: bool,
-    phys: Option<&PhysicalKeys>,
-) {
-    // (minifb key, X11 keycode, half-row index, bit)
-    //
-    // X11 keycode = evdev scan-код + 8; позиции стандартной PC-клавиатуры, они
-    // не зависят от активной раскладки.  Если физическое состояние недоступно,
-    // берём клавишу у minifb.
-    const MAP: &[(Key, u8, usize, u8)] = &[
-        (Key::LeftShift, 50, 0, 0), (Key::Z, 52, 0, 1), (Key::X, 53, 0, 2), (Key::C, 54, 0, 3), (Key::V, 55, 0, 4),
-        (Key::A, 38, 1, 0), (Key::S, 39, 1, 1), (Key::D, 40, 1, 2), (Key::F, 41, 1, 3), (Key::G, 42, 1, 4),
-        (Key::Q, 24, 2, 0), (Key::W, 25, 2, 1), (Key::E, 26, 2, 2), (Key::R, 27, 2, 3), (Key::T, 28, 2, 4),
-        (Key::Key1, 10, 3, 0), (Key::Key2, 11, 3, 1), (Key::Key3, 12, 3, 2), (Key::Key4, 13, 3, 3), (Key::Key5, 14, 3, 4),
-        (Key::Key0, 19, 4, 0), (Key::Key9, 18, 4, 1), (Key::Key8, 17, 4, 2), (Key::Key7, 16, 4, 3), (Key::Key6, 15, 4, 4),
-        (Key::P, 33, 5, 0), (Key::O, 32, 5, 1), (Key::I, 31, 5, 2), (Key::U, 30, 5, 3), (Key::Y, 29, 5, 4),
-        (Key::Enter, 36, 6, 0), (Key::L, 46, 6, 1), (Key::K, 45, 6, 2), (Key::J, 44, 6, 3), (Key::H, 43, 6, 4),
-        (Key::Space, 65, 7, 0), (Key::RightShift, 62, 7, 1), (Key::M, 58, 7, 2), (Key::N, 57, 7, 3), (Key::B, 56, 7, 4),
-    ];
-    for &(key, code, row, bit) in MAP {
-        let down = match phys {
-            Some(p) => p.down(code),
-            None => window.is_key_down(key),
-        };
-        machine.set_key(row, bit, down);
-    }
-
-    // Kempston (порт 0x1F): курсорные клавиши = направления, RightCtrl = огонь.
-    // Скорость (Space / SymbolShift) в режиме Kempston всё ещё читается игрой
-    // с клавиатуры, поэтому Space здесь не трогаем.
-    machine.set_kempston(0, window.is_key_down(Key::Right));
-    machine.set_kempston(1, window.is_key_down(Key::Left));
-    machine.set_kempston(2, window.is_key_down(Key::Down));
-    machine.set_kempston(3, window.is_key_down(Key::Up));
-    machine.set_kempston(4, window.is_key_down(Key::RightCtrl));
-
-    // В версии Кладова опрос порта Kempston в игре убран: направления она читает
-    // только с клавиатуры (N/M/X/S), а огонь — по клавише A. Поэтому дублируем
-    // джойстик на эти же клавиши, чтобы стрелки и RightCtrl работали.
-    if kempston_as_keys {
-        if window.is_key_down(Key::Right) {
-            machine.set_key(7, 2, true);
-        }
-        if window.is_key_down(Key::Left) {
-            machine.set_key(7, 3, true);
-        }
-        if window.is_key_down(Key::Up) {
-            machine.set_key(1, 1, true);
-        }
-        if window.is_key_down(Key::Down) {
-            machine.set_key(0, 2, true);
-        }
-        if window.is_key_down(Key::RightCtrl) {
-            machine.set_key(1, 0, true);
-        }
-    }
+/// Бит джойстика Kempston: курсорные клавиши — направления, правая Ctrl — огонь.
+fn kempston_bit(code: KeyCode) -> Option<u8> {
+    Some(match code {
+        KeyCode::ArrowRight => 0,
+        KeyCode::ArrowLeft => 1,
+        KeyCode::ArrowDown => 2,
+        KeyCode::ArrowUp => 3,
+        KeyCode::ControlRight => 4,
+        _ => return None,
+    })
 }
 
 #[cfg(test)]
@@ -929,5 +1059,31 @@ mod intro_tests {
         if let Ok(path) = env::var("ELITE_DUMP_MENU") {
             write_ppm(&path, &buf, 256, 192);
         }
+    }
+
+    /// Физические клавиши раскладываются по матрице ZX Spectrum без зависимости
+    /// от активной раскладки: (полуряд, бит) совпадают с оригинальной схемой.
+    #[test]
+    fn matrix_map_covers_keyboard() {
+        assert_eq!(matrix_pos(KeyCode::ShiftLeft), Some((0, 0)));
+        assert_eq!(matrix_pos(KeyCode::KeyQ), Some((2, 0)));
+        assert_eq!(matrix_pos(KeyCode::Digit1), Some((3, 0)));
+        assert_eq!(matrix_pos(KeyCode::Enter), Some((6, 0)));
+        assert_eq!(matrix_pos(KeyCode::Space), Some((7, 0)));
+        assert_eq!(matrix_pos(KeyCode::KeyB), Some((7, 4)));
+        // Вне матрицы (управление игрой) — ничего.
+        assert_eq!(matrix_pos(KeyCode::ArrowUp), None);
+        assert_eq!(matrix_pos(KeyCode::F5), None);
+        // Все 40 клавиш матрицы заданы и уникальны.
+        assert_eq!(MATRIX_MAP.len(), 40);
+        let mut seen = std::collections::HashSet::new();
+        for &(code, row, bit) in MATRIX_MAP {
+            assert!(row < 8 && bit < 5, "позиция вне матрицы: {code:?} ({row},{bit})");
+            assert!(seen.insert((row, bit)), "дубликат позиции {row},{bit}");
+        }
+        // Kempston: стрелки и правая Ctrl.
+        assert_eq!(kempston_bit(KeyCode::ArrowRight), Some(0));
+        assert_eq!(kempston_bit(KeyCode::ControlRight), Some(4));
+        assert_eq!(kempston_bit(KeyCode::Space), None);
     }
 }

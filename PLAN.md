@@ -267,3 +267,25 @@
   состояние клавиш обнуляется, чтобы удержание в другом приложении не попадало
   в игру. Проверка: `cargo test --release` (20 passed, 1 ignored), `./check.sh`
   — OK; таблица keycode-ов сверена со стандартным соответствием evdev→X11.
+
+- 2026-10-17 — шаг окно: переход с minifb на нативный Wayland (winit +
+  softbuffer). Причина: у minifb Wayland-backend нет физических кодов клавиш
+  (он отдаёт клавишу по активной раскладке), из-за чего русская раскладка
+  ломала ввод, а обходной путь (`XQueryKeymap` + принудительный X11-backend)
+  заставлял работать через XWayland. Теперь окно создаёт winit 0.30
+  (`default-features=false, features=["wayland","wayland-dlopen",
+  "wayland-csd-adwaita","rwh_06"]`), кадр 256x192 показывает softbuffer
+  (`["wayland","wayland-dlopen"]`); `wayland-dlopen` открывает libwayland-client
+  динамически, dev-заголовки при сборке не нужны. Клавиши берутся как
+  `physical_key` (`PhysicalKey::Code`), т.е. по позиции, а не по символу —
+  раскладка больше не влияет. Убраны `PhysicalKeys`, `x11-dl`, зависимость
+  `minifb`. Старый цикл `while window.is_open()` заменён на
+  `ApplicationHandler`: кадры гоняются по таймеру (`ControlFlow::WaitUntil`,
+  50 Гц), масштаб 4:3 с letterbox считается вручную. Меню паузы, F5/F9,
+  Ctrl+Q и Kempston-дублирование для версии Кладова сохранены. Проверка:
+  `cargo test --release` — 21 passed, 1 ignored (добавлен тест
+  `matrix_map_covers_keyboard` на раскладку 40 клавиш матрицы и биты Kempston);
+  `./check.sh` — OK; headless-сейв без изменений (102 байта, одно «Сохранено»);
+  `ldd` не показывает прямых линковок wayland/x11. Запуск окна в песочнице без
+  дисплея не проверяется — при отсутствии Wayland выдаётся понятная ошибка и
+  код 1 (без паники).
