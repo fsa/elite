@@ -25,6 +25,8 @@ pub fn install(m: &mut Spectrum, kladov: bool) {
     install_hook(m, 0xEB3E, eb3e_hook, 32);
     install_hook(m, 0xD3CE, d3ce_hook, 46);
     install_hook(m, 0xAB0B, mult_a_hib_c_hook, 86);
+    install_hook(m, 0xAB34, mult_hl_b_c_hook, 131);
+    install_hook(m, 0xAB1E, sub_ab1e_hook, 24 * 256 + 180);
     install_hook(m, 0xE621, pix_crd_2_scr_adr_hook, 120);
     install_hook(m, 0x7A59, smag_add_mem_hook, 148);
     install_hook(m, 0x7FE7, scr_adr_next_line_hook, 87);
@@ -365,6 +367,88 @@ fn mult_a_hib_c_hook(cpu: &mut Z80, m: &mut Spectrum) -> u64 {
     // `jr nc` — taken при отсутствии заёма (b >= c), тогда `neg` не выполняется.
     bump_r(cpu, if no_borrow { 14 } else { 15 });
     if no_borrow { 83 } else { 86 }
+}
+
+/// Младшие байты 16-битной таблицы квадратов (`Mult_HL_B_C`, `0xBE00`).
+///
+/// Таблица лежит «двумя плоскостями»: младшие байты слов по `0xBE00+индекс`,
+/// старшие — там же по `0xBF00+индекс` (это общая плоскость с однобайтовой
+/// таблицей `Mult_A_hiB_C`). Слово с индексом `i` = `(mem[0xBF00+i] << 8) |
+/// mem[0xBE00+i]`.
+const MULT_LO_TABLE: usize = 0xBE00;
+
+/// Нативная замена `Mult_HL_B_C` (`0xAB34`) — «приближенное табличное
+/// умножение HL = B*C» (ядро 3D-математики, 11 точек вызова: `Sqr_HL_wordAdrIX`,
+/// поворот/масштабирование кораблей).
+///
+/// ```text
+/// ld a,b ; sub c ; jr nc,keep ; neg ; keep: srl a
+/// ld h,0BEh ; ld l,a ; ld e,(hl) ; inc h ; ld d,(hl) ; dec h
+/// ld a,b ; add a,c ; rra ; ld l,a ; ld a,(hl) ; inc h ; ld h,(hl) ; ld l,a
+/// and a ; sbc hl,de ; ret
+/// ```
+///
+/// Вход: `B`, `C`. Выход: `HL = word[(B+C)/2] - word[|B-C|/2]` (16-битное
+/// приближение произведения), `DE = word[|B-C|/2]`, `A` = младший байт
+/// слова-суммы (не меняется при `sbc`). Итоговые флаги задаёт `sbc hl,de`
+/// с заёмом 0 (его очищает `and a`). `B`, `C` не изменяются.
+fn mult_hl_b_c_hook(cpu: &mut Z80, m: &mut Spectrum) -> u64 {
+    let (b, c) = (cpu.b, cpu.c);
+    let no_borrow = b >= c; // результат `sub c`: CF=0
+    let diff = if no_borrow { b - c } else { c - b };
+    let di = (diff >> 1) as usize;
+    let de = ((m.mem[MULT_TABLE + di] as u16) << 8) | m.mem[MULT_LO_TABLE + di] as u16;
+    let idx = ((b as u16 + c as u16) >> 1) as u8; // `add a,c` + `rra`
+    let lo = m.mem[MULT_LO_TABLE + idx as usize];
+    let hi = m.mem[MULT_TABLE + idx as usize];
+    cpu.d = (de >> 8) as u8;
+    cpu.e = de as u8;
+    cpu.a = lo; // `ld a,(hl)` — младший байт слова-суммы
+    cpu.a = cpu.and8(cpu.a, cpu.a); // `and a` — очищает C перед sbc
+    let r = cpu.sbc16(((hi as u16) << 8) | lo as u16, de);
+    cpu.h = (r >> 8) as u8;
+    cpu.l = r as u8;
+    bump_r(cpu, if no_borrow { 21 } else { 22 });
+    if no_borrow { 128 } else { 131 }
+}
+
+/// Адрес `VertexIncFactor` в версии Кладова (данные, `db 1`).
+const VERTEX_INC_FACTOR: usize = 0xA9C7;
+
+/// Нативная замена `sub_AB1E` — хелпер `RotateCrdN_Vertex`: сдвигает `B`
+/// влево на `VertexIncFactor` бит и домножает на байт `(iy+1)` (без знака)
+/// через ту же таблицу квадратов, что `Mult_A_hiB_C`.
+///
+/// ```text
+/// ld a,(VertexIncFactor)
+/// loop: sla b ; dec a ; jr nz,loop
+/// ld c,(iy+1) ; res 7,c ; push de
+/// call Mult_A_hiB_C ; ld l,a ; ld h,0 ; pop de ; ret
+/// ```
+///
+/// Вход: `B`, `IY`. Выход: `B = B << VertexIncFactor` (за 8 бит — 0),
+/// `C = (IY+1) & 0x7F`, `HL = A` (результат `Mult_A_hiB_C`, нулевой
+/// расширенный), флаги — от `sub d` внутреннего умножения. `D`, `E`
+/// сохраняются (`push`/`pop`). `VertexIncFactor = 0` даёт 256 итераций
+/// сдвига (как `djnz` с нулём), результат — 0.
+fn sub_ab1e_hook(cpu: &mut Z80, m: &mut Spectrum) -> u64 {
+    let nv = m.mem[VERTEX_INC_FACTOR];
+    let n = if nv == 0 { 256 } else { nv as u64 }; // итераций; 0 -> 256 (как djnz)
+    let b = if n >= 8 { 0 } else { cpu.b << n as u32 };
+    let c = m.mem[(cpu.iy as usize).wrapping_add(1) & 0xFFFF] & 0x7F;
+    cpu.b = b;
+    cpu.c = c;
+    // Внутренний Mult_A_hiB_C (0xAB0B): таблица 0xBF00, вычет |b-c|/2 из (b+c)/2.
+    let no_borrow = b >= c;
+    let diff = if no_borrow { b - c } else { c - b };
+    let d = m.mem[MULT_TABLE + (diff >> 1) as usize];
+    let idx = ((b as u16 + c as u16) >> 1) as u8;
+    let a2 = m.mem[MULT_TABLE + idx as usize];
+    cpu.a = cpu.sub8(a2, d, 0); // флаги остаются от него (ld/pop/ret не трогают)
+    cpu.h = 0;
+    cpu.l = cpu.a;
+    bump_r(cpu, 3 * n as u32 + 9 + if no_borrow { 14 } else { 15 });
+    24 * n + 177 + if no_borrow { 0 } else { 3 }
 }
 
 /// `sub_E621` (`PixCrd2ScrAdr` в оригинале): пиксельные координаты -> адрес
@@ -1784,6 +1868,78 @@ mod tests {
         }
     }
 
+    /// `Mult_HL_B_C` (`0xAB34`) обязан совпасть с Z80 на всех 256×256 парах
+    /// `B`,`C` по всем регистрам, флагам и числу тактов (16-битный результат
+    /// табличного умножения через плоскости 0xBE00/0xBF00).
+    #[test]
+    fn mult_hl_b_c_matches_z80() {
+        let mut z = kladov();
+        let mut n = kladov();
+        install(&mut n, true);
+        for b in 0u8..=255 {
+            for c in 0u8..=255 {
+                z.cpu.b = b;
+                z.cpu.c = c;
+                z.cpu.f = b ^ c;
+                n.cpu.b = b;
+                n.cpu.c = c;
+                n.cpu.f = b ^ c;
+                let zs = z80_sub(&mut z, 0xAB34);
+                let ns = hook_sub(&mut n, 0xAB34);
+                assert_eq!(zs, ns, "Mult_HL_B_C: b={b:02X} c={c:02X}");
+            }
+        }
+    }
+
+    /// `sub_AB1E` (хелпер `RotateCrdN_Vertex`) обязан совпасть с Z80 по всем
+    /// регистрам, флагам и тактам: сдвиг `B` на `VertexIncFactor` бит и
+    /// табличное умножение на `(iy+1) & 7Fh`.
+    #[test]
+    fn sub_ab1e_matches_z80() {
+        let mut z = kladov();
+        let mut n = kladov();
+        install(&mut n, true);
+        let inc_factors = [0u8, 1, 2, 3, 7, 8, 9, 255];
+        let iy1s = [0x00u8, 0x3F, 0x40, 0x7F, 0x80, 0xFF];
+        let run = |z: &mut Spectrum, n: &mut Spectrum, b: u8| {
+            z.cpu.b = b;
+            n.cpu.b = b;
+            let zs = z80_sub(z, 0xAB1E);
+            let ns = hook_sub(n, 0xAB1E);
+            assert_eq!(
+                zs, ns,
+                "sub_AB1E: inc={} b={b:02X} iy+1={:02X}",
+                z.mem[VERTEX_INC_FACTOR],
+                (z.cpu.iy as u8).wrapping_add(1)
+            );
+        };
+        for &nf in &inc_factors {
+            z.mem[VERTEX_INC_FACTOR] = nf;
+            n.mem[VERTEX_INC_FACTOR] = nf;
+            for &iy1 in &iy1s {
+                z.cpu.iy = 0xD2F0;
+                n.cpu.iy = 0xD2F0;
+                z.mem[0xD2F1] = iy1;
+                n.mem[0xD2F1] = iy1;
+                for b in 0u8..=255 {
+                    run(&mut z, &mut n, b);
+                }
+            }
+        }
+        // Полный обход (B, IY+1) при одном сдвиге.
+        z.mem[VERTEX_INC_FACTOR] = 1;
+        n.mem[VERTEX_INC_FACTOR] = 1;
+        for iy1 in 0u8..=255 {
+            z.cpu.iy = 0xD2F0;
+            n.cpu.iy = 0xD2F0;
+            z.mem[0xD2F1] = iy1;
+            n.mem[0xD2F1] = iy1;
+            for b in 0u8..=255 {
+                run(&mut z, &mut n, b);
+            }
+        }
+    }
+
     /// `sub_E621` (`PixCrd2ScrAdr`) обязан совпасть с Z80 по всем регистрам,
     /// флагам и тактам для всех пар `X` (A) и `Y` (C).
     #[test]
@@ -2809,32 +2965,6 @@ mod tests {
             );
 
             let _ = std::fs::remove_file(&path);
-        }
-    }
-
-
-
-    /// ВРЕМЕННЫЙ: где лежат SunCrd и поле солнца в живом блоке.
-    #[test]
-    fn probe_sun_fields() {
-        for (tag, layout, sun, mut m) in [
-            ("kladov", KLADOV_SAVE, 0x7107u16, boot_kladov()),
-            ("elite", ELITE_SAVE, 0x7065u16, boot_elite()),
-        ] {
-            install_save(&mut m, layout);
-            for f in 0..150u64 {
-                m.release_all_keys();
-                if f >= 30 && f % 16 < 6 { m.set_key(7, 0, true); }
-                m.run_frame();
-            }
-            let live = &m.mem[layout.pilot_name as usize..layout.pilot_name as usize + layout.commander_len];
-            let pat = [0xF0u8, 0x52, 0x05, 0x33, 0x98, 0x07, 0xB6, 0xFA, 0x8B];
-            let off = live.windows(9).position(|w| w == pat);
-            println!("{tag}: SunCrd(0x{sun:04X})={} ; паттерн PilotDataOfSun в живом блоке на смещении {off:?}",
-                m.mem[sun as usize..sun as usize + 9].iter().map(|b| format!("{b:02X}")).collect::<String>());
-            println!("{tag}: живой блок[93..102]={} ; тень[93..102]={}",
-                live[93..102].iter().map(|b| format!("{b:02X}")).collect::<String>(),
-                m.mem[layout.pilot_shadow.unwrap().0 as usize + 93..layout.pilot_shadow.unwrap().0 as usize + 102].iter().map(|b| format!("{b:02X}")).collect::<String>());
         }
     }
 }
