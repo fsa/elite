@@ -257,6 +257,21 @@ impl Spectrum {
         self.cpu = cpu;
     }
 
+    /// Такт начала инструкции для хуков, эмулирующих запись в порт (`out`).
+    /// `run_frame` выставляет `cycle_clock` перед каждым `step`; хук обязан
+    /// сделать то же самое, чтобы момент переключения бипера (порт `0xFE`,
+    /// бит 4) совпал с прогоном без хука.
+    pub fn set_cycle_clock(&mut self, cycle: u64) {
+        self.cycle_clock = cycle;
+    }
+
+    /// Переходы бипера текущего кадра (`такт CPU`, уровень) — для проверок
+    /// эквивалентности нативных хуков.
+    #[cfg(test)]
+    pub fn beeper_edges(&self) -> &[(u64, bool)] {
+        &self.beeper_edges
+    }
+
     /// Decode the bitmap and attributes into a 256x192 RGBA pixel buffer.
     pub fn render_rgba(&self, out: &mut [u32]) {
         for y in 0..192u16 {

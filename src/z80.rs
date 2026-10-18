@@ -103,7 +103,7 @@ impl Z80 {
     }
 
     #[inline]
-    fn inc8(&mut self, v: u8) -> u8 {
+    pub(crate) fn inc8(&mut self, v: u8) -> u8 {
         let r = v.wrapping_add(1);
         let c = self.f & CF;
         self.f = c
@@ -114,7 +114,7 @@ impl Z80 {
         r
     }
     #[inline]
-    fn dec8(&mut self, v: u8) -> u8 {
+    pub(crate) fn dec8(&mut self, v: u8) -> u8 {
         let r = v.wrapping_sub(1);
         let c = self.f & CF;
         self.f = c
@@ -160,10 +160,25 @@ impl Z80 {
         r
     }
     #[inline]
-    fn xor8(&mut self, a: u8, v: u8) -> u8 {
+    pub(crate) fn xor8(&mut self, a: u8, v: u8) -> u8 {
         let r = a ^ v;
         self.f = (r & (SF | XF | YF)) | if r == 0 { ZF } else { 0 } | if parity(r) { PF } else { 0 };
         r
+    }
+    /// `RLCA` — циклический сдвиг `A` влево. Флаги `S/Z/PV` сохраняются,
+    /// `H`/`N` сбрасываются, `C` — выдвинутый бит, `X/Y` — из `A`.
+    #[inline]
+    pub(crate) fn rlca(&mut self) {
+        let c = self.a >> 7;
+        self.a = (self.a << 1) | c;
+        self.f = (self.f & (SF | ZF | PF)) | (self.a & (XF | YF)) | if c != 0 { CF } else { 0 };
+    }
+    /// `RRA` — циклический сдвиг `A` вправо через флаг переноса.
+    #[inline]
+    pub(crate) fn rra(&mut self) {
+        let c = self.a & 1;
+        self.a = (self.a >> 1) | if self.f & CF != 0 { 0x80 } else { 0 };
+        self.f = (self.f & (SF | ZF | PF)) | (self.a & (XF | YF)) | if c != 0 { CF } else { 0 };
     }
     #[inline]
     pub(crate) fn add16(&mut self, a: u16, b: u16) -> u16 {
@@ -283,14 +298,14 @@ impl Z80 {
         r
     }
     #[inline]
-    fn srl(&mut self, v: u8) -> u8 {
+    pub(crate) fn srl(&mut self, v: u8) -> u8 {
         let c = v & 1;
         let r = v >> 1;
         self.f = (r & (SF | XF | YF)) | if r == 0 { ZF } else { 0 } | if c != 0 { CF } else { 0 } | if parity(r) { PF } else { 0 };
         r
     }
     #[inline]
-    fn bit(&mut self, n: u8, v: u8) {
+    pub(crate) fn bit(&mut self, n: u8, v: u8) {
         let bit = v & (1 << (n & 7));
         self.f = (self.f & CF) | HF
             | if bit == 0 { ZF | PF } else { 0 }
@@ -495,10 +510,10 @@ impl Z80 {
                 if i == 6 { let a = self.hl(); bus.write(a, n); self.cycles += 10; }
                 else { self.set_r(i, n); self.cycles += 7; }
             }
-            0x07 => { let c = self.a >> 7; self.a = (self.a << 1) | c; self.f = (self.f & (SF | ZF | PF)) | (self.a & (XF | YF)) | if c != 0 { CF } else { 0 }; self.cycles += 4; }
+            0x07 => { self.rlca(); self.cycles += 4; }
             0x0F => { let c = self.a & 1; self.a = (self.a >> 1) | (c << 7); self.f = (self.f & (SF | ZF | PF)) | (self.a & (XF | YF)) | if c != 0 { CF } else { 0 }; self.cycles += 4; }
             0x17 => { let c = self.a >> 7; self.a = (self.a << 1) | if self.f & CF != 0 { 1 } else { 0 }; self.f = (self.f & (SF | ZF | PF)) | (self.a & (XF | YF)) | if c != 0 { CF } else { 0 }; self.cycles += 4; }
-            0x1F => { let c = self.a & 1; self.a = (self.a >> 1) | if self.f & CF != 0 { 0x80 } else { 0 }; self.f = (self.f & (SF | ZF | PF)) | (self.a & (XF | YF)) | if c != 0 { CF } else { 0 }; self.cycles += 4; }
+            0x1F => { self.rra(); self.cycles += 4; }
             0x27 => { self.daa(); self.cycles += 4; }
             0x2F => { self.a = !self.a; self.f = (self.f & (SF | ZF | PF | CF)) | HF | NF | (self.a & (XF | YF)); self.cycles += 4; }
             0x37 => { self.f = (self.f & (SF | ZF | PF)) | (self.a & (XF | YF)) | CF; self.cycles += 4; }
