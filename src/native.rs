@@ -9,8 +9,8 @@
 //! настоящий код из образа `zx_bin/kladov.bin` на эмуляторе и сверяет
 //! результат с нативной реализацией.
 
-use crate::machine::{Hook, Spectrum};
-use crate::z80::{Z80, ZF, CF};
+use crate::machine::{Hook, Spectrum, ROM_SIZE};
+use crate::z80::{Z80, ZF, CF, HF, PF, SF, XF, YF};
 
 /// Установить все нативные замены (хуки) на машину.
 ///
@@ -29,6 +29,7 @@ pub fn install(m: &mut Spectrum, kladov: bool) {
     m.hooks.insert(0x7A59, smag_add_mem_hook);
     m.hooks.insert(0x7FE7, scr_adr_next_line_hook);
     m.hooks.insert(0x8445, scr_adr_next_char_line_hook);
+    m.hooks.insert(0xD546, scr_xor_col_down_hook);
 }
 
 /// Эмуляция обновления регистра `R` (Memory Refresh) за заменённые инструкции.
@@ -474,6 +475,89 @@ fn scr_adr_next_line_hook(cpu: &mut Z80, m: &mut Spectrum) -> u64 {
     42 + inner
 }
 
+/// Адрес самомодифицирующегося опкода `xor c` внутри `sub_D546`.
+const XOR_COL_OP: usize = 0xD548;
+/// Значение опкода `xor c` (режим XOR); игра пишет на это место только `00h`
+/// (`nop` — режим копирования) и `A9h` (`xor c` — режим XOR).
+const XOR_COL_XOR_OP: u8 = 0xA9;
+
+/// `scr_xor_col_down` (`sub_D546`): отрисовка вертикальной колонки из `B`
+/// байтов: `(HL+i*100h) ^= (DE+i)` (режим XOR) либо `(HL+i*100h) = (DE+i)`
+/// (режим копирования).
+///
+/// ```text
+/// loop: ld a,(de) ; ld c,(hl) ; xor c ; ld (hl),a ; inc h ; inc de
+///       djnz loop
+/// ret
+/// ```
+///
+/// Рутина **самоизменяется**: по адресу `0xD548` лежит опкод `xor c`,
+/// который игра переключает между `A9h` (XOR — двухпроходное рисование
+/// спрайтов, вторая проходка стирает первый) и `00h` (`nop` — обычное
+/// копирование). Значение читается из памяти в момент вызова. Других значений
+/// игра на это место не пишет.
+///
+/// `B = 0` означает 256 проходов (как у `djnz`). `inc h` двигает адрес вниз
+/// по колонке (только старший байт, `L` не меняется). Записи в адреса ниже
+/// `writable_from` (область ПЗУ) отбрасываются — так же поступает шина
+/// настоящего Spectrum. Возвращает итоговые `(A, C, HL, DE)`: `A` — последний
+/// вычисленный байт (пишется он или нет), `C` — содержимое экрана до записи
+/// в последнем проходе, `B = 0`.
+pub fn scr_xor_col_down(
+    mem: &mut [u8],
+    hl: u16,
+    de: u16,
+    b: u8,
+    xor_mode: bool,
+    writable_from: usize,
+) -> (u8, u8, u16, u16) {
+    let mut hl = hl;
+    let mut de = de;
+    let mut a = 0u8;
+    let mut c = 0u8;
+    let mut n = if b == 0 { 256u32 } else { b as u32 };
+    while n != 0 {
+        a = mem[de as usize];
+        c = mem[hl as usize];
+        if xor_mode {
+            a ^= c;
+        }
+        if hl as usize >= writable_from {
+            mem[hl as usize] = a;
+        }
+        hl = hl.wrapping_add(0x0100); // `inc h`: только старший байт, L не меняется
+        de = de.wrapping_add(1);
+        n -= 1;
+    }
+    (a, c, hl, de)
+}
+
+/// Нативная замена `sub_D546`. Итоговые флаги задаёт последний `inc h`
+/// (`SZ5.3` и `PV` переполнения от итогового `H`); `xor c` всегда обнуляет
+/// `C`, а в режиме копирования ни одна инструкция цикла флаги не трогает —
+/// `C` остаётся от входа в рутину.
+fn scr_xor_col_down_hook(cpu: &mut Z80, m: &mut Spectrum) -> u64 {
+    let n = if cpu.b == 0 { 256u64 } else { cpu.b as u64 };
+    let xor_mode = m.mem[XOR_COL_OP] == XOR_COL_XOR_OP;
+    let cf_in = cpu.f & CF;
+    let (a, c, hl, de) =
+        scr_xor_col_down(&mut m.mem, cpu.hl(), cpu.de(), cpu.b, xor_mode, ROM_SIZE);
+    cpu.a = a;
+    cpu.c = c;
+    cpu.b = 0;
+    cpu.h = (hl >> 8) as u8;
+    cpu.d = (de >> 8) as u8;
+    cpu.e = de as u8;
+    let h = (hl >> 8) as u8;
+    cpu.f = (h & (SF | XF | YF))
+        | if h == 0 { ZF } else { 0 }
+        | if h == 0x80 { PF } else { 0 }
+        | if h & 0x0F == 0 { HF } else { 0 } // полуперенос последнего `inc h`
+        | if xor_mode { 0 } else { cf_in };
+    bump_r(cpu, (7 * n + 1) as u32); // 7 инструкций на проход + `ret`
+    48 * n + 5 // 35 на проход + 13 (`djnz` взят) на все, кроме последнего, + 8 + 10
+}
+
 /// `sub_5DFB`: по коду символа в `A` выбирает базовый адрес шрифта.
 ///
 /// Возвращает значение `HL`: `0x3D00` для «печатных» символов (пробел, цифры
@@ -821,6 +905,94 @@ mod tests {
                     n.mem[addr as usize],
                     "sub_7A59: память по HL разошлась (old=0x{old:02X} a=0x{a:02X})"
                 );
+            }
+        }
+    }
+
+    /// `sub_D546` обязан совпасть с Z80 по всем проходам: все `B` (включая
+    /// 0 = 256 проходов, как у `djnz`), оба режима самоизменяющегося кода
+    /// (`0xD548`: `A9h` = XOR, `00h` = копирование), краевые адреса
+    /// (переносы `H` и `DE`), обе установки `C`-флага на входе. Сверяются
+    /// регистры, флаги, такты, `R` и вся память (кроме 2 байт стекового
+    /// маркера `run_routine` в 0xEFFE..0xEFFF, которых хук не пишет).
+    ///
+    /// Значения `L` в парах не задевают маркер стека (L≠0FEh,0FFh) и код
+    /// рутины (0xD546..0xD54E, L≠46h..4Eh) — иначе настоящий Z80 перезаписал
+    /// бы собственный стек или опкоды посреди цикла.
+    #[test]
+    fn scr_xor_col_down_matches_z80() {
+        let mut z = kladov();
+        let mut n = kladov();
+        install(&mut n, true);
+        // (HL, DE): обычные + краевые.
+        let pairs: &[(u16, u16)] = &[
+            (0x7000, 0x8000),
+            (0x707E, 0x8100),
+            (0x7FF7, 0x8FFF), // `inc h` со стыка страниц
+            (0x7123, 0x9ABC),
+            (0x7800, 0xFFFF), // перенос `DE` в 0000h
+            (0x77F0, 0x0000),
+            (0x7F80, 0x8080),
+            (0x7ABD, 0x8DEF),
+            (0x7600, 0x86FF),
+            (0x7456, 0xF0F0),
+            (0x7E00, 0x7EFF), // источник пересекается с колонкой назначения
+            (0x7900, 0x8901),
+        ];
+        for &xor_mode in [true, false].iter() {
+            let mode_byte = if xor_mode { XOR_COL_XOR_OP } else { 0x00 };
+            for &(hl, de) in pairs {
+                for b in 0u8..=255 {
+                    let seed = (b as usize).wrapping_mul(0x9E37)
+                        ^ (hl as usize)
+                        ^ ((de as usize) << 1)
+                        ^ ((mode_byte as usize) << 8);
+                    // Колонка назначения: все адреса с данным младшим байтом
+                    // (`inc h` меняет только старший), и 256 байт источника.
+                    let lo = (hl & 0xFF) as usize;
+                    for i in 0..256usize {
+                        let v = (i.wrapping_mul(31).wrapping_add(seed) & 0xFF) as u8;
+                        z.mem[(i << 8) | lo] = v;
+                        n.mem[(i << 8) | lo] = v;
+                        let s = (de as usize).wrapping_add(i) & 0xFFFF;
+                        z.mem[s] = v ^ 0x5A;
+                        n.mem[s] = v ^ 0x5A;
+                    }
+                    z.mem[XOR_COL_OP] = mode_byte;
+                    n.mem[XOR_COL_OP] = mode_byte;
+                    // 0xFF — C=1, 0xFE — C=0: в режиме копирования `C`-флаг
+                    // рутина не трогает и обязан сохранить входной.
+                    let f_in = if b & 1 == 0 { 0xFF } else { 0xFE };
+                    set(&mut z.cpu, 0x11, hl, de, f_in);
+                    set(&mut n.cpu, 0x11, hl, de, f_in);
+                    z.cpu.b = b;
+                    z.cpu.c = 0x22;
+                    n.cpu.b = b;
+                    n.cpu.c = 0x22;
+                    let zs = z80_sub(&mut z, 0xD546);
+                    let ns = hook_sub(&mut n, 0xD546);
+                    assert_eq!(
+                        zs, ns,
+                        "sub_D546 hl=0x{hl:04X} de=0x{de:04X} b=0x{b:02X} xor={xor_mode}"
+                    );
+                    // Вся память, кроме 2 байт маркера стека (0xEFFE..0xEFFF):
+                    // хук их не пишет, их пишет только run_routine у z.
+                    let diff = if z.mem[0..0xEFFE] != n.mem[0..0xEFFE] {
+                        (0..0xEFFE).find(|&i| z.mem[i] != n.mem[i])
+                    } else if z.mem[0xF000..] != n.mem[0xF000..] {
+                        (0xF000..0x1_0000).find(|&i| z.mem[i] != n.mem[i])
+                    } else {
+                        None
+                    };
+                    if let Some(i) = diff {
+                        panic!(
+                            "sub_D546: память разошлась по адресу 0x{i:04X} \
+                             (z=0x{:02X} n=0x{:02X}) hl=0x{hl:04X} de=0x{de:04X} \
+                             b=0x{b:02X} xor={xor_mode}",
+                            z.mem[i], n.mem[i]
+                        );
+                    }
+                }
             }
         }
     }
