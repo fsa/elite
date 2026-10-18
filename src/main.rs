@@ -426,7 +426,7 @@ fn run_headless(machine: &mut Spectrum, opts: &Options) {
                 .save
                 .clone()
                 .unwrap_or_else(default_save_name);
-            match native::commander_save(&machine, &path, save_layout(opts)) {
+            match native::commander_save(&mut *machine, &path, save_layout(opts)) {
                 Ok(()) => println!("Сохранено в {}", path),
                 Err(e) => eprintln!("Ошибка сохранения: {e}"),
             }
@@ -532,7 +532,7 @@ fn choose_save_path(opts: &Options, last: &str) -> Option<PathBuf> {
 }
 
 /// Сохранить блок командира; при успехе запомнить путь в `last`.
-fn do_save(machine: &Spectrum, opts: &Options, last: &mut String) {
+fn do_save(machine: &mut Spectrum, opts: &Options, last: &mut String) {
     let Some(path) = choose_save_path(opts, last) else {
         return;
     };
@@ -717,10 +717,10 @@ impl<'a> App<'a> {
         }
         match code {
             KeyCode::Escape => self.menu = !self.menu,
-            KeyCode::F5 => do_save(&self.machine, self.opts, &mut self.last_path),
+            KeyCode::F5 => do_save(&mut self.machine, self.opts, &mut self.last_path),
             KeyCode::F9 => do_load(&mut self.machine, self.opts, &mut self.last_path),
             KeyCode::Digit1 if self.menu => {
-                do_save(&self.machine, self.opts, &mut self.last_path);
+                do_save(&mut self.machine, self.opts, &mut self.last_path);
                 self.menu = false;
             }
             KeyCode::Digit2 if self.menu => {
@@ -782,7 +782,7 @@ impl<'a> App<'a> {
             self.machine.run_frame();
             if self.machine.save_requested {
                 self.machine.save_requested = false;
-                do_save(&self.machine, self.opts, &mut self.last_path);
+                do_save(&mut self.machine, self.opts, &mut self.last_path);
             }
             self.machine.render_audio(&mut self.audio_buf);
             if let Some(audio) = &self.audio {

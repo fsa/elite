@@ -44,7 +44,13 @@ pub struct SaveLayout {
     /// Родная `ResetPressedKeys` обнуляет четыре байта начиная отсюда:
     /// `ControlKey1`, `ControlKeyMove`, `ControlKey2`, `ControlKey3`.
     pub control_key1: u16,
-    /// Адрес блока данных командира (`PilotName`).
+    /// Адрес живого блока данных командира (`PilotName`) — из него берутся
+    /// данные для сохранения.
+    ///
+    /// У Кладова это `0xD054` (а не `0xD232`!): `InitGame` копирует тень
+    /// `0xD232`→`0xD054`, а `DemoModeOn` грузит демо-режим именно из
+    /// `PilotName` длиной `66h` — то есть рабочий блок пилота начинается
+    /// здесь. Тень (`aJameson_1`) игра при сохранении обновляет сама.
     pub pilot_name: u16,
     /// Длина блока командира. Кладова копирует 102 байта (`ld bc,66h` в
     /// `DemoModeOn`), оригинал сохраняет 104 (`ld ix,PilotName; ld de,68h` в
@@ -56,14 +62,29 @@ pub struct SaveLayout {
     /// у Кладова `loc_7394`. Игра заново проходит стартовую последовательность
     /// и оказывается пристыкованной на станции системы из загруженного сейва.
     pub restart_entry: u16,
-    /// Буфер, из которого `InitGame` восстанавливает пилота, и его длина.
+    /// Теневой буфер, из которого `InitGame` восстанавливает пилота, и его
+    /// длина.
     ///
     /// В оригинале `RestorePilotFromMemory` копирует `PilotDataSaved`→
-    /// `PilotName` (102 байта), поэтому при загрузке нужно обновить и его —
-    /// иначе загруженные данные затрёт копия из памяти. У Кладова `InitGame`
-    /// копирует в обратную сторону (`PilotName`→рабочий буфер), поэтому
-    /// отдельного теневого буфера нет.
+    /// `PilotName` (102 байта), у Кладова `InitGame` делает то же самое:
+    /// `21 32 D2 11 54 D0 01 5D 00 ED B0` = `ld hl,0xD232 / ld de,0xD054 /
+    /// ld bc,5Dh / ldir` — плюс ещё копирует 9 байт координат солнца
+    /// (`0xD28F`→`SunCrd`), то есть теневой буфер целиком занимает
+    /// `0xD232..0xD297` = 102 байта. Поэтому при загрузке нужно обновить и
+    /// его — иначе загруженные данные затрёт копия из тени (а тень
+    /// заполняется при сохранении, см. [`Self::pilot_name`]).
     pub pilot_shadow: Option<(u16, usize)>,
+    /// Адрес данных солнца для отрисовки (`SunCrd`, 9 байт).
+    ///
+    /// Родная `SaveGame` перед сохранением копирует их в поле
+    /// `PilotDataOfSun` живого блока (`ld hl,SunCrd / ld de,PilotDataOfSun /
+    /// ld bc,9 / ldir`), чтобы после загрузки солнце рисовалось по текущим
+    /// координатам. Хук подменяет `MenuSaveLoad` целиком, поэтому копирование
+    /// делает [`commander_save`]. Проверено по образам: у Кладова
+    /// `SunCrd`=0x7107 (в `InitGame`: `ld de,7107h`), у оригинала 0x7065
+    /// (`ld de,7065h`); поле `PilotDataOfSun` лежит на смещении 93 живого
+    /// блока в обеих версиях (`byte_A96D` = `PilotDataSaved`+93).
+    pub sun_crd: u16,
     /// Нативная реализация `MenuSaveLoad` для этой версии.
     hook: Hook,
 }
@@ -72,10 +93,11 @@ pub struct SaveLayout {
 pub const KLADOV_SAVE: SaveLayout = SaveLayout {
     menu_save_load: 0xD04E,
     control_key1: 0xFC08,
-    pilot_name: 0xD232,
+    pilot_name: 0xD054,
     commander_len: 0x66,
     restart_entry: 0x7394,
-    pilot_shadow: None,
+    pilot_shadow: Some((0xD232, 0x66)),
+    sun_crd: 0x7107,
     hook: menu_save_load_kladov_hook,
 };
 
@@ -87,6 +109,7 @@ pub const ELITE_SAVE: SaveLayout = SaveLayout {
     commander_len: 0x68,
     restart_entry: 0x71BE,
     pilot_shadow: Some((0xA910, 0x66)),
+    sun_crd: 0x7065,
     hook: menu_save_load_elite_hook,
 };
 
@@ -96,8 +119,31 @@ pub fn commander_block(m: &Spectrum, layout: SaveLayout) -> &[u8] {
     &m.mem[a..a + layout.commander_len]
 }
 
+/// Смещение поля `PilotDataOfSun` (9 байт координат солнца) внутри блока
+/// командира. Одинаково в обеих версиях: в оригинале это `byte_A96D` =
+/// `PilotDataSaved`+93, у Кладова `unk_D28F` = `aJameson_1`+93.
+const SUN_FIELD_OFF: usize = 93;
+
 /// Записать блок командира в файл `path`.
-pub fn commander_save(m: &Spectrum, path: &str, layout: SaveLayout) -> std::io::Result<()> {
+///
+/// Перед записью выполняется то же, что делает родная `SaveGame`: координаты
+/// солнца для отрисовки копируются в поле `PilotDataOfSun` блока командира
+/// (`ld hl,SunCrd / ld de,PilotDataOfSun / ld bc,9 / ldir`), и теневой буфер
+/// синхронизируется из живого блока (`ld hl,PilotName / ld de,PilotDataSaved /
+/// ld bc,102 / ldir`). Из тени `InitGame` восстанавливает пилота при
+/// перезапуске, поэтому без этой копии загрузка вернула бы устаревшие данные
+/// и солнце рисовалось бы не по тем координатам.
+pub fn commander_save(m: &mut Spectrum, path: &str, layout: SaveLayout) -> std::io::Result<()> {
+    let src = layout.pilot_name as usize;
+    let sun = layout.sun_crd as usize;
+    let sun_data = m.mem[sun..sun + 9].to_vec();
+    m.mem[src + SUN_FIELD_OFF..src + SUN_FIELD_OFF + 9].copy_from_slice(&sun_data);
+    if let Some((addr, len)) = layout.pilot_shadow {
+        let n = layout.commander_len.min(len);
+        let dst = addr as usize;
+        let data = m.mem[src..src + n].to_vec();
+        m.mem[dst..dst + n].copy_from_slice(&data);
+    }
     std::fs::write(path, commander_block(m, layout))
 }
 
@@ -577,10 +623,30 @@ mod tests {
             m.mem[a + 2] = b'S';
             m.mem[a + 3] = b'T';
             m.mem[a + n - 1] = 0x5A;
-            let expected: Vec<u8> = commander_block(&m, layout).to_vec();
+            let expected: Vec<u8> = {
+                let mut ex = m.mem[a..a + n].to_vec();
+                let sc = layout.sun_crd as usize;
+                ex[SUN_FIELD_OFF..SUN_FIELD_OFF + 9].copy_from_slice(&m.mem[sc..sc + 9]);
+                ex
+            };
             assert_eq!(expected.len(), n);
 
-            commander_save(&m, &path, layout).unwrap();
+            // Синхронизация тени при сохранении: `InitGame` восстанавливает
+            // пилота именно из неё, поэтому после сохранения она должна
+            // совпадать с живым блоком.
+            let shadow_a = layout.pilot_shadow.map(|(addr, _)| addr as usize);
+            commander_save(&mut m, &path, layout).unwrap();
+            if let Some(sa) = shadow_a {
+                let sn = layout.commander_len.min(layout.pilot_shadow.unwrap().1);
+                // После сохранения теневой буфер должен полностью совпадать с
+                // живым блоком (оригинал: SaveGame копирует PilotName→PilotDataSaved).
+                let live_now = &m.mem[a..a + sn];
+                assert_eq!(
+                    &m.mem[sa..sa + sn],
+                    live_now,
+                    "теневой буфер (0x{sa:04X}) не синхронизировался при сохранении"
+                );
+            }
             for b in &mut m.mem[a..a + n] {
                 *b = 0xAA;
             }
@@ -743,6 +809,134 @@ mod tests {
             );
 
             let _ = std::fs::remove_file(&path);
+        }
+    }
+
+    /// Регрессия на сохранение из «мёртвого» блока.
+    ///
+    /// У Кладова блок командира живёт в `PilotName` (0xD054), а `aJameson_1`
+    /// (0xD232) — тень, из которой `InitGame` восстанавливает пилота при
+    /// старте. Если читать при сохранении тень, на диск уходит стартовое
+    /// состояние «JAMESON», прогресс теряется, а после загрузки игра
+    /// рисует солнце по устаревшим координатам из хвоста тени. Проверяем:
+    /// сохранение берёт данные из живого блока, а загрузка возвращает их
+    /// обратно (в т.ч. хвост 93..101, который `InitGame` не переносит).
+    #[test]
+    fn save_load_uses_live_commander_block() {
+        let base = env!("CARGO_MANIFEST_DIR");
+        let dir = format!("{base}/tmp");
+        std::fs::create_dir_all(&dir).unwrap();
+
+        // `live` — настоящий живой блок пилота по данным дизассемблирования,
+        // независимый от того, что записано в раскладке: у Кладова это
+        // назначение `ldir` из тени в `InitGame` (`ld de,0xD054`) и `ld de,
+        // PilotName` в `DemoModeOn`; в оригинале — `ld de,PilotName` из
+        // `RestorePilotFromMemory` (копия `0xA910`→`0xA816`).
+        for (layout, live, ind_danger, mut m) in [
+            (KLADOV_SAVE, 0xD054usize, 0x7104u16, boot_kladov()),
+            (ELITE_SAVE, 0xA816usize, 0x7062u16, boot_elite()),
+        ] {
+            assert_eq!(
+                layout.pilot_name as usize, live,
+                "раскладка должна читать сохранение из живого блока"
+            );
+            install_save(&mut m, layout);
+            // Имитируем полёт до пристыковки.
+            for f in 0..150u64 {
+                m.release_all_keys();
+                if f >= 30 && f % 16 < 6 {
+                    m.set_key(7, 0, true);
+                }
+                m.run_frame();
+            }
+            let a = live;
+            const FREE_CARGO: usize = 40; // PilotFreeCargo
+            const SUN: std::ops::Range<usize> = 93..102; // PilotDataOfSun
+
+            // «Игрок» изменил трюм в живом блоке, а солнце на небе сдвинулось —
+            // игра хранит его координаты в `SunCrd` и кладёт в блок только при
+            // сохранении.
+            let sun = [0xF2u8, 0x88, 0x05, 0x27, 0x08, 0x01, 0x2A, 0x4D, 0x8F];
+            m.mem[a + FREE_CARGO] = 0x20;
+            let sc = layout.sun_crd as usize;
+            m.mem[sc..sc + 9].copy_from_slice(&sun);
+
+            let path = format!("{dir}/live_block_{:04X}.zxelite", layout.pilot_name);
+            commander_save(&mut m, &path, layout).unwrap();
+            let file = std::fs::read(&path).unwrap();
+            assert_eq!(
+                file[FREE_CARGO], 0x20,
+                "0x{:04X}: сохранение не взяло трюм из живого блока (0x{:02X})",
+                layout.pilot_name, file[FREE_CARGO]
+            );
+            assert_eq!(
+                &file[SUN.start..SUN.end], &sun,
+                "0x{:04X}: сохранение не перенесло SunCrd в PilotDataOfSun",
+                layout.pilot_name
+            );
+
+            // Загрузка и перезапуск: игра проходит стартовую последовательность
+            // и пристыковывается, вернув загруженные данные.
+            commander_load(&mut m, &path, layout).unwrap();
+            restart_after_load(&mut m, layout);
+            for f in 0..700u64 {
+                m.release_all_keys();
+                if f >= 30 && f % 16 < 6 {
+                    m.set_key(7, 0, true);
+                }
+                m.run_frame();
+            }
+            let ind_danger = ind_danger as usize;
+            assert_eq!(
+                m.mem[ind_danger], 0,
+                "после загрузки корабль не пристыкован (IndDanger 0x{ind_danger:04X})"
+            );
+            assert_eq!(
+                m.mem[a + FREE_CARGO], 0x20,
+                "0x{:04X}: трюм не вернулся после загрузки (0x{:02X})",
+                layout.pilot_name, m.mem[a + FREE_CARGO]
+            );
+            assert_eq!(
+                &m.mem[a + SUN.start..a + SUN.end], &sun,
+                "0x{:04X}: координаты солнца не вернулись после загрузки",
+                layout.pilot_name
+            );
+            // Главное для отрисовки: `InitGame` восстановила `SunCrd` из тени,
+            // иначе солнце рисуется по старым координатам.
+            let sc = layout.sun_crd as usize;
+            assert_eq!(
+                &m.mem[sc..sc + 9], &sun,
+                "0x{:04X}: SunCrd (0x{:04X}) не восстановилась после загрузки",
+                layout.pilot_name, layout.sun_crd
+            );
+
+            let _ = std::fs::remove_file(&path);
+        }
+    }
+
+
+
+    /// ВРЕМЕННЫЙ: где лежат SunCrd и поле солнца в живом блоке.
+    #[test]
+    fn probe_sun_fields() {
+        for (tag, layout, sun, mut m) in [
+            ("kladov", KLADOV_SAVE, 0x7107u16, boot_kladov()),
+            ("elite", ELITE_SAVE, 0x7065u16, boot_elite()),
+        ] {
+            install_save(&mut m, layout);
+            for f in 0..150u64 {
+                m.release_all_keys();
+                if f >= 30 && f % 16 < 6 { m.set_key(7, 0, true); }
+                m.run_frame();
+            }
+            let live = &m.mem[layout.pilot_name as usize..layout.pilot_name as usize + layout.commander_len];
+            let pat = [0xF0u8, 0x52, 0x05, 0x33, 0x98, 0x07, 0xB6, 0xFA, 0x8B];
+            let off = live.windows(9).position(|w| w == pat);
+            println!("{tag}: SunCrd(0x{sun:04X})={} ; паттерн PilotDataOfSun в живом блоке на смещении {off:?}",
+                m.mem[sun as usize..sun as usize + 9].iter().map(|b| format!("{b:02X}")).collect::<String>());
+            println!("{tag}: живой блок[93..102]={} ; тень[93..102]={}",
+                live[93..102].iter().map(|b| format!("{b:02X}")).collect::<String>(),
+                m.mem[layout.pilot_shadow.unwrap().0 as usize + 93..layout.pilot_shadow.unwrap().0 as usize + 102].iter().map(|b| format!("{b:02X}")).collect::<String>());
         }
     }
 }
