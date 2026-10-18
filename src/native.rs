@@ -41,6 +41,9 @@ pub fn install(m: &mut Spectrum, kladov: bool) {
     install_hook(m, 0x9579, sfx_update_hook, SFX_MAX_STEP);
     // Опрос клавиатуры из обработчика прерывания — раз в кадр, всё влезает.
     install_hook(m, 0xFD69, scan_keys_hook, SCAN_KEYS_MAX);
+    // Печать символа/токена: нативно — просмотр таблицы токенов, остальное
+    // отдаётся Z80 (Yield). Верхняя оценка — самый длинный поиск токена.
+    install_hook(m, 0xD425, print_message1_a_hook, PRINT_MSG1_MAX);
 }
 
 /// Регистрирует хук вместе с верхней оценкой его тактов (см. `hook_max`).
@@ -313,6 +316,121 @@ fn font_base_steps(a: u8) -> u32 {
     }
 }
 
+/// Верхняя оценка тактов `print_message1_a_hook`: самый долгий путь — поиск
+/// токена с индексом `0x91` (таблица `(word_F11A)` = `0xF11E`: 939 байт,
+/// 145 проходов `cpir`) = 39 897 тактов. Оценка проверена перебором всех 256
+/// значений `A` по фактической таблице образа; запас — на случай правок.
+const PRINT_MSG1_MAX: u64 = 41_000;
+
+/// Нативная замена `PrintMessage1_A` (`0xD425`) — диспетчер печати символа и
+/// поиск строки токена в таблице `(word_F11A)`.
+///
+/// Рутина рекурсивна: `A` — код символа/токена. Коды `< 0x0E` — управляющие
+/// (обработчик в `0xD7E2`), `0x0E..0x1F` и `>= 0xA0` — индексы токенов,
+/// `0x20..0x5F` — обычные знаки (рисует `sub_D499`), `0x60..0x7F` — тоже
+/// токены, `0x80..0x9F` — двухбайтовые диграфы (`0xD59C`). Строка токена
+/// печатается посимвольно: `0xD454` читает байт, и пока он не ноль, рекурсивно
+/// вызывает эту же рутину.
+///
+/// Здесь переносится только «горячая» часть — просмотр таблицы токенов
+/// (`0xD443..0xD453`, `cpir` по строкам с нулевым терм-байтом), доводящая `HL`
+/// до начала нужной строки. Все прочие ветви отдаются Z80 через `hook_yield`:
+/// посимвольный вывод не дублируется (иначе управляющие коды внутри строк
+/// потребовали бы восстанавливать стек рекурсии), а `sub_D499`/диграфы/
+/// обработчики управляющих кодов оставлены на Z80 — их стековые «следы»
+/// (стек игры лежит в экранной памяти, `SP=0x4116`) и зависимости слишком
+/// ветвисты. Такты и `R` для пропущенных инструкций заряжаются вручную.
+fn print_message1_a_hook(cpu: &mut Z80, m: &mut Spectrum) -> u64 {
+    let a = cpu.a;
+    // Диспетчер `0xD425..0xD442`. Для терминальных ветвей заряжаем такты
+    // инструкций до цели и отдаём управление; для токенов идём дальше.
+    if a < 0x0E {
+        // `cp 0Eh` (7) + взятый `jp c,0xD7E2` (10).
+        bump_r(cpu, 2);
+        cpu.pc = 0xD7E2;
+        m.hook_yield = true;
+        return 17;
+    }
+    if a < 0x20 {
+        // `cp 0Eh` (7) + невзятый `jp c` (10) + `cp 20h` (7) + взятый
+        // `jp c,0xD441` (10) + `add a,72h` (7).
+        cpu.a = cpu.add8(a, 0x72, 0);
+        token_scan(cpu, m, 41, 5)
+    } else if a < 0x60 {
+        // ... + `cp 60h` (7) + взятый `jp c,0xD499` (10).
+        bump_r(cpu, 6);
+        cpu.pc = 0xD499;
+        m.hook_yield = true;
+        51
+    } else if a < 0x80 {
+        // ... + `cp 80h` (7) + взятый `jr c,0xD443` (12).
+        token_scan(cpu, m, 70, 8)
+    } else if a < 0xA0 {
+        // ... + невзятый `jr c` (7) + `cp 0A0h` (7) + взятый `jp c,0xD59C` (10).
+        bump_r(cpu, 10);
+        cpu.pc = 0xD59C;
+        m.hook_yield = true;
+        82
+    } else {
+        // ... + невзятый `jp c` (10) + `sub 0A0h` (7) + `jr 0xD443` (12).
+        cpu.a = cpu.sub8(a, 0xA0, 0);
+        token_scan(cpu, m, 101, 12)
+    }
+}
+
+/// Хвост `PrintMessage1_A` с `0xD443`: `ld hl,(word_F11A)` (16) + `ld d,a` (4)
+/// + `inc d` (4), затем цикл `dec d / jp z,0xD454 / ld bc,0FFFFh / xor a /
+/// cpir / jr 0xD448`, отыскивающий `A`-ю по счёту строку токена. `pre_cycles`/
+/// `pre_steps` — такты и число инструкций диспетчера до этой точки.
+///
+/// Такты идут по правилам этого эмулятора: каждая итерация `cpir` — отдельный
+/// `step` (её `PC=0xD450` повторяется), повтор стоит `16+21`, завершающая —
+/// `16+16`. Хук доводит `HL` до строки и отдаёт управление Z80 на `0xD454`.
+fn token_scan(cpu: &mut Z80, m: &mut Spectrum, pre_cycles: u64, pre_steps: u32) -> u64 {
+    let mut cycles = pre_cycles + 16 + 4 + 4;
+    let mut steps = pre_steps + 3;
+    let mut hl = m.mem[0xF11A] as u16 | ((m.mem[0xF11B] as u16) << 8);
+    let mut bc_final = cpu.bc(); // при нулевом индексе `BC` не трогается
+    let mut d = cpu.a.wrapping_add(1);
+    loop {
+        d = d.wrapping_sub(1); // `dec d`
+        cycles += 4;
+        steps += 1;
+        cycles += 10; // `jp z,0xD454` (10 тактов независимо от исхода)
+        steps += 1;
+        if d == 0 {
+            break;
+        }
+        cycles += 10 + 4; // `ld bc,0FFFFh` + `xor a`
+        steps += 2;
+        // `cpir`: ищем байт `0` от `HL`, `BC` — счётчик.
+        let mut bc = 0xFFFFu32;
+        loop {
+            let byte = m.mem[hl as usize];
+            hl = hl.wrapping_add(1);
+            bc -= 1;
+            steps += 1;
+            if byte == 0 || bc == 0 {
+                cycles += 16 + 16; // завершающая итерация
+                break;
+            }
+            cycles += 16 + 21; // повтор
+        }
+        bc_final = bc as u16;
+        cycles += 12; // `jr 0xD448`
+        steps += 1;
+    }
+    bump_r(cpu, steps);
+    cpu.b = (bc_final >> 8) as u8;
+    cpu.c = bc_final as u8;
+    cpu.d = 0;
+    cpu.h = (hl >> 8) as u8;
+    cpu.l = hl as u8;
+    cpu.pc = 0xD454;
+    m.hook_yield = true;
+    cycles
+}
+
 /// Счётчик обращений к хуку (только для тестов).
 #[cfg(test)]
 static FONT_BASE_CALLS: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
@@ -332,10 +450,16 @@ fn eb3e_hook(cpu: &mut Z80, _m: &mut Spectrum) -> u64 {
 
 /// `sub_D3CE`: `push hl; sbc hl,de; pop hl; ret` — выставляет флаги по
 /// `HL - DE - C` (16-битное вычитание с заёмом), но `HL` оставляет прежним.
-fn d3ce_hook(cpu: &mut Z80, _m: &mut Spectrum) -> u64 {
+fn d3ce_hook(cpu: &mut Z80, m: &mut Spectrum) -> u64 {
     let hl = cpu.hl();
     let de = cpu.de();
     cpu.sbc16(hl, de);
+    // `push hl` кладёт HL под стек, `pop hl` читает его назад (SP не меняется),
+    // поэтому в памяти остаётся след из двух байт HL. Стек игры живёт в
+    // экранной памяти, так что след виден и должен совпадать с Z80.
+    let sp = cpu.sp;
+    m.mem[sp.wrapping_sub(1) as usize] = (hl >> 8) as u8;
+    m.mem[sp.wrapping_sub(2) as usize] = hl as u8;
     bump_r(cpu, 4); // push hl; sbc hl,de; pop hl; ret
     46 // push hl(11) + sbc hl,de(15) + pop hl(10) + ret(10)
 }
@@ -2942,6 +3066,124 @@ mod tests {
                      (z=0x{:02X} n=0x{:02X}) budget={budget}",
                     z.mem[i], n.mem[i]
                 );
+            }
+        }
+    }
+
+    /// Прогон рутины по адресу-маркеру `0x1234`; при `dispatch` задействован
+    /// мини-диспетчер, повторяющий `Spectrum::run_frame` (такты хука
+    /// прибавляются, `RET` делается только если хук не отдал управление).
+    /// Нужен там, где нативный хук уходит в `Yield` и рутину доигрывает Z80.
+    fn run_until_ret(m: &mut Spectrum, addr: u16, sp: u16, dispatch: bool) {
+        const RET: u16 = 0x1234;
+        m.frame_target = u64::MAX;
+        m.cpu.sp = sp;
+        m.cpu.pc = addr;
+        let [lo, hi] = RET.to_le_bytes();
+        m.mem[sp as usize] = lo;
+        m.mem[sp as usize + 1] = hi;
+        let mut cpu = std::mem::take(&mut m.cpu);
+        let mut guard = 0u32;
+        while cpu.pc != RET {
+            assert!(guard < 2_000_000, "рутина не вернулась (guard={guard})");
+            guard += 1;
+            if dispatch {
+                let pc = cpu.pc;
+                if let Some(hook) = m.hooks.get(&pc).copied() {
+                    let fits = m
+                        .hook_max
+                        .get(&pc)
+                        .copied()
+                        .map_or(true, |max| cpu.cycles.saturating_add(max) <= m.frame_target);
+                    if fits {
+                        m.hook_yield = false;
+                        let c = hook(&mut cpu, m);
+                        cpu.cycles += c;
+                        if m.hook_yield {
+                            continue;
+                        }
+                        let lo = m.mem[cpu.sp as usize] as u16;
+                        let hi = m.mem[cpu.sp.wrapping_add(1) as usize] as u16;
+                        cpu.sp = cpu.sp.wrapping_add(2);
+                        cpu.pc = lo | (hi << 8);
+                        continue;
+                    }
+                }
+            }
+            cpu.step(m);
+        }
+        m.cpu = cpu;
+    }
+
+    /// `PrintMessage1_A` (`0xD425`) обязан совпасть с Z80 на всех входах `A`:
+    /// диспетчер, поиск строки токена (`cpir` по таблице) и `Yield` на печать
+    /// (`0xD499`), диграфы (`0xD59C`) и управляющие коды (`0xD7E2`).
+    ///
+    /// Таблица токенов подменена детерминированной в `0x9000` (201 строка
+    /// только из печатных символов), чтобы не тянуть зависимости реальных
+    /// строк; сама печать, диграфы и обработчики управляющих кодов остаются
+    /// на Z80 в обеих версиях и должны дать тот же результат. Сверяются все
+    /// регистры, флаги, `R`, такты, `PC`/`SP` и вся память.
+    #[test]
+    fn print_message1_matches_z80() {
+        let mut z = kladov();
+        let mut n = kladov();
+        install(&mut n, true);
+        // Детерминированная таблица токенов: 201 строка печатных глифов.
+        const TBL: u16 = 0x9000;
+        let mut p = TBL as usize;
+        for i in 0..201usize {
+            let ch = b'A' + (i % 26) as u8;
+            for _ in 0..(1 + i % 4) {
+                z.mem[p] = ch;
+                n.mem[p] = ch;
+                p += 1;
+            }
+            z.mem[p] = 0;
+            n.mem[p] = 0;
+            p += 1;
+        }
+        for m in [&mut z, &mut n] {
+            let [lo, hi] = TBL.to_le_bytes();
+            m.mem[0xF11A] = lo;
+            m.mem[0xF11B] = hi;
+        }
+        for &sp in &[0x4116u16, 0x411E, 0xEFFE] {
+            for code in 0u16..=255 {
+                let a = code as u8;
+                for m in [&mut z, &mut n] {
+                    set(&mut m.cpu, a, 0x1234, 0x5678, 0x00);
+                    m.cpu.b = 0x11;
+                    m.cpu.c = 0x22;
+                    m.cpu.ix = 0x629B;
+                    m.cpu.iy = 0x6159;
+                    m.cpu.r = 0x3E;
+                    m.cpu.cycles = 0;
+                }
+                run_until_ret(&mut z, 0xD425, sp, false);
+                run_until_ret(&mut n, 0xD425, sp, true);
+                assert_eq!(
+                    snap(&z.cpu),
+                    snap(&n.cpu),
+                    "PrintMessage1_A a=0x{a:02X} sp=0x{sp:04X}: регистры"
+                );
+                assert_eq!(z.cpu.pc, n.cpu.pc, "a=0x{a:02X} sp=0x{sp:04X}: PC");
+                assert_eq!(z.cpu.sp, n.cpu.sp, "a=0x{a:02X} sp=0x{sp:04X}: SP");
+                if let Some(i) = (0..0x1_0000usize).find(|&i| z.mem[i] != n.mem[i]) {
+                    let lo = i & !0x1F;
+                    let dump = |mm: &Spectrum| {
+                        (lo..lo + 32)
+                            .map(|k| format!("{:02X}", mm.mem[k]))
+                            .collect::<Vec<_>>()
+                            .join(" ")
+                    };
+                    panic!(
+                        "PrintMessage1_A a=0x{a:02X} sp=0x{sp:04X}: память разошлась \
+                         по адресу 0x{i:04X}: z={} | n={}",
+                        dump(&z),
+                        dump(&n)
+                    );
+                }
             }
         }
     }
