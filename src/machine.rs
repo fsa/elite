@@ -31,9 +31,15 @@ pub struct Spectrum {
     pub frames: u64,
     pub watch: Option<(u16, u16)>,
     pub counts: Vec<(u16, u64)>,
+    /// Гистограмма исполненных PC (`ELITE_PROFILE`): пуста — выключена.
+    pub profile: Vec<u32>,
+    /// Сколько верхних строк гистограммы печатать.
+    pub profile_top: usize,
     pub pc_for_write: u16,
     pub wwatch: Option<(u16, u16)>,
     pub wwatch_hist: std::collections::BTreeMap<u16, u64>,
+    pub wtrace: Option<(u16, u16)>,
+    pub sp_for_write: u16,
     pub spat: std::collections::BTreeMap<u16, u64>,
     pub dump_at: Vec<u16>,
     /// Частота дискретизации синтезируемого звука (Гц).
@@ -48,6 +54,22 @@ pub struct Spectrum {
     cycle_clock: u64,
     /// Нативные замены подпрограмм: `PC` → реализация на Rust.
     pub hooks: std::collections::BTreeMap<u16, Hook>,
+    /// Верхняя оценка тактов, которые хук добавит до того, как вернёт
+    /// управление (или отдаст его через [`Spectrum::hook_yield`]). Хук **не
+    /// запускается**, если эта оценка не укладывается в остаток кадра: иначе
+    /// кадровая граница попадёт внутрь рутины и её состояние разойдётся с
+    /// прогоном без хука (прерывание сработает в другом месте). В этом случае
+    /// рутина исполняется обычным Z80. Нет записи — ограничения нет.
+    pub hook_max: std::collections::BTreeMap<u16, u64>,
+    /// Хук выставил флаг, отдав управление на середине рутины (см.
+    /// [`Hook`]): сам `RET` машина тогда не выполняет, а `PC`/`SP` уже
+    /// подготовлены хуком — так длинная рутина, не влезающая в кадр,
+    /// продолжается обычным Z80 и прерывается ровно там же, где без хука.
+    pub hook_yield: bool,
+    /// Такт, до которого идёт текущий кадр (`frame_start + CYCLES_PER_FRAME`).
+    /// `u64::MAX` означает «без ограничения» (используется в тестах, где хук
+    /// должен отработать рутину целиком, не отдавая управление).
+    pub frame_target: u64,
     /// Игра запросила сохранение (перехвачен `MenuSaveLoad`). Обрабатывает
     /// главный цикл: показывает диалог выбора файла и записывает блок командира.
     pub save_requested: bool,
@@ -75,9 +97,13 @@ impl Spectrum {
             frames: 0,
             watch: None,
             counts: Vec::new(),
+            profile: Vec::new(),
+            profile_top: 40,
             pc_for_write: 0,
             wwatch: None,
             wwatch_hist: std::collections::BTreeMap::new(),
+            wtrace: None,
+            sp_for_write: 0,
             spat: std::collections::BTreeMap::new(),
             dump_at: Vec::new(),
             audio_rate: crate::audio::SAMPLE_RATE,
@@ -86,6 +112,9 @@ impl Spectrum {
             audio_cycle_base: 0,
             cycle_clock: 0,
             hooks: std::collections::BTreeMap::new(),
+            hook_max: std::collections::BTreeMap::new(),
+            hook_yield: false,
+            frame_target: u64::MAX,
             save_requested: false,
         }
     }
@@ -130,6 +159,7 @@ impl Spectrum {
     pub fn run_frame(&mut self) {
         let target = self.frame_start + CYCLES_PER_FRAME;
         let mut cpu = std::mem::take(&mut self.cpu);
+        self.frame_target = target;
         self.beeper_edges.clear();
         self.beeper_frame_start = self.beeper;
         self.audio_cycle_base = self.frame_start;
@@ -138,15 +168,34 @@ impl Spectrum {
         while cpu.cycles < target {
             let pc = cpu.pc;
             self.pc_for_write = pc;
+            if self.wtrace.is_some() {
+                self.sp_for_write = cpu.sp;
+            }
             if let Some(hook) = self.hooks.get(&pc).copied() {
-                let cycles = hook(&mut cpu, self);
-                let lo = self.mem[cpu.sp as usize] as u16;
-                let hi = self.mem[cpu.sp.wrapping_add(1) as usize] as u16;
-                cpu.sp = cpu.sp.wrapping_add(2);
-                cpu.pc = lo | (hi << 8);
-                cpu.cycles += cycles;
-                self.cycle_clock = cpu.cycles;
-                continue;
+                // Запускаем хук только если его верхняя оценка тактов
+                // укладывается в остаток кадра. Иначе исполняем рутину на Z80:
+                // так кадровая граница попадает туда же, где без хука.
+                let fits = self
+                    .hook_max
+                    .get(&pc)
+                    .copied()
+                    .map_or(true, |max| cpu.cycles.saturating_add(max) <= target);
+                if fits {
+                    self.hook_yield = false;
+                    let cycles = hook(&mut cpu, self);
+                    cpu.cycles += cycles;
+                    self.cycle_clock = cpu.cycles;
+                    if self.hook_yield {
+                        // Хук вернул управление на середине рутины: `RET` не
+                        // делаем, `PC`/`SP` уже выставлены хуком.
+                        continue;
+                    }
+                    let lo = self.mem[cpu.sp as usize] as u16;
+                    let hi = self.mem[cpu.sp.wrapping_add(1) as usize] as u16;
+                    cpu.sp = cpu.sp.wrapping_add(2);
+                    cpu.pc = lo | (hi << 8);
+                    continue;
+                }
             }
             if !self.dump_at.is_empty() && self.dump_at.contains(&pc) {
                 println!(
@@ -179,6 +228,9 @@ impl Spectrum {
                         c.1 += 1;
                     }
                 }
+            }
+            if !self.profile.is_empty() {
+                self.profile[pc as usize] += 1;
             }
             if let Some((lo, hi)) = self.watch {
                 if pc >= lo && pc <= hi {
@@ -284,6 +336,14 @@ impl Bus for Spectrum {
         if let Some((lo, hi)) = self.wwatch {
             if addr >= lo && addr <= hi {
                 *self.wwatch_hist.entry(self.pc_for_write).or_insert(0) += 1;
+            }
+        }
+        if let Some((lo, hi)) = self.wtrace {
+            if addr >= lo && addr <= hi {
+                eprintln!(
+                    "W 0x{addr:04X} <- 0x{val:02X} pc=0x{:04X} sp=0x{:04X}",
+                    self.pc_for_write, self.sp_for_write
+                );
             }
         }
         if addr >= ROM_SIZE as u16 {

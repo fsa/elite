@@ -252,6 +252,14 @@ fn main() {
         }
     }
 
+    if let Ok(w) = env::var("ELITE_WTRACE") {
+        if let Some((a, b)) = w.split_once('-') {
+            let lo = u16::from_str_radix(a.trim_start_matches("0x"), 16).unwrap_or(0);
+            let hi = u16::from_str_radix(b.trim_start_matches("0x"), 16).unwrap_or(0xFFFF);
+            machine.wtrace = Some((lo, hi));
+        }
+    }
+
     if let Ok(list) = env::var("ELITE_AT") {
         for part in list.split(',') {
             if let Ok(a) = u16::from_str_radix(part.trim().trim_start_matches("0x"), 16) {
@@ -282,6 +290,13 @@ fn main() {
                 machine.counts.push((a, 0));
             }
         }
+    }
+
+    // ELITE_PROFILE[=N] — гистограмма всех исполненных PC, печатает топ-N
+    // (по умолчанию 40) после headless-прогона. Ищем горячие рутины для M5.
+    if let Ok(v) = env::var("ELITE_PROFILE") {
+        machine.profile = vec![0u32; 0x1_0000];
+        machine.profile_top = v.parse().unwrap_or(40).clamp(1, 512);
     }
 
     if opts.headless {
@@ -459,6 +474,23 @@ fn run_headless(machine: &mut Spectrum, opts: &Options) {
     for (a, n) in &machine.counts {
         println!("  count pc=0x{:04X} = {}", a, n);
     }
+    if !machine.profile.is_empty() {
+        let mut top: Vec<(u32, usize)> = machine
+            .profile
+            .iter()
+            .enumerate()
+            .filter(|&(_, &n)| n != 0)
+            .map(|(a, &n)| (n, a))
+            .collect();
+        top.sort_unstable_by(|x, y| y.0.cmp(&x.0).then(x.1.cmp(&y.1)));
+        println!(
+            "profile: топ-{} адресов по числу исполненных инструкций:",
+            machine.profile_top
+        );
+        for (n, a) in top.iter().take(machine.profile_top) {
+            println!("  0x{a:04X} {n}");
+        }
+    }
     for (a, n) in &machine.wwatch_hist {
         println!("  write-from pc=0x{:04X} = {}", a, n);
     }
@@ -488,7 +520,8 @@ fn run_headless(machine: &mut Spectrum, opts: &Options) {
         let _ = fs::write(format!("{dir}/buf.bin"), &machine.mem[0xC000..0xD000]);
         let _ = fs::write(format!("{dir}/buf800.bin"), &machine.mem[0xC800..0xD800]);
         let _ = fs::write(format!("{dir}/font.bin"), &machine.mem[0x5D70..0x5D70 + 0x2D8]);
-        println!("wrote {dir}/screen.bin buf.bin buf800.bin font.bin");
+        let _ = fs::write(format!("{dir}/mem.bin"), &machine.mem);
+        println!("wrote {dir}/screen.bin buf.bin buf800.bin font.bin mem.bin");
     }
     if let (Some(path), Some(samples)) = (&opts.wav, &wav_samples) {
         write_wav(path, samples, audio::SAMPLE_RATE);

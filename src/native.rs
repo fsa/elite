@@ -21,15 +21,24 @@ pub fn install(m: &mut Spectrum, kladov: bool) {
     if !kladov {
         return;
     }
-    m.hooks.insert(0x5DFB, font_base_hook);
-    m.hooks.insert(0xEB3E, eb3e_hook);
-    m.hooks.insert(0xD3CE, d3ce_hook);
-    m.hooks.insert(0xAB0B, mult_a_hib_c_hook);
-    m.hooks.insert(0xE621, pix_crd_2_scr_adr_hook);
-    m.hooks.insert(0x7A59, smag_add_mem_hook);
-    m.hooks.insert(0x7FE7, scr_adr_next_line_hook);
-    m.hooks.insert(0x8445, scr_adr_next_char_line_hook);
-    m.hooks.insert(0xD546, scr_xor_col_down_hook);
+    install_hook(m, 0x5DFB, font_base_hook, 120);
+    install_hook(m, 0xEB3E, eb3e_hook, 32);
+    install_hook(m, 0xD3CE, d3ce_hook, 46);
+    install_hook(m, 0xAB0B, mult_a_hib_c_hook, 86);
+    install_hook(m, 0xE621, pix_crd_2_scr_adr_hook, 120);
+    install_hook(m, 0x7A59, smag_add_mem_hook, 148);
+    install_hook(m, 0x7FE7, scr_adr_next_line_hook, 87);
+    install_hook(m, 0x8445, scr_adr_next_char_line_hook, 45);
+    install_hook(m, 0xD546, scr_xor_col_down_hook, 48 * 256 + 5);
+    // Копия длиннее кадра, поэтому хук внутри себя отдаёт управление Z80
+    // (Yield) на границе кадра; верхняя оценка — одна итерация цикла.
+    install_hook(m, 0x7FCD, scr_copy_alt_lines_hook, COPY_ALT_MAX_ITER);
+}
+
+/// Регистрирует хук вместе с верхней оценкой его тактов (см. `hook_max`).
+fn install_hook(m: &mut Spectrum, addr: u16, run: Hook, max_cycles: u64) {
+    m.hooks.insert(addr, run);
+    m.hook_max.insert(addr, max_cycles);
 }
 
 /// Эмуляция обновления регистра `R` (Memory Refresh) за заменённые инструкции.
@@ -459,7 +468,10 @@ fn scr_adr_next_char_line_hook(cpu: &mut Z80, _m: &mut Spectrum) -> u64 {
 /// ```text
 /// inc h ; ld a,h ; and 7 ; call z, compDownScrAdr_HL ; ret
 /// ```
-fn scr_adr_next_line_hook(cpu: &mut Z80, m: &mut Spectrum) -> u64 {
+///
+/// Это регистровый примитив: им пользуется и хук адреса `0x7FE7`, и хук
+/// `0x7FCD`, который сам ведёт резиду стека в нужные слоты.
+fn scr_adr_next_line_advance(cpu: &mut Z80, m: &mut Spectrum) -> u64 {
     let h = cpu.h.wrapping_add(1);
     cpu.h = h;
     let a = cpu.and8(h, 7);
@@ -473,6 +485,23 @@ fn scr_adr_next_line_hook(cpu: &mut Z80, m: &mut Spectrum) -> u64 {
     let inner = scr_adr_next_char_line_hook(cpu, m);
     // 4+4+7+17 (вход в ветку) + 10 (финальный ret)
     42 + inner
+}
+
+/// Хук адреса `0x7FE7`: примитив `scr_adr_next_line_advance` плюс резида
+/// стека от `call z, compDownScrAdr_HL` — по [SP-2] ложится адрес возврата
+/// 7FEEh, как у настоящего `call`. В игре стек живёт в экранной памяти
+/// (SP=4116h..411Eh), и этот байт виден на экране, поэтому его нужно
+/// воспроизводить. Хук работает и для обычного `call 0x7FE7h`, и для
+/// jp-режима, который игра включает самомодификацией (см. `0xDA2F`).
+fn scr_adr_next_line_hook(cpu: &mut Z80, m: &mut Spectrum) -> u64 {
+    let taken = cpu.h.wrapping_add(1) & 7 == 0;
+    let cycles = scr_adr_next_line_advance(cpu, m);
+    if taken {
+        let sp = cpu.sp;
+        stack_write(m, sp.wrapping_sub(2), 0xEE);
+        stack_write(m, sp.wrapping_sub(1), 0x7F);
+    }
+    cycles
 }
 
 /// Адрес самомодифицирующегося опкода `xor c` внутри `sub_D546`.
@@ -558,6 +587,171 @@ fn scr_xor_col_down_hook(cpu: &mut Z80, m: &mut Spectrum) -> u64 {
     48 * n + 5 // 35 на проход + 13 (`djnz` взят) на все, кроме последнего, + 8 + 10
 }
 
+/// Число строк копирования в `scr_copy_alt_lines` (`ld b,3Ch`).
+const COPY_ALT_LINES: u8 = 0x3C;
+/// Длина строки в байтах (`ld bc,0020h` перед `ldir`).
+const COPY_ALT_LINE: u16 = 0x20;
+/// Верхняя оценка тактов одной итерации цикла `scr_copy_alt_lines`. Складывается
+/// из push bc/hl/de (33), ld bc (10), ldir (37·31+32 = 1179), pop de/hl/bc (30),
+/// двух юнитов call 7FE3/ex de,hl/call 7FE7 (2·38 = 76), четырёх сдвигов адреса
+/// (4·87 = 348, худший случай) и djnz (13) — итого 1689. Хук гоняет итерацию
+/// быстро, только если она целиком укладывается в остаток кадра; иначе отдаёт
+/// управление Z80, чтобы прерывание сработало ровно там же, где без хука.
+const COPY_ALT_MAX_ITER: u64 = 1689;
+
+/// `scr_copy_alt_lines` (`0x7FCD`, внутренний цикл `CopyBuf2Screen`): копирует
+/// `3Ch` строк по `20h` байтов из `HL` в `DE`, после каждой строки сдвигая оба
+/// указателя на **две** пиксельные строки — то есть заполняет строки «через
+/// одну». Записи в адреса ниже `ROM_SIZE` отбрасываются — так же поступает
+/// шина настоящего Spectrum.
+///
+/// ```text
+///         ld b,3Ch
+/// loop:   push bc ; push hl ; push de
+///         ld bc,20h
+///         ldir
+///         pop de ; pop hl ; pop bc
+///         call unit ; call unit
+///         djnz loop
+///         ret
+/// unit:   ex de,hl ; call 7FE7h
+/// 7FE7h:  inc h ; ld a,h ; and 7 ; call z, compDownScrAdr_HL ; ret
+/// ```
+///
+/// `call 7FE7h` кладёт в стек адрес, указывающий на собственное тело: после
+/// первого `ret` тело выполняется повторно, поэтому каждый `unit` двигает
+/// указатель на две строки, а не на одну. `CopyBuf2Screen` (`0x7FBE`) вызывает
+/// рутину дважды подряд (0xC000→0x4020 и 0xC100→0x4120): проходы дополняют
+/// друг друга — первый пишет строки 8, 10, …, второй 9, 11, … и вместе
+/// покрывают экран начиная со строки 8.
+///
+/// `push`/`pop`/`ld bc` на регистрах в сумме следа не оставляют (кроме `B`,
+/// который `djnz` обнуляет, и `F` от последнего `ldir`, перекрываемого телом
+/// `scr_adr_next_line`), поэтому хук копирует прямо по текущим `HL`/`DE`, а
+/// сдвиг указателей выполняют те же точные примитивы, что и настоящий код.
+///
+/// Резиду в СТЕКЕ, напротив, обязателен: в игре стек живёт прямо в экранной
+/// памяти (SP=4116h..411Eh — строки 1–7, которые копирование не трогает),
+/// и шесть байт под SP с регистрами и адресами возврата видны на экране.
+/// Слоты: `push bc/hl/de` пишут в S-2/S-4/S-6; `call 7FE3h` перезаписывает
+/// S-2 адресом возврата (7FDDh/7FE0h), `call 7FE7h` — S-4 (7FE7h). Тело
+/// под `call 7FE7h` работает с SP=S-4 и пишет резиду `call z` (7FEEh) в
+/// слот S-6, а его повторный прогон после `ret` идёт с SP=S-2 и
+/// перезаписывает слот S-4. Хук пишет резиду в том же хронологическом
+/// порядке, что и настоящие `push`/`call`, включая перезапись ldir-копией.
+///
+/// Прямые заходы в середину рутины (профиль показал единичные попадания на
+/// `0x7FCF`/`0x7FD5` минуя вход) хук не перехватывает — код рутины в памяти
+/// сохранён и выполняется как есть.
+fn scr_copy_alt_lines_hook(cpu: &mut Z80, m: &mut Spectrum) -> u64 {
+    let mut cycles = 7u64; // ld b,3Ch (в этом эмуляторе ld r,n = 7)
+    bump_r(cpu, 1);
+    cpu.b = COPY_ALT_LINES;
+    let sp = cpu.sp;
+    // Остаток кадра считаем от такта на входе; `frame_target` = u64::MAX вне
+    // кадрового цикла (тесты) — тогда хук отрабатывает рутину целиком.
+    let budget_end = m.frame_target.saturating_sub(cpu.cycles);
+    loop {
+        // Итерация длиннее остатка кадра — отдаём управление в точку цикла
+        // 0x7FCF с состоянием на начало итерации. Дальше Z80 доиграет рутину
+        // как обычно, и vblank-прерывание попадёт ровно в тот же такт, что и
+        // без хука (иначе хук «проскочил» бы прерывание и разошёлся с plain).
+        if cycles + COPY_ALT_MAX_ITER > budget_end {
+            cpu.pc = 0x7FCF;
+            m.hook_yield = true;
+            return cycles;
+        }
+        // push bc ; push hl ; push de
+        bump_r(cpu, 3);
+        cycles += 33;
+        let hl = cpu.hl();
+        let de = cpu.de();
+        stack_write(m, sp.wrapping_sub(2), cpu.c);
+        stack_write(m, sp.wrapping_sub(1), cpu.b);
+        stack_write(m, sp.wrapping_sub(4), cpu.l);
+        stack_write(m, sp.wrapping_sub(3), cpu.h);
+        stack_write(m, sp.wrapping_sub(6), cpu.e);
+        stack_write(m, sp.wrapping_sub(5), cpu.d);
+        // ld bc,20h + ldir. У эмулятора каждый байт ldir — отдельный step:
+        // повторяющиеся байты стоят block_ldi(16)+21, последний 16+16.
+        let mut last = 0u8;
+        for i in 0..COPY_ALT_LINE {
+            let s = hl.wrapping_add(i) as usize;
+            let d = de.wrapping_add(i) as usize;
+            last = m.mem[s];
+            if d >= ROM_SIZE {
+                m.mem[d] = last;
+            }
+        }
+        // Флаги block_ldi: S,Z,C сохраняются от входа, X/Y от A+последнего
+        // перенесённого байта, PV=0 (BC кончился), N=H=0.
+        let n = cpu.a.wrapping_add(last);
+        cpu.f = (cpu.f & (SF | ZF | CF)) | (n & XF) | if n & 0x02 != 0 { YF } else { 0 };
+        bump_r(cpu, 1 + COPY_ALT_LINE as u32);
+        cycles += 10 + 37 * (COPY_ALT_LINE as u64 - 1) + 32;
+        // pop de ; pop hl ; pop bc. Регистры восстанавливаются ИЗ ПАМЯТИ:
+        // когда копия перекрывает кадр стека (в игре SP=411Eh, и строка 1
+        // экрана лежит в 4100h..411Fh), `pop` возвращает уже испорченные
+        // `ldir` значения — ровно так, как это делает настоящий Z80.
+        bump_r(cpu, 3);
+        cycles += 30;
+        cpu.e = m.mem[sp.wrapping_sub(6) as usize];
+        cpu.d = m.mem[sp.wrapping_sub(5) as usize];
+        cpu.l = m.mem[sp.wrapping_sub(4) as usize];
+        cpu.h = m.mem[sp.wrapping_sub(3) as usize];
+        cpu.c = m.mem[sp.wrapping_sub(2) as usize];
+        cpu.b = m.mem[sp.wrapping_sub(1) as usize];
+        for unit in 0..2u16 {
+            std::mem::swap(&mut cpu.h, &mut cpu.d);
+            std::mem::swap(&mut cpu.l, &mut cpu.e);
+            bump_r(cpu, 3); // call unit + ex de,hl + call 7FE7h
+            cycles += 17 + 4 + 17;
+            // call 7FE3h кладёт в стек адрес возврата (7FDDh или 7FE0h),
+            // затем call 7FE7h кладёт 7FE7h — по два байта на слот.
+            let ret = if unit == 0 { 0x7FDDu16 } else { 0x7FE0 };
+            stack_write(m, sp.wrapping_sub(2), ret as u8);
+            stack_write(m, sp.wrapping_sub(1), (ret >> 8) as u8);
+            stack_write(m, sp.wrapping_sub(4), 0xE7);
+            stack_write(m, sp.wrapping_sub(3), 0x7F);
+            // Первое тело работает под `call 7FE7h` (SP=S-4) и пишет резиду
+            // `call z` в слот S-6; повторный прогон после `ret` идёт с
+            // SP=S-2 и перезаписывает слот S-4 — адрес возврата 7FE7h.
+            for slot in [6u16, 4] {
+                // call z,8445h берётся, когда (H+1) mod 8 == 0 — так же
+                // решает внутренний хук scr_adr_next_line.
+                if cpu.h.wrapping_add(1) & 7 == 0 {
+                    stack_write(m, sp.wrapping_sub(slot), 0xEE);
+                    stack_write(m, sp.wrapping_sub(slot - 1), 0x7F);
+                }
+                cycles += scr_adr_next_line_advance(cpu, m);
+            }
+        }
+        // djnz loop
+        bump_r(cpu, 1);
+        cpu.b = cpu.b.wrapping_sub(1);
+        if cpu.b == 0 {
+            cycles += 8;
+            break;
+        }
+        cycles += 13;
+    }
+    bump_r(cpu, 1); // ret
+    cycles + 10
+}
+
+/// Пишет резиду стека так же, как шина `Spectrum::write`: ниже `ROM_SIZE`
+/// запись отбрасывается.
+fn stack_write(m: &mut Spectrum, addr: u16, val: u8) {
+    if addr as usize >= ROM_SIZE {
+        m.mem[addr as usize] = val;
+        if let Some((lo, hi)) = m.wtrace {
+            if addr >= lo && addr <= hi {
+                eprintln!("H 0x{addr:04X} <- 0x{val:02X}");
+            }
+        }
+    }
+}
+
 /// `sub_5DFB`: по коду символа в `A` выбирает базовый адрес шрифта.
 ///
 /// Возвращает значение `HL`: `0x3D00` для «печатных» символов (пробел, цифры
@@ -588,9 +782,13 @@ mod tests {
     /// Вызывает рутину по адресу `addr` как подпрограмму (`CALL`/`RET`) и
     /// выполняет её на Z80 до возврата в адрес-маркер.
     fn run_routine(m: &mut Spectrum, addr: u16) {
+        run_routine_sp(m, addr, 0xF000u16.wrapping_sub(2));
+    }
+
+    /// То же, но со своим `SP`: стековый маркер ложится по нему.
+    fn run_routine_sp(m: &mut Spectrum, addr: u16, sp: u16) {
         const RET: u16 = 0x1234;
-        m.cpu.sp = 0xF000;
-        m.cpu.sp = m.cpu.sp.wrapping_sub(2);
+        m.cpu.sp = sp;
         let [lo, hi] = RET.to_le_bytes();
         m.mem[m.cpu.sp as usize] = lo;
         m.mem[m.cpu.sp as usize + 1] = hi;
@@ -730,6 +928,13 @@ mod tests {
     fn z80_sub(m: &mut Spectrum, addr: u16) -> Snap {
         m.cpu.cycles = 0;
         run_routine(m, addr);
+        snap(&m.cpu)
+    }
+
+    /// Прогон рутины на Z80 со своим `SP`.
+    fn z80_sub_sp(m: &mut Spectrum, addr: u16, sp: u16) -> Snap {
+        m.cpu.cycles = 0;
+        run_routine_sp(m, addr, sp);
         snap(&m.cpu)
     }
 
@@ -993,6 +1198,174 @@ mod tests {
                         );
                     }
                 }
+            }
+        }
+    }
+
+    /// `0x7FCD` (внутренний цикл `CopyBuf2Screen`) обязан совпасть с Z80:
+    /// копирование 60 строк по 32 байта через одну строку — регистры, флаги,
+    /// такты, `R` и вся память, включая резиду стека. Адреса назначения
+    /// подобраны так, чтобы копия не задела код рутины (0x7FCD..0x7FEE),
+    /// `compDownScrAdr_HL` (0x8445..0x8458) и страницу 0xEF00..0xF000 —
+    /// иначе расхождение было бы артефактом теста, а не хука.
+    ///
+    /// SP взят игровыми значениями 4116h..411Eh: стек в игре живёт в
+    /// строках 1–7 экрана, и резиду push/call виден на экране. SP внутри
+    /// зоны записи копии тест не использует: там настоящий код сам себя
+    /// ломает — ldir перезаписывает вытолкнутые регистры перед pop, — так
+    /// что эквивалентность в таких условиях не определена.
+    #[test]
+    fn scr_copy_alt_lines_matches_z80() {
+        let mut z = kladov();
+        let mut n = kladov();
+        install(&mut n, true);
+        // (HL = источник, DE = назначение, входные A, F, C, SP).
+        let cases: &[(u16, u16, u8, u8, u8, u16)] = &[
+            (0xC000, 0x4020, 0x11, 0x00, 0x22, 0x411C), // реальная пара CopyBuf2Screen
+            (0xC100, 0x4120, 0x23, 0xFF, 0x33, 0x411E), // реальная пара, второй проход
+            (0xC000, 0x4020, 0x34, 0x01, 0x44, 0x4116), // игровой SP из полёта
+            (0x0000, 0x0000, 0x67, 0x0F, 0x77, 0xEFFE), // записи в ПЗУ отбрасываются шиной
+            (0x1234, 0x0800, 0x78, 0xF0, 0x88, 0xEFFE),
+            (0x7E00, 0x08FF, 0x89, 0x3C, 0x99, 0xEFFE), // источник у кода рутины
+            (0xFF00, 0x0C00, 0x9A, 0xC3, 0xAA, 0xEFFE), // H источника через FFh
+            (0x8445, 0xC000, 0xAB, 0x00, 0xBB, 0xEFFE), // чтение со строки compDown
+            (0xAABB, 0xFF00, 0xBC, 0x99, 0xCC, 0xEFFE),
+            (0x4000, 0x9040, 0xCD, 0x69, 0xDD, 0xEFFE),
+            (0x0100, 0x6000, 0xDE, 0x00, 0xEE, 0xEFFE),
+            (0xE800, 0xB800, 0xEF, 0xA5, 0xFF, 0xEFFE),
+            (0xFFFF, 0x0F00, 0xF0, 0x5A, 0x11, 0xEFFE), // чтения через 0000h
+        ];
+        for &(hl, de, a, f, c, sp) in cases {
+            // Вся память — детерминированный паттерн, кроме кода рутины и
+            // compDownScrAdr_HL (иначе Z80 перезаписал бы свои инструкции
+            // посреди цикла).
+            let seed = (hl as usize) ^ ((de as usize) << 1) ^ (a as usize);
+            for i in 0..0x1_0000usize {
+                if (0x7FCD..0x7FEF).contains(&i) || (0x8445..0x8459).contains(&i) {
+                    continue;
+                }
+                let v = (i.wrapping_mul(31).wrapping_add(seed) & 0xFF) as u8;
+                z.mem[i] = v;
+                n.mem[i] = v;
+            }
+            set(&mut z.cpu, a, hl, de, f);
+            set(&mut n.cpu, a, hl, de, f);
+            z.cpu.b = 0x99; // входной B перезаписывается `ld b,3Ch`
+            n.cpu.b = 0x99;
+            z.cpu.c = c;
+            n.cpu.c = c;
+            let zs = z80_sub_sp(&mut z, 0x7FCD, sp);
+            n.cpu.sp = sp;
+            let ns = hook_sub(&mut n, 0x7FCD);
+            assert_eq!(
+                zs, ns,
+                "0x7FCD hl=0x{hl:04X} de=0x{de:04X} a={a:02X} f={f:02X} c={c:02X} sp=0x{sp:04X}"
+            );
+            // Вся память, кроме страницы 0xEF00..0xF000 (маркер и резиду
+            // стека харнесса при SP=0xEFFE) и двух байт маркера по SP.
+            let skip = |i: usize| {
+                (0xEF00..0xF000).contains(&i) || i == sp as usize || i == sp as usize + 1
+            };
+            if let Some(i) = (0..0x1_0000usize).find(|&i| !skip(i) && z.mem[i] != n.mem[i]) {
+                panic!(
+                    "0x7FCD: память разошлась по адресу 0x{i:04X} \
+                     (z=0x{:02X} n=0x{:02X}) hl=0x{hl:04X} de=0x{de:04X} \
+                     a={a:02X} f={f:02X} sp=0x{sp:04X}",
+                    z.mem[i], n.mem[i]
+                );
+            }
+        }
+    }
+
+    /// Ветка Yield: когда целая итерация копии не влезает в остаток кадра,
+    /// хук обязан отдать управление в точку цикла `0x7FCF` с состоянием ровно
+    /// на начало итерации, а рутину дальше доигрывает обычный Z80. Так длинная
+    /// копия (≈99000 тактов, больше кадра) переживает vblank-прерывание в
+    /// середине, не расходясь с прогоном без хука.
+    ///
+    /// Мини-диспетчер ниже повторяет `Spectrum::run_frame`: на хуке циклы
+    /// прибавляются, `RET` выполняется только если хук не отдал управление.
+    /// Состояние по достижении такта `budget` обязано совпасть с чистым
+    /// Z80-прогоном — по регистрам, флагам, `R`, SP, PC и всей памяти.
+    #[test]
+    fn scr_copy_alt_lines_yield_matches_z80() {
+        // Плотная сетка бюджетов: кадровая граница попадает и в середину
+        // копии, и внутрь коротких хуков (0x7FE7/0x8445), которые должны
+        // уступать место Z80, чтобы не «проскочить» границу.
+        let mut budgets: Vec<u64> = vec![500, 2000, 58664, 59954, 60000, 60050, 69000];
+        budgets.extend((5000..61000).step_by(1009));
+        for &budget in &budgets {
+            let mut z = kladov();
+            let mut n = kladov();
+            install(&mut n, true);
+            // Детерминированный паттерн, кроме кода рутины и compDownScrAdr_HL.
+            for i in 0..0x1_0000usize {
+                if (0x7FCD..0x7FEF).contains(&i) || (0x8445..0x8459).contains(&i) {
+                    continue;
+                }
+                let v = (i.wrapping_mul(31).wrapping_add(7) & 0xFF) as u8;
+                z.mem[i] = v;
+                n.mem[i] = v;
+            }
+            for m in [&mut z, &mut n] {
+                set(&mut m.cpu, 0x11, 0xC000, 0x4020, 0x00);
+                m.cpu.c = 0x22;
+                m.cpu.sp = 0x411E; // игровой стек в экранной памяти
+                m.mem[0x411E] = 0x34;
+                m.mem[0x411F] = 0x12;
+                m.cpu.cycles = 0;
+                m.cpu.pc = 0x7FCD;
+                m.frame_target = budget;
+            }
+            // Чистый Z80: шагаем, пока не выйдем за бюджет кадра.
+            let mut cz = std::mem::take(&mut z.cpu);
+            while cz.cycles < budget {
+                cz.step(&mut z);
+            }
+            z.cpu = cz;
+            // Хук + Z80: мини-диспетчер, как в `Spectrum::run_frame`.
+            let mut cn = std::mem::take(&mut n.cpu);
+            let mut yielded = false;
+            while cn.cycles < budget {
+                let pc = cn.pc;
+                if let Some(hook) = n.hooks.get(&pc).copied() {
+                    let fits = n
+                        .hook_max
+                        .get(&pc)
+                        .copied()
+                        .map_or(true, |max| cn.cycles + max <= budget);
+                    if fits {
+                        n.hook_yield = false;
+                        let cyc = hook(&mut cn, &mut n);
+                        cn.cycles += cyc;
+                        if n.hook_yield {
+                            yielded = true;
+                            continue;
+                        }
+                        let lo = n.mem[cn.sp as usize] as u16;
+                        let hi = n.mem[cn.sp.wrapping_add(1) as usize] as u16;
+                        cn.sp = cn.sp.wrapping_add(2);
+                        cn.pc = lo | (hi << 8);
+                        continue;
+                    }
+                }
+                cn.step(&mut n);
+            }
+            n.cpu = cn;
+            // При бюджете меньше одной итерации хук не запускается (охрана
+            // `hook_max`) — рутину целиком играет Z80, отдачи управления нет.
+            if budget >= COPY_ALT_MAX_ITER {
+                assert!(yielded, "budget={budget}: хук ни разу не отдал управление");
+            }
+            assert_eq!(snap(&z.cpu), snap(&n.cpu), "регистры budget={budget}");
+            assert_eq!(z.cpu.pc, n.cpu.pc, "PC budget={budget}");
+            assert_eq!(z.cpu.sp, n.cpu.sp, "SP budget={budget}");
+            if let Some(i) = (0..0x1_0000usize).find(|&i| z.mem[i] != n.mem[i]) {
+                panic!(
+                    "0x7FCD yield: память разошлась по адресу 0x{i:04X} \
+                     (z=0x{:02X} n=0x{:02X}) budget={budget}",
+                    z.mem[i], n.mem[i]
+                );
             }
         }
     }
