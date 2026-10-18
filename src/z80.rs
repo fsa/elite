@@ -249,7 +249,7 @@ impl Z80 {
         a
     }
     #[inline]
-    fn rlc(&mut self, v: u8) -> u8 {
+    pub(crate) fn rlc(&mut self, v: u8) -> u8 {
         let c = v >> 7;
         let r = (v << 1) | c;
         self.f = (r & (SF | XF | YF)) | if r == 0 { ZF } else { 0 } | if c != 0 { CF } else { 0 } | if parity(r) { PF } else { 0 };
@@ -263,21 +263,21 @@ impl Z80 {
         r
     }
     #[inline]
-    fn rl(&mut self, v: u8) -> u8 {
+    pub(crate) fn rl(&mut self, v: u8) -> u8 {
         let c = v >> 7;
         let r = (v << 1) | if self.f & CF != 0 { 1 } else { 0 };
         self.f = (r & (SF | XF | YF)) | if r == 0 { ZF } else { 0 } | if c != 0 { CF } else { 0 } | if parity(r) { PF } else { 0 };
         r
     }
     #[inline]
-    fn rr(&mut self, v: u8) -> u8 {
+    pub(crate) fn rr(&mut self, v: u8) -> u8 {
         let c = v & 1;
         let r = (v >> 1) | if self.f & CF != 0 { 0x80 } else { 0 };
         self.f = (r & (SF | XF | YF)) | if r == 0 { ZF } else { 0 } | if c != 0 { CF } else { 0 } | if parity(r) { PF } else { 0 };
         r
     }
     #[inline]
-    fn sla(&mut self, v: u8) -> u8 {
+    pub(crate) fn sla(&mut self, v: u8) -> u8 {
         let c = v >> 7;
         let r = v << 1;
         self.f = (r & (SF | XF | YF)) | if r == 0 { ZF } else { 0 } | if c != 0 { CF } else { 0 } | if parity(r) { PF } else { 0 };
