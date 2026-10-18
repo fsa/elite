@@ -26,8 +26,24 @@ pub fn install(m: &mut Spectrum, kladov: bool) {
     m.hooks.insert(0xD3CE, d3ce_hook);
     m.hooks.insert(0xAB0B, mult_a_hib_c_hook);
     m.hooks.insert(0xE621, pix_crd_2_scr_adr_hook);
+    m.hooks.insert(0x7A59, smag_add_mem_hook);
     m.hooks.insert(0x7FE7, scr_adr_next_line_hook);
     m.hooks.insert(0x8445, scr_adr_next_char_line_hook);
+}
+
+/// Эмуляция обновления регистра `R` (Memory Refresh) за заменённые инструкции.
+///
+/// На Z80 `R` инкрементируется на единицу за каждую выполняемую инструкцию
+/// (бит 7 сохраняется). Хук подменяет рутину целиком и выполняет ноль
+/// инструкций, поэтому `R` нужно двигать самим — иначе расходится поток
+/// случайных чисел: игра читает `R` через `ld a, r` в `PrintStars` (дрожание
+/// звёзд), и любой пропущенный сдвиг в итоге меняет экран.
+///
+/// `steps` — число инструкций (не такт заменённого кода), `ED`/`CB`-префиксы
+/// считаются за одну инструкцию, как в `Z80::step`.
+#[inline]
+fn bump_r(cpu: &mut Z80, steps: u32) {
+    cpu.r = (cpu.r & 0x80) | (cpu.r.wrapping_add(steps as u8) & 0x7F);
 }
 
 /// Сколько байт клавиш сбрасывает родная `ResetPressedKeys`.
@@ -259,7 +275,24 @@ fn font_base_hook(cpu: &mut Z80, _m: &mut Spectrum) -> u64 {
     let hl = font_base(cpu.a);
     cpu.h = (hl >> 8) as u8;
     cpu.l = (hl & 0xFF) as u8;
-    font_base_cycles(cpu.a)
+    let a = cpu.a;
+    bump_r(cpu, font_base_steps(a));
+    font_base_cycles(a)
+}
+
+/// Число инструкций `sub_5DFB` по пути, выбираемому символом `A` (для
+/// эмуляции `R`; пути и границы совпадают с `font_base_cycles`).
+fn font_base_steps(a: u8) -> u32 {
+    match a {
+        0x20 => 3,
+        _ if a < 0x30 => 7,
+        _ if a < 0x3B => 7,
+        _ if a < 0x41 => 11,
+        _ if a < 0x5B => 11,
+        _ if a < 0x61 => 15,
+        _ if a < 0x7B => 15,
+        _ => 17,
+    }
 }
 
 /// Счётчик обращений к хуку (только для тестов).
@@ -275,6 +308,7 @@ fn eb3e_hook(cpu: &mut Z80, _m: &mut Spectrum) -> u64 {
     let r = cpu.add16(cpu.hl(), cpu.de());
     cpu.h = (r >> 8) as u8;
     cpu.l = r as u8;
+    bump_r(cpu, 4); // ld d,0; ld e,a; add hl,de; ret
     32 // ld d,0(7) + ld e,a(4) + add hl,de(11) + ret(10)
 }
 
@@ -284,6 +318,7 @@ fn d3ce_hook(cpu: &mut Z80, _m: &mut Spectrum) -> u64 {
     let hl = cpu.hl();
     let de = cpu.de();
     cpu.sbc16(hl, de);
+    bump_r(cpu, 4); // push hl; sbc hl,de; pop hl; ret
     46 // push hl(11) + sbc hl,de(15) + pop hl(10) + ret(10)
 }
 
@@ -314,6 +349,7 @@ fn mult_a_hib_c_hook(cpu: &mut Z80, m: &mut Spectrum) -> u64 {
     cpu.l = idx;
     cpu.d = d;
     // `jr nc` — taken при отсутствии заёма (b >= c), тогда `neg` не выполняется.
+    bump_r(cpu, if no_borrow { 14 } else { 15 });
     if no_borrow { 83 } else { 86 }
 }
 
@@ -338,7 +374,61 @@ fn pix_crd_2_scr_adr_hook(cpu: &mut Z80, _m: &mut Spectrum) -> u64 {
     cpu.a = cpu.or8(a_before, h); // финальное `or h` (выставляет флаги)
     cpu.h = h;
     cpu.l = hl as u8;
+    bump_r(cpu, 24); // рутина линейная: 24 инструкции
     120
+}
+
+/// `smag_add_mem` (`sub_7A59`): прибавить к байту по `HL` значение `A` в
+/// формате «знак + 7-битная величина» (знак — бит 7, величина — биты 0..6).
+/// Рутина горячая: вызывается на каждое обновление координаты звезды в
+/// `PrintStars` (звёздные координаты хранятся именно в этом формате).
+///
+/// Правила (по эталонному коду):
+/// - одинаковые знаки: величины складываются; если сумма ≥ 80h, величина
+///   обнуляется, знак сохраняется;
+/// - разные знаки: величины вычитаются, знак результата — от большей величины
+///   (при равенстве — от прежнего значения по адресу).
+///
+/// Результат записывается в `(HL)`, `BC` сохраняются (рутина делает
+/// `push bc`/`pop bc`).
+pub fn smag_add_mem(old: u8, a: u8) -> u8 {
+    if (a ^ old) & 0x80 == 0 {
+        let sum = (a & 0x7F) + (old & 0x7F);
+        if sum & 0x80 != 0 { a & 0x80 } else { (a & 0x80) | sum }
+    } else if old & 0x7F >= a & 0x7F {
+        (old & 0x80) | (old & 0x7F) - (a & 0x7F)
+    } else {
+        (a & 0x80) | (a & 0x7F) - (old & 0x7F)
+    }
+}
+
+/// Нативная замена `sub_7A59`. Итоговые флаги задаёт финальное `or c`
+/// (операции `xor`/`and`/`add`/`sub`/`bit`/`neg` перезаписываются).
+fn smag_add_mem_hook(cpu: &mut Z80, m: &mut Spectrum) -> u64 {
+    let hl = cpu.hl() as usize;
+    let old = m.mem[hl];
+    let a = cpu.a;
+    let res = smag_add_mem(old, a);
+    m.mem[hl] = res;
+    cpu.a = cpu.or8(res, 0); // финальные флаги — от `or c`
+    let same_sign = (a ^ old) & 0x80 == 0;
+    if same_sign {
+        // без переполнения: 20 инструкций (132 такта); с переполнением
+        // (`sbc a,a`): 21 инструкция (131 такт).
+        if ((a & 0x7F) + (old & 0x7F)) & 0x80 == 0 {
+            bump_r(cpu, 20);
+            132
+        } else {
+            bump_r(cpu, 21);
+            131
+        }
+    } else if old & 0x7F >= a & 0x7F {
+        bump_r(cpu, 21); // `jr nc` берётся, `neg` не выполняется
+        148
+    } else {
+        bump_r(cpu, 21);
+        144
+    }
 }
 
 /// `scr_adr_next_char_line` (`compDownScrAdr_HL`, `0x8445`): продолжение
@@ -352,11 +442,13 @@ fn scr_adr_next_char_line_hook(cpu: &mut Z80, _m: &mut Spectrum) -> u64 {
     cpu.a = sum;
     cpu.l = sum;
     if cpu.f & CF != 0 {
+        bump_r(cpu, 4); // ld a,l; add a,20h; ld l,a; ret c
         return 26; // ld a,l(4)+add a,20h(7)+ld l,a(4)+ret c(11)
     }
     let d = cpu.sub8(cpu.h, 8, 0);
     cpu.a = d;
     cpu.h = d;
+    bump_r(cpu, 8); // + ld a,h; sub 8; ld h,a; ret
     45 // 4+7+4+5 + 4+7+4+10
 }
 
@@ -371,6 +463,9 @@ fn scr_adr_next_line_hook(cpu: &mut Z80, m: &mut Spectrum) -> u64 {
     cpu.h = h;
     let a = cpu.and8(h, 7);
     cpu.a = a;
+    // Свои инструкции: inc h, ld a,h, and 7, call z (взята или нет) и
+    // финальный `ret` — всегда 5; внутренний хук добавляет свои 4/8.
+    bump_r(cpu, 5);
     if a != 0 {
         return 35; // inc h(4)+ld a,h(4)+and 7(7)+call z not taken(10)+ret(10)
     }
@@ -519,6 +614,7 @@ mod tests {
         e: u8,
         h: u8,
         l: u8,
+        r: u8,
         cycles: u64,
     }
 
@@ -532,6 +628,7 @@ mod tests {
             e: c.e,
             h: c.h,
             l: c.l,
+            r: c.r,
             cycles: c.cycles,
         }
     }
@@ -695,6 +792,36 @@ mod tests {
             let zs = z80_sub(&mut z, 0x7FE7);
             let ns = hook_sub(&mut n, 0x7FE7);
             assert_eq!(zs, ns, "sub_7FE7 hl=0x{hl:04X}");
+        }
+    }
+
+    /// `sub_7A59` обязан совпасть с Z80 на всех 65536 парах (старое значение
+    /// байта, прибавляемое `A`): регистры, флаги, такты и записанный байт.
+    #[test]
+    fn smag_add_mem_matches_z80() {
+        let mut z = kladov();
+        let mut n = kladov();
+        install(&mut n, true);
+        let addr = 0x7100u16;
+        for old in 0u8..=255 {
+            for a in 0u8..=255 {
+                z.mem[addr as usize] = old;
+                n.mem[addr as usize] = old;
+                set(&mut z.cpu, a, addr, 0x5678, a ^ old);
+                set(&mut n.cpu, a, addr, 0x5678, a ^ old);
+                z.cpu.b = 0x11;
+                z.cpu.c = 0x22;
+                n.cpu.b = 0x11;
+                n.cpu.c = 0x22;
+                let zs = z80_sub(&mut z, 0x7A59);
+                let ns = hook_sub(&mut n, 0x7A59);
+                assert_eq!(zs, ns, "sub_7A59 old=0x{old:02X} a=0x{a:02X}");
+                assert_eq!(
+                    z.mem[addr as usize],
+                    n.mem[addr as usize],
+                    "sub_7A59: память по HL разошлась (old=0x{old:02X} a=0x{a:02X})"
+                );
+            }
         }
     }
 
