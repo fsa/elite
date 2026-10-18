@@ -108,6 +108,18 @@ pub struct SaveLayout {
     /// у Кладова `loc_7394`. Игра заново проходит стартовую последовательность
     /// и оказывается пристыкованной на станции системы из загруженного сейва.
     pub restart_entry: u16,
+    /// Адрес рутины `SaveCocpitInBuffer` (`0x817E` у Кладова, `0x8F42` в
+    /// оригинале).
+    ///
+    /// Родной путь к перезапуску — `call SaveCocpitInBuffer; call MenuSaveLoad;
+    /// jp nz, restart_entry` (в оригинале `BeginGame+4D`, у Кладова ветка
+    /// `jp nz, loc_7394` главного цикла). Рутина сохраняет экран в буфер
+    /// кокпита: `0x5000..0x57FF`→`DataCocpit` и `0x5A00..0x5AFF`→`0x5B00`.
+    /// В [`restart_after_load`] её обязательно нужно выполнить до входа в
+    /// [`restart_entry`]: `PrnCocpit_Ifn` в точке перезапуска восстанавливает
+    /// экран именно из этих буферов, а без свежего копирования туда попадут
+    /// остатки прошлого полёта (см. журнал `PLAN.md`).
+    pub save_cocpit: u16,
     /// Теневой буфер, из которого `InitGame` восстанавливает пилота, и его
     /// длина.
     ///
@@ -142,6 +154,7 @@ pub const KLADOV_SAVE: SaveLayout = SaveLayout {
     pilot_name: 0xD054,
     commander_len: 0x66,
     restart_entry: 0x7394,
+    save_cocpit: 0x817E,
     pilot_shadow: Some((0xD232, 0x66)),
     sun_crd: 0x7107,
     hook: menu_save_load_kladov_hook,
@@ -154,6 +167,7 @@ pub const ELITE_SAVE: SaveLayout = SaveLayout {
     pilot_name: 0xA816,
     commander_len: 0x68,
     restart_entry: 0x71BE,
+    save_cocpit: 0x8F42,
     pilot_shadow: Some((0xA910, 0x66)),
     sun_crd: 0x7065,
     hook: menu_save_load_elite_hook,
@@ -231,7 +245,20 @@ pub fn restart_after_load(m: &mut Spectrum, layout: SaveLayout) {
     // должны быть разрешены (в оригинале после загрузки с ленты идёт `ei`).
     m.cpu.iff1 = true;
     m.cpu.iff2 = true;
-    m.cpu.pc = layout.restart_entry;
+    // Родной путь к перезапуску — `call SaveCocpitInBuffer; call MenuSaveLoad;
+    // jp nz, restart_entry`. `MenuSaveLoad` мы подменяем хуком, но
+    // предшествующее копирование экрана в буфер кокпита (`0x5000`→DataCocpit,
+    // `0x5A00`→`0x5B00`) обязано произойти: `PrnCocpit_Ifn` в точке
+    // перезапуска восстанавливает экран именно из этих буферов, а без свежего
+    // копирования рядом с ними окажется мусор от прошлого полёта (сканер,
+    // записанный `CopyScaner2Scr`), который и разваливал картинку.
+    // Эмулируем `call SaveCocpitInBuffer`: кладём точку перезапуска как адрес
+    // возврата и входим в рутину.
+    let sp = m.cpu.sp.wrapping_sub(2);
+    m.mem[sp as usize] = (layout.restart_entry & 0xFF) as u8;
+    m.mem[sp as usize + 1] = (layout.restart_entry >> 8) as u8;
+    m.cpu.sp = sp;
+    m.cpu.pc = layout.save_cocpit;
 }
 
 /// Включить перехват игрового сохранения: при вызове `MenuSaveLoad` игра
@@ -3836,6 +3863,13 @@ mod tests {
             (ELITE_SAVE, 0x7062u16, boot_elite()),
         ] {
             install_save(&mut m, layout);
+            // `save_cocpit` должен указывать на начало `SaveCocpitInBuffer`
+            // (`push af` = 0xF5), иначе перезапуск войдёт не в ту рутину.
+            assert_eq!(
+                m.mem[layout.save_cocpit as usize], 0xF5,
+                "save_cocpit 0x{:04X} — не начало SaveCocpitInBuffer",
+                layout.save_cocpit
+            );
 
             // Стартовая последовательность сначала ждёт отпускания клавиши, а
             // затем её нажатия (выбор устройства управления). Подаём SPACE
@@ -3866,9 +3900,18 @@ mod tests {
 
             commander_load(&mut m, &path, layout).unwrap();
             restart_after_load(&mut m, layout);
+            // Вход идёт в `SaveCocpitInBuffer` (с адресом возврата на точке
+            // перезапуска), а не сразу в `restart_entry`.
             assert_eq!(
-                m.cpu.pc, layout.restart_entry,
+                m.cpu.pc, layout.save_cocpit,
                 "перезапуск не инициирован (0x{:04X})",
+                layout.save_cocpit
+            );
+            let ret = m.mem[m.cpu.sp as usize] as u16
+                | ((m.mem[m.cpu.sp as usize + 1] as u16) << 8);
+            assert_eq!(
+                ret, layout.restart_entry,
+                "адрес возврата не ведёт на точку перезапуска (0x{:04X})",
                 layout.restart_entry
             );
 
@@ -3892,6 +3935,66 @@ mod tests {
 
             let _ = std::fs::remove_file(&path);
         }
+    }
+
+    /// Регрессия: после загрузки сейва и перезапуска экран не разваливается.
+    ///
+    /// Точка перезапуска (`loc_7394`) через `PrnCocpit_Ifn` восстанавливает
+    /// экран из буферов кокпита (`DataCocpit` = 0xC000 и `0x5B00`). Родной
+    /// путь входит туда после `SaveCocpitInBuffer`, поэтому в буферах лежит
+    /// свежий экран; без этого шага там остаются данные прошлого полёта
+    /// (сканер, который `CopyScaner2Scr` пишет в `0x5B00`), и атрибуты
+    /// заполняются мусором — «разваливающаяся» картинка после загрузки.
+    #[test]
+    fn load_restart_keeps_screen_clean() {
+        let base = env!("CARGO_MANIFEST_DIR");
+        let dir = format!("{base}/tmp");
+        std::fs::create_dir_all(&dir).unwrap();
+
+        // В файле атрибутов (0x5800..0x5AFF) допустимы только 0x00/0x04/0x07
+        // и 0x17 (bright + ink 7). Всё остальное — мусор из буфера кокпита.
+        let is_garbage = |v: u8| v & 0xF8 != 0 && v != 0x10 && v != 0x17;
+
+        // Титул -> старт (импульсы SPACE), затем '1' — вылет со станции.
+        let frame_input = |m: &mut Spectrum, f: u64| {
+            m.release_all_keys();
+            if f >= 30 && f < 900 && f % 16 < 6 {
+                m.set_key(7, 0, true); // SPACE
+            }
+            if (900..903).contains(&f) {
+                m.set_key(3, 0, true); // '1' = LaunchDocking
+            }
+        };
+        let run = |m: &mut Spectrum| {
+            for f in 0..1508u64 {
+                frame_input(m, f);
+                m.run_frame();
+            }
+        };
+
+        // Полёт, в котором сохраняем сейв, затем загрузка и перезапуск.
+        let mut m = boot_kladov();
+        install_save(&mut m, KLADOV_SAVE);
+        run(&mut m);
+        let path = format!("{dir}/load_restart_screen.zxelite");
+        commander_save(&mut m, &path, KLADOV_SAVE).unwrap();
+
+        commander_load(&mut m, &path, KLADOV_SAVE).unwrap();
+        restart_after_load(&mut m, KLADOV_SAVE);
+        run(&mut m);
+        let _ = std::fs::remove_file(&path);
+
+        assert_ne!(
+            m.mem[0x7104], 0,
+            "подготовка: после вылета корабль должен быть в полёте"
+        );
+        let garbage: Vec<usize> = (0x5800..0x5B00)
+            .filter(|&a| is_garbage(m.mem[a]))
+            .collect();
+        assert!(
+            garbage.is_empty(),
+            "после загрузки в атрибутах остался мусор: {garbage:04X?}"
+        );
     }
 
     /// Регрессия на сохранение из «мёртвого» блока.
