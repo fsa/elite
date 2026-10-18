@@ -32,6 +32,9 @@ pub fn install(m: &mut Spectrum, kladov: bool) {
     install_hook(m, 0x7FE7, scr_adr_next_line_hook, 87);
     install_hook(m, 0x8445, scr_adr_next_char_line_hook, 45);
     install_hook(m, 0xD546, scr_xor_col_down_hook, 48 * 256 + 5);
+    // Пересчёт угловых «скоростей» для индикатора — вызывается из главного
+    // цикла игры (`GameMain`) по нескольку раз за кадр.
+    install_hook(m, 0x713C, calc_ang_speed_4_prn_hook, 242);
     // Копия длиннее кадра, поэтому хук внутри себя отдаёт управление Z80
     // (Yield) на границе кадра; верхняя оценка — одна итерация цикла.
     install_hook(m, 0x7FCD, scr_copy_alt_lines_hook, COPY_ALT_MAX_ITER);
@@ -2407,6 +2410,79 @@ fn sfx_update_hook(cpu: &mut Z80, m: &mut Spectrum) -> u64 {
     }
 }
 
+/// `CalcAngSpeed4Prn` (`0x713C`): пересчёт угловых «скоростей» для индикатора.
+///
+/// Читает старшие байты трёх 16-битных величин RAM (`0xFF09`, `0xFF0B`,
+/// `0xFF0D` — старшие байты `AngleLeftRight`, `byte_FF0A`, `DeltaSpeed`) и
+/// кладёт их в `HighAngleLR`/`HighAngleDU`/`HighDeltaSpeed`
+/// (`0x70E4`..`0x70E6`), а рядом (`0x70FE`, `0x7100`, `0x70F4`) — производные
+/// значения. Для первых двух байтов: если взведён бит 7 (величина
+/// «отрицательная»), результат — `15h - (v & 7Fh)`, иначе `v + 15h`; в
+/// отрицательной ветке промежуточное `v & 7Fh` остаётся в `C`. Третье значение
+/// — `5 * v + 5` по модулю 256 (с сохранением `v` в `B`). Итоговые флаги — от
+/// последнего `add a,5`; `HL` на выходе всегда `0xFF0D`.
+///
+/// ```text
+/// 713C  ld hl,0FF09h        ; 10
+/// 713F  ld a,(hl)           ;  7   7140  ld (70E4h),a  ; 13
+/// 7143  bit 7,a             ;  8
+/// 7145  jr nz,714Bh         ; 12/7
+/// 7147  add a,15h           ;  7   7149  jr 7151h      ; 12   (бит 7 сброшен)
+/// 714B  and 7Fh            ;  7   714D  ld c,a        ;  4
+/// 714E  ld a,15h           ;  7   7150  sub c         ;  4
+/// 7151  ld (70FEh),a        ; 13   ... то же для (0FF0Bh) -> 7100h
+/// 716D  ld a,(hl)           ;  7   716E  ld (70E6h),a ; 13
+/// 7171  ld b,a / add a,a ; add a,a ; add a,b ; add a,5
+/// 7177  ld (70F4h),a        ; 13  717A  ret               ; 10
+/// ```
+fn calc_ang_speed_4_prn_hook(cpu: &mut Z80, m: &mut Spectrum) -> u64 {
+    /// Один «проход» рутины: чтение байта по `addr`, запись его как есть по
+    /// `dump` и производной величины по `out`. Возвращает признак
+    /// отрицательной ветки (бит 7 был взведён).
+    fn pass(
+        cpu: &mut Z80,
+        m: &mut Spectrum,
+        addr: usize,
+        dump: usize,
+        out: usize,
+    ) -> bool {
+        let v = m.mem[addr];
+        m.mem[dump] = v;
+        if v & 0x80 != 0 {
+            let c = v & 0x7F;
+            cpu.c = c; // `ld c,a` в отрицательной ветке
+            m.mem[out] = 0x15u8.wrapping_sub(c);
+            true
+        } else {
+            m.mem[out] = v.wrapping_add(0x15);
+            false
+        }
+    }
+
+    let neg1 = pass(cpu, m, 0xFF09, 0x70E4, 0x70FE);
+    let neg2 = pass(cpu, m, 0xFF0B, 0x70E5, 0x7100);
+
+    let v3 = m.mem[0xFF0D];
+    m.mem[0x70E6] = v3;
+    cpu.b = v3;
+    cpu.h = 0xFF;
+    cpu.l = 0x0D;
+
+    // `add a,a ; add a,a ; add a,b ; add a,5` начиная с `a = v3`.
+    let t = cpu.add8(v3, v3, 0);
+    let t = cpu.add8(t, t, 0);
+    let t = cpu.add8(t, v3, 0);
+    let out3 = cpu.add8(t, 5, 0);
+    cpu.a = out3;
+    m.mem[0x70F4] = out3;
+
+    // Инструкции: голова (5) + ветка (4/2) + середина (7) + ветка (4/2) +
+    // хвост с `ret` (12).
+    bump_r(cpu, 28 + if neg1 { 2 } else { 0 } + if neg2 { 2 } else { 0 });
+    // Такты: 174 (голова+середина+хвост) + по 34 (ветка взята) или 26 (нет).
+    174 + if neg1 { 34 } else { 26 } + if neg2 { 34 } else { 26 }
+}
+
 /// `sub_5DFB`: по коду символа в `A` выбирает базовый адрес шрифта.
 ///
 /// Возвращает значение `HL`: `0x3D00` для «печатных» символов (пробел, цифры
@@ -2837,6 +2913,69 @@ mod tests {
                     n.mem[addr as usize],
                     "sub_7A59: память по HL разошлась (old=0x{old:02X} a=0x{a:02X})"
                 );
+            }
+        }
+    }
+
+    /// `CalcAngSpeed4Prn` (`0x713C`) обязан совпасть с Z80 на всех 65536
+    /// парах первых двух входных байтов (обе ветки по биту 7 — независимо) и
+    /// на всех 256 значениях третьего (для набора краевых первых двух).
+    /// Сверяются регистры, флаги, такты, `R` и все шесть выходных байтов.
+    #[test]
+    fn calc_ang_speed_4_prn_matches_z80() {
+        let mut z = kladov();
+        let mut n = kladov();
+        install(&mut n, true);
+
+        /// Один прогон: входные байты по `0xFF09`/`0xFF0B`/`0xFF0D`,
+        /// произвольные регистры (`A`/`B`/`C`/`HL`/`F`/`R` — вход-мусор,
+        /// `D`/`E` обязаны сохраниться), затем сверка с Z80.
+        fn case(z: &mut Spectrum, n: &mut Spectrum, v1: u8, v2: u8, v3: u8) {
+            for m in [&mut *z, &mut *n] {
+                m.mem[0xFF09] = v1;
+                m.mem[0xFF0B] = v2;
+                m.mem[0xFF0D] = v3;
+                set(&mut m.cpu, 0x55, 0x1234, 0x5678, 0xA5);
+                m.cpu.b = 0x11;
+                m.cpu.c = 0x22;
+                m.cpu.r = 0x80;
+            }
+            let zs = z80_sub(z, 0x713C);
+            let ns = hook_sub(n, 0x713C);
+            assert_eq!(
+                zs, ns,
+                "CalcAngSpeed4Prn v1=0x{v1:02X} v2=0x{v2:02X} v3=0x{v3:02X}"
+            );
+            for (out, name) in [
+                (0x70E4usize, "HighAngleLR"),
+                (0x70FE, "byte_70FE"),
+                (0x70E5, "HighAngleDU"),
+                (0x7100, "byte_7100"),
+                (0x70E6, "HighDeltaSpeed"),
+                (0x70F4, "byte_70F4"),
+            ] {
+                assert_eq!(
+                    z.mem[out], n.mem[out],
+                    "CalcAngSpeed4Prn {name}: v1=0x{v1:02X} v2=0x{v2:02X} v3=0x{v3:02X}"
+                );
+            }
+        }
+
+        // Первые два байта — все пары, третий — краевые значения.
+        const V3: &[u8] = &[0x00, 0x01, 0x05, 0x33, 0x51, 0x7F, 0x80, 0xFF];
+        for v1 in 0u8..=255 {
+            for v2 in 0u8..=255 {
+                for &v3 in V3 {
+                    case(&mut z, &mut n, v1, v2, v3);
+                }
+            }
+        }
+        // Третий байт — все 256 значений (флаги финального `add a,5`).
+        for &v1 in &[0x00u8, 0x7F, 0x80, 0xFF] {
+            for &v2 in &[0x00u8, 0x7F, 0x80, 0xFF] {
+                for v3 in 0u8..=255 {
+                    case(&mut z, &mut n, v1, v2, v3);
+                }
             }
         }
     }
