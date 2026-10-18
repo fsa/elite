@@ -823,7 +823,10 @@ impl Z80 {
 
     fn index_prefix(&mut self, bus: &mut dyn Bus, iy: bool) {
         self.index_iy = iy;
-        self.cycles += 4;
+        // Здесь не добавляем 4 T за чтение префикса: документированное время
+        // каждой инструкции с DD/FD (19 для `ld r,(iy+d)`, 15 для `add ix,rr`
+        // и т.д.) уже включает префикс. Раньше префикс начислялся дважды и
+        // все инструкции с индексом шли на 4 T дольше настоящего Z80.
         let op = self.fetch(bus);
         let idx = if iy { self.iy } else { self.ix };
         match op {
@@ -886,9 +889,12 @@ impl Z80 {
             | 0x60..=0x65 | 0x67 | 0x68..=0x6D | 0x6F | 0x7C..=0x7D => {
                 self.index_undoc(bus, idx, op);
             }
-            0xCB => { self.index_cb(bus, iy); self.cycles += 4; }
+            // index_cb начисляет документированное время DD/FD CB-операций
+            // (20/23 T) уже вместе с обоими префиксами.
+            0xCB => self.index_cb(bus, iy),
             _ => { // prefix ignored, execute as normal opcode (mostly)
                 self.execute(bus, op);
+                self.cycles += 4; // прочитанный, но не применённый префикс
             }
         }
         self.index_iy = false;
@@ -900,10 +906,10 @@ impl Z80 {
         match op {
             0x24 => { let v = self.inc8(hi); self.set_ixh(idx, v); }
             0x25 => { let v = self.dec8(hi); self.set_ixh(idx, v); }
-            0x26 => { let n = self.fetch(bus); self.set_ixh(idx, n); }
+            0x26 => { let n = self.fetch(bus); self.set_ixh(idx, n); self.cycles += 3; } // LD IXH,n = 11 T (8 + imm)
             0x2C => { let v = self.inc8(lo); self.set_ixl(idx, v); }
             0x2D => { let v = self.dec8(lo); self.set_ixl(idx, v); }
-            0x2E => { let n = self.fetch(bus); self.set_ixl(idx, n); }
+            0x2E => { let n = self.fetch(bus); self.set_ixl(idx, n); self.cycles += 3; } // LD IXL,n = 11 T
             _ => {
                 let dst = (op >> 3) & 7;
                 let src = op & 7;
