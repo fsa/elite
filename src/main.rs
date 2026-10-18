@@ -228,7 +228,7 @@ fn main() {
     }
 
     if opts.native || env::var("ELITE_NATIVE").is_ok() {
-        native::install(&mut machine);
+        native::install(&mut machine, opts.kladov);
     }
 
     // Нативный сейв/лоад командира: перехват `MenuSaveLoad` выставляет флаг,

@@ -10,15 +10,24 @@
 //! результат с нативной реализацией.
 
 use crate::machine::{Hook, Spectrum};
-use crate::z80::{Z80, ZF};
+use crate::z80::{Z80, ZF, CF};
 
 /// Установить все нативные замены (хуки) на машину.
-pub fn install(m: &mut Spectrum) {
+///
+/// Адреса регистровых помощников соответствуют версии Кладова; для
+/// оригинальной версии (`--elite`) хук по этим адресам был бы установлен на
+/// чужой код, поэтому сейчас ставим их только если `kladov == true`.
+pub fn install(m: &mut Spectrum, kladov: bool) {
+    if !kladov {
+        return;
+    }
     m.hooks.insert(0x5DFB, font_base_hook);
     m.hooks.insert(0xEB3E, eb3e_hook);
     m.hooks.insert(0xD3CE, d3ce_hook);
     m.hooks.insert(0xAB0B, mult_a_hib_c_hook);
     m.hooks.insert(0xE621, pix_crd_2_scr_adr_hook);
+    m.hooks.insert(0x7FE7, scr_adr_next_line_hook);
+    m.hooks.insert(0x8445, scr_adr_next_char_line_hook);
 }
 
 /// Сколько байт клавиш сбрасывает родная `ResetPressedKeys`.
@@ -332,6 +341,44 @@ fn pix_crd_2_scr_adr_hook(cpu: &mut Z80, _m: &mut Spectrum) -> u64 {
     120
 }
 
+/// `scr_adr_next_char_line` (`compDownScrAdr_HL`, `0x8445`): продолжение
+/// расчёта экранного адреса при переходе на строку чартов ниже.
+///
+/// ```text
+/// ld a,l ; add a,20h ; ld l,a ; ret c ; ld a,h ; sub 8 ; ld h,a ; ret
+/// ```
+fn scr_adr_next_char_line_hook(cpu: &mut Z80, _m: &mut Spectrum) -> u64 {
+    let sum = cpu.add8(cpu.l, 0x20, 0);
+    cpu.a = sum;
+    cpu.l = sum;
+    if cpu.f & CF != 0 {
+        return 26; // ld a,l(4)+add a,20h(7)+ld l,a(4)+ret c(11)
+    }
+    let d = cpu.sub8(cpu.h, 8, 0);
+    cpu.a = d;
+    cpu.h = d;
+    45 // 4+7+4+5 + 4+7+4+10
+}
+
+/// `scr_adr_next_line` (`sub_7FE7`, `0x7FE7`): переход экранного адреса на
+/// одну пиксельную строку вниз.
+///
+/// ```text
+/// inc h ; ld a,h ; and 7 ; call z, compDownScrAdr_HL ; ret
+/// ```
+fn scr_adr_next_line_hook(cpu: &mut Z80, m: &mut Spectrum) -> u64 {
+    let h = cpu.h.wrapping_add(1);
+    cpu.h = h;
+    let a = cpu.and8(h, 7);
+    cpu.a = a;
+    if a != 0 {
+        return 35; // inc h(4)+ld a,h(4)+and 7(7)+call z not taken(10)+ret(10)
+    }
+    let inner = scr_adr_next_char_line_hook(cpu, m);
+    // 4+4+7+17 (вход в ветку) + 10 (финальный ret)
+    42 + inner
+}
+
 /// `sub_5DFB`: по коду символа в `A` выбирает базовый адрес шрифта.
 ///
 /// Возвращает значение `HL`: `0x3D00` для «печатных» символов (пробел, цифры
@@ -439,7 +486,7 @@ mod tests {
         FONT_BASE_CALLS.store(0, std::sync::atomic::Ordering::Relaxed);
         let mut plain = boot_kladov();
         let mut hooked = boot_kladov();
-        install(&mut hooked);
+        install(&mut hooked, true);
         for _ in 0..120 {
             plain.run_frame();
             hooked.run_frame();
@@ -521,7 +568,7 @@ mod tests {
     fn register_helpers_match_z80() {
         let mut z = kladov();
         let mut n = kladov();
-        install(&mut n);
+        install(&mut n, true);
         let cases: &[(u8, u16, u16, u8)] = &[
             (0x00, 0x0000, 0x0000, 0x00),
             (0x01, 0x0001, 0x0000, 0x00),
@@ -553,7 +600,7 @@ mod tests {
     fn mult_a_hib_c_matches_z80() {
         let mut z = kladov();
         let mut n = kladov();
-        install(&mut n);
+        install(&mut n, true);
         for b in 0u8..=255 {
             for c in 0u8..=255 {
                 z.cpu.b = b;
@@ -575,7 +622,7 @@ mod tests {
     fn pix_crd_2_scr_adr_matches_z80() {
         let mut z = kladov();
         let mut n = kladov();
-        install(&mut n);
+        install(&mut n, true);
         for x in 0u8..=255 {
             for y in 0u8..=255 {
                 z.cpu.a = x;
@@ -588,6 +635,66 @@ mod tests {
                 let ns = hook_sub(&mut n, 0xE621);
                 assert_eq!(zs, ns, "PixCrd2ScrAdr: x={x:02X} y={y:02X}");
             }
+        }
+    }
+
+    #[test]
+    fn scr_adr_next_char_line_matches_z80() {
+        let mut z = kladov();
+        let mut n = kladov();
+        install(&mut n, true);
+        for hl in 0..=0xFFFFu16 {
+            let h = (hl >> 8) as u8;
+            let l = hl as u8;
+            z.cpu.h = h;
+            z.cpu.l = l;
+            z.cpu.a = 0x55;
+            z.cpu.b = 0xAA;
+            z.cpu.c = 0x33;
+            z.cpu.d = 0xCC;
+            z.cpu.e = 0x77;
+            z.cpu.f = hl as u8 ^ ((hl >> 8) as u8);
+            n.cpu.h = h;
+            n.cpu.l = l;
+            n.cpu.a = 0x55;
+            n.cpu.b = 0xAA;
+            n.cpu.c = 0x33;
+            n.cpu.d = 0xCC;
+            n.cpu.e = 0x77;
+            n.cpu.f = z.cpu.f;
+            let zs = z80_sub(&mut z, 0x8445);
+            let ns = hook_sub(&mut n, 0x8445);
+            assert_eq!(zs, ns, "compDownScrAdr_HL hl=0x{hl:04X}");
+        }
+    }
+
+    #[test]
+    fn scr_adr_next_line_matches_z80() {
+        let mut z = kladov();
+        let mut n = kladov();
+        install(&mut n, true);
+        for hl in 0..=0xFFFFu16 {
+            let h = (hl >> 8) as u8;
+            let l = hl as u8;
+            z.cpu.h = h;
+            z.cpu.l = l;
+            z.cpu.a = 0x12;
+            z.cpu.b = 0x34;
+            z.cpu.c = 0x56;
+            z.cpu.d = 0x78;
+            z.cpu.e = 0x9A;
+            z.cpu.f = hl as u8;
+            n.cpu.h = h;
+            n.cpu.l = l;
+            n.cpu.a = 0x12;
+            n.cpu.b = 0x34;
+            n.cpu.c = 0x56;
+            n.cpu.d = 0x78;
+            n.cpu.e = 0x9A;
+            n.cpu.f = z.cpu.f;
+            let zs = z80_sub(&mut z, 0x7FE7);
+            let ns = hook_sub(&mut n, 0x7FE7);
+            assert_eq!(zs, ns, "sub_7FE7 hl=0x{hl:04X}");
         }
     }
 

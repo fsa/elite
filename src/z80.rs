@@ -10,14 +10,14 @@ pub trait Bus {
     fn output(&mut self, port: u16, val: u8);
 }
 
-const CF: u8 = 0x01;
-const NF: u8 = 0x02;
-const PF: u8 = 0x04;
-const XF: u8 = 0x08;
-const HF: u8 = 0x10;
-const YF: u8 = 0x20;
+pub(crate) const CF: u8 = 0x01;
+pub(crate) const NF: u8 = 0x02;
+pub(crate) const PF: u8 = 0x04;
+pub(crate) const XF: u8 = 0x08;
+pub(crate) const HF: u8 = 0x10;
+pub(crate) const YF: u8 = 0x20;
 pub(crate) const ZF: u8 = 0x40;
-const SF: u8 = 0x80;
+pub(crate) const SF: u8 = 0x80;
 
 #[derive(Clone)]
 pub struct Z80 {    pub a: u8,
@@ -126,7 +126,7 @@ impl Z80 {
         r
     }
     #[inline]
-    fn add8(&mut self, a: u8, v: u8, carry: u8) -> u8 {
+    pub(crate) fn add8(&mut self, a: u8, v: u8, carry: u8) -> u8 {
         let r16 = a as u16 + v as u16 + carry as u16;
         let r = r16 as u8;
         self.f = if r == 0 { ZF } else { 0 }
@@ -148,7 +148,7 @@ impl Z80 {
         r
     }
     #[inline]
-    fn and8(&mut self, a: u8, v: u8) -> u8 {
+    pub(crate) fn and8(&mut self, a: u8, v: u8) -> u8 {
         let r = a & v;
         self.f = HF | (r & (SF | XF | YF)) | if r == 0 { ZF } else { 0 } | if parity(r) { PF } else { 0 };
         r
