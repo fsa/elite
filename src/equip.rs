@@ -116,6 +116,15 @@ const FUEL_MAX: u8 = 70;
 const MISSILES_MAX: u8 = 4;
 /// Тонн добавляет большой грузовой отсек (`add a,0Fh`).
 const BAY_TONS: u8 = 15;
+/// Ширина колонки названий: самое длинное — «GALACTIC HYPERSPACE» (19).
+const NAME_CHARS: i32 = 19;
+/// Ширина колонки цены: влезает и «6000.0», и «FITTED».
+const PRICE_CHARS: i32 = 7;
+/// Ширина списка в символах: рамка + номер 2 + зазор + имя 19 + зазор +
+/// цена 7 + отступ (см. [`Shop::geo`]).
+const LIST_CHARS: i32 = 1 + 2 + 1 + NAME_CHARS + 1 + PRICE_CHARS + 1;
+/// Минимум символов, оставляемых панели корабля (описания переносятся).
+const PANEL_MIN_CHARS: i32 = 18;
 /// Сколько кадров показывается тост (~5 с при 50 к/с).
 const TOAST_FRAMES: u32 = 250;
 
@@ -208,6 +217,35 @@ fn fmt_tenths(t: u32) -> String {
     format!("{}.{}", t / 10, t % 10)
 }
 
+/// Топливо в десятых долях светового года: `70` → «7.0» (как в игре,
+/// где `Pilot_Fuel` хранит `0x46` = 7.0 св. года).
+fn fmt_fuel(tenths: u8) -> String {
+    format!("{}.{}", tenths / 10, tenths % 10)
+}
+
+/// Разбить текст на строки не длиннее `cols` символов по словам.
+fn wrap(text: &str, cols: usize) -> Vec<String> {
+    let cols = cols.max(1);
+    let mut out = Vec::new();
+    let mut line = String::new();
+    for word in text.split_whitespace() {
+        if !line.is_empty() && line.chars().count() + 1 + word.chars().count() > cols {
+            out.push(std::mem::take(&mut line));
+        }
+        if !line.is_empty() {
+            line.push(' ');
+        }
+        line.push_str(word);
+    }
+    if !line.is_empty() {
+        out.push(line);
+    }
+    if out.is_empty() {
+        out.push(String::new());
+    }
+    out
+}
+
 /// Геометрия окна для отрисовки и попадания мышью (считается из размера
 /// окна и числа строк списка).
 #[derive(Clone, Copy)]
@@ -230,9 +268,10 @@ struct Geo {
     list_w: usize,
     x_num: i32,
     x_name: i32,
-    /// Правая граница колонки цены (цена выравнивается вправо).
+    /// Правая граница колонки цены (цена/«FITTED» выравниваются вправо).
     x_price: i32,
-    x_stat: i32,
+    /// Ширина колонки цены в символах.
+    price_w: i32,
     /// Панель корабля справа.
     panel_x: i32,
     panel_w: usize,
@@ -723,7 +762,11 @@ impl Shop {
     // ————— Геометрия —————
 
     fn geo(&self) -> Geo {
-        let ts = ((self.win_h as f32 / 300.0).floor().max(1.0)) as usize;
+        // Масштаб подбирается и по высоте (строки), и по ширине: список
+        // занимает ровно свои колонки, всё остальное — панель корабля.
+        let ts_h = (self.win_h as i32 / 300).max(1);
+        let ts_w = (self.win_w as i32 / ((LIST_CHARS + PANEL_MIN_CHARS + 6) * 8)).max(1);
+        let ts = ts_h.min(ts_w) as usize;
         let ch = 8 * ts as i32;
         let line = ch;
         let x0 = 2 * ch;
@@ -732,8 +775,8 @@ impl Shop {
         let top = 4 * ts as i32 + 8 * title_ts as i32 + line + 8 * ts as i32;
         let help_y = self.win_h as i32 - line - 6 * ts as i32;
         let content_bottom = help_y - 4 * ts as i32;
-        // Список слева (4+20+10+6 колонок символов + отступы) и панель справа.
-        let list_w = (44 * ch).max(0) as usize;
+        // Слева — только колонки списка, остальная ширина уходит панели.
+        let list_w = (LIST_CHARS * ch).max(0) as usize;
         let panel_x = x0 + list_w as i32 + 2 * ch;
         let panel_w = (self.win_w as i32 - panel_x - x0).max(0) as usize;
         let list_y = top + 2 * ts as i32;
@@ -747,10 +790,10 @@ impl Shop {
             list_y,
             row_h,
             list_w,
-            x_num: x0 + 2 * ch,
-            x_name: x0 + 6 * ch,
-            x_price: x0 + 29 * ch,
-            x_stat: x0 + 31 * ch,
+            x_num: x0 + 1 * ch,
+            x_name: x0 + 4 * ch,
+            x_price: x0 + (4 + NAME_CHARS + 1 + PRICE_CHARS) * ch,
+            price_w: PRICE_CHARS,
             panel_x,
             panel_w,
             help_y,
@@ -838,17 +881,19 @@ impl Shop {
             f.draw_text(font, g.x_num, ty, &num_s, TEXT_DIM, ts);
             let name_color = if fitted { FITTED_FG } else { TEXT };
             f.draw_text(font, g.x_name, ty, item.name, name_color, ts);
-            // Цена показывается «как в оригинале» (со сдвигом бага Elite).
-            let price_s = format!("{:>8}", fmt_tenths(self.price_shown(mem, number)));
-            let px = g.x_price - price_s.len() as i32 * ch;
-            f.draw_text(font, px, ty, &price_s, PRICE_FG, ts);
-            let stat = match item.kind {
-                Kind::Fuel => format!("{}/{}", self.fuel, FUEL_MAX),
-                Kind::Missile => format!("{}/{}", self.missiles, MISSILES_MAX),
-                _ if fitted => "FITTED".to_string(),
-                _ => String::new(),
+            // На месте цены у установленного товара — «FITTED» (иначе
+            // название и цена налезали бы друг на друга на узком списке).
+            // Иначе цена показывается «как в оригинале» (со сдвигом бага Elita).
+            let (price_s, price_color) = if fitted {
+                ("FITTED".to_string(), FITTED_FG)
+            } else {
+                (
+                    format!("{:>w$}", fmt_tenths(self.price_shown(mem, number)), w = g.price_w as usize),
+                    PRICE_FG,
+                )
             };
-            f.draw_text(font, g.x_stat, ty, &stat, FITTED_FG, ts);
+            let px = g.x_price - price_s.len() as i32 * ch;
+            f.draw_text(font, px, ty, &price_s, price_color, ts);
         }
         f.clear_clip();
 
@@ -860,56 +905,55 @@ impl Shop {
             f.hline(g.panel_x, g.list_y + ph as i32 - 1, g.panel_w, BORDER);
             f.vline(g.panel_x, g.list_y, ph, BORDER);
             f.vline(g.panel_x + g.panel_w as i32 - 1, g.list_y, ph, BORDER);
-            let mut py = g.list_y + 2 * ts as i32;
             let px = g.panel_x + 2 * ch;
+            // Ширина панели в символах (за вычетом рамки и боковых отступов).
+            let pch = (g.panel_w as i32 / ch - 4).max(1) as usize;
             let step = line + 2 * ts as i32;
-            {
-                // Замыкание печатает строку и опускает курсор на шаг вниз
-                // (живёт только внутри этого блока — `py` свободна дальше).
-                let mut put = |f: &mut Frame, s: &str, c: u32| {
-                    f.draw_text(font, px, py, s, c, ts);
-                    py += step;
-                };
-                put(f, "YOUR SHIP", TEXT);
-                put(
-                    f,
-                    &format!("FUEL       {}/{}", self.fuel, FUEL_MAX),
+            let mut texts: Vec<(String, u32)> = vec![
+                ("YOUR SHIP".to_string(), TEXT),
+                (
+                    format!("{:<9}{}/{} LY", "FUEL", fmt_fuel(self.fuel), fmt_fuel(FUEL_MAX)),
                     TEXT_DIM,
-                );
-                put(
-                    f,
-                    &format!("MISSILES   {}/{}", self.missiles, MISSILES_MAX),
+                ),
+                (
+                    format!("{:<9}{}/{}", "MISSILES", self.missiles, MISSILES_MAX),
                     TEXT_DIM,
-                );
-                put(f, &format!("CARGO      {} T", self.free_cargo), TEXT_DIM);
-                put(f, "LASERS", TEXT);
-                for (i, m) in MOUNTS.iter().enumerate() {
-                    put(
-                        f,
-                        &format!("  {:<7}{}", m, laser_name(self.lasers[i])),
-                        TEXT_DIM,
-                    );
-                }
+                ),
+                (
+                    format!("{:<9}{} T", "CARGO", self.free_cargo),
+                    TEXT_DIM,
+                ),
+                ("LASERS".to_string(), TEXT),
+            ];
+            for (i, m) in MOUNTS.iter().enumerate() {
+                texts.push((
+                    format!("{:<7}{}", m, laser_name(self.lasers[i])),
+                    TEXT_DIM,
+                ));
             }
-            // Описание выбранного/наведённого товара.
-            let row = self.hover.or(Some(self.cursor));
-            if let Some(i) = row {
+            // Описание выбранного/наведённого товара; длинные подсказки
+            // переносятся по словам под ширину панели.
+            if let Some(i) = self.hover.or(Some(self.cursor)) {
                 if let Some(&number) = self.rows.get(i) {
                     let item = &ITEMS[(number - 1) as usize];
-                    py += line / 2;
-                    let mut put = |f: &mut Frame, s: &str, c: u32| {
-                        f.draw_text(font, px, py, s, c, ts);
-                        py += step;
-                    };
-                    put(f, item.name, TEXT);
-                    put(
-                        f,
-                        &format!("{} CR", fmt_tenths(self.price(mem, number))),
+                    texts.push((String::new(), TEXT_DIM));
+                    texts.push((item.name.to_string(), TEXT));
+                    texts.push((
+                        format!("{} CR", fmt_tenths(self.price(mem, number))),
                         PRICE_FG,
-                    );
-                    put(f, item.desc, TEXT_DIM);
+                    ));
+                    for l in wrap(item.desc, pch) {
+                        texts.push((l, TEXT_DIM));
+                    }
                 }
             }
+            f.set_clip(g.panel_x, g.list_y, g.panel_w, ph);
+            let mut py = g.list_y + 2 * ts as i32;
+            for (s, c) in &texts {
+                f.draw_text(font, px, py, s, *c, ts);
+                py += step;
+            }
+            f.clear_clip();
         }
 
         // ——— Окно выбора крепления лазера ———
@@ -1366,6 +1410,32 @@ mod tests {
             shop.draw(&mut f, &font, &mem);
         }
         assert_eq!(shop.toast_text(), None, "тост не погас");
+    }
+
+    /// Раскладка: колонка цен не налезает на имена, панель корабля получает
+    /// заметную часть ширины, а топливо показывается в световых годах
+    /// (байт `70` = 7.0 св. года, как в оригинале).
+    #[test]
+    fn layout_has_room_for_prices_and_panel() {
+        let (mut shop, _mem) = opened();
+        shop.win_w = 1024;
+        shop.win_h = 768;
+        let g = shop.geo();
+        let name_right = g.x_name + NAME_CHARS * g.ch;
+        let price_left = g.x_price - PRICE_CHARS * g.ch;
+        assert!(
+            price_left >= name_right + g.ch,
+            "цена налезает на название: {price_left} < {name_right}"
+        );
+        assert!(
+            g.panel_w >= 20 * g.ch as usize,
+            "панель слишком узкая: {}px",
+            g.panel_w
+        );
+        assert_eq!(fmt_fuel(70), "7.0");
+        assert_eq!(fmt_fuel(0), "0.0");
+        assert_eq!(fmt_fuel(35), "3.5");
+        assert!(wrap("survive ship destruction", 20).len() >= 2);
     }
 
     /// Отладочный дамп экрана в `tmp/equip.ppm` по данным образа Кладова:
