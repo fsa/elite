@@ -31,7 +31,7 @@ const FIELD_BG: u32 = 0xFF00_1018;
 /// Рамка поля.
 const BORDER: u32 = 0xFF30_6070;
 /// Радиус планеты: доля игрового радиуса (`3..5`) на единицу масштаба поля.
-const PLANET_RADIUS: f32 = 0.25;
+const PLANET_RADIUS: f32 = 0.16;
 /// Кольцо вокруг текущей системы (ЛАВЕ и т.п.).
 const SYS_RING: u32 = 0xFFFF_FF80;
 /// Кольцо вокруг планеты, ближайшей к курсору.
@@ -494,6 +494,26 @@ impl Map {
             let p = &self.planets[i];
             if let Some((sx, sy)) = place(p.x, p.y() - FIELD_TOP) {
                 f.circle(sx, sy, planet_px(p, l.scale) + 1, SYS_RING);
+            }
+        }
+
+        // Названия планет (как на детальной карте по O) — только при крупном зуме,
+        // когда планет в кадре немного, иначе надписи сливаются.
+        let mut visible_count: usize = 0;
+        for p in &self.planets {
+            if place(p.x, p.y() - FIELD_TOP).is_some() {
+                visible_count += 1;
+            }
+        }
+        if visible_count < 40 {
+            for p in &self.planets {
+                if let Some((sx, sy)) = place(p.x, p.y() - FIELD_TOP) {
+                    let name = self.name_of(p.index);
+                    let px = planet_px(p, l.scale);
+                    let tx = sx + px + 3 * ts as i32;
+                    let ty = sy - 3 * ts as i32;
+                    f.draw_text(font, tx, ty, &name, TEXT, ts);
+                }
             }
         }
 
