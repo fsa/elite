@@ -1,5 +1,6 @@
 mod audio;
 mod display;
+mod equip;
 mod galaxy;
 mod hdmap;
 mod machine;
@@ -119,7 +120,8 @@ fn parse_args() -> Options {
                 println!("  --native   включить нативные (Rust) замены подпрограмм");
                 println!("  --save FILE фиксированный файл командира вместо диалога");
                 println!("  --fullscreen запуск в полноэкранном режиме (borderless)");
-                println!("В игре: F10 — карта галактики (нативная), Esc — пауза,");
+                println!("В игре: F10 — карта галактики (нативная), F4 — закупка");
+                println!("        оборудования (нативная), Esc — пауза,");
                 println!("        F11 — полный экран, F5/F9 — сохранить/загрузить.");
                 println!();
                 println!("Экран: ZX-кадр 256x192 показывается целым множителем (чёткие");
@@ -128,6 +130,7 @@ fn parse_args() -> Options {
                 println!();
                 println!("Управление:");
                 println!("  Esc        пауза");
+                println!("  F4         закупка оборудования (нативный экран)");
                 println!("  F9         загрузить командира");
                 println!("  F5         сохранить командира");
                 println!("  F11, Alt+Enter полный экран");
@@ -136,6 +139,10 @@ fn parse_args() -> Options {
                 println!("Карта галактики (F10): стрелки/NM/XS — курсор, Enter —");
                 println!("  ближайшая планета, +/- или колесо — масштаб, F1 — чит:");
                 println!("  телепорт на станцию выбранной планеты, Esc — закрыть.");
+                println!();
+                println!("Закупка оборудования (F4): клик/Enter — купить,");
+                println!("  1-9 (+вторая цифра) — номер товара, стрелки — выбор,");
+                println!("  0-3 — крепление лазера, Esc — закрыть.");
                 exit(0);
             }
             other => opts.game = other.to_string(),
@@ -679,6 +686,8 @@ struct App<'a> {
     menu: bool,
     /// Отдельная нативная карта галактики (F10) — заменяет экран игры.
     hdmap: hdmap::Map,
+    /// Нативный экран закупки оборудования (F4) — заменяет экран игры.
+    shop: equip::Shop,
     quit: bool,
     buf: Vec<u32>,
     window: Option<Rc<Window>>,
@@ -716,6 +725,7 @@ impl<'a> App<'a> {
             last_path: String::new(),
             menu: false,
             hdmap: hdmap::Map::new(),
+            shop: equip::Shop::new(),
             quit: false,
             buf: vec![0u32; SRC_W * SRC_H],
             window: None,
@@ -747,7 +757,7 @@ impl<'a> App<'a> {
             return;
         }
         let attrs = Window::default_attributes()
-            .with_title("Elite — Esc: пауза, F10: карта, F11: полный экран, Ctrl+Q: выход")
+            .with_title("Elite — Esc: пауза, F10: карта, F4: закупка, F11: полный экран, Ctrl+Q: выход")
             .with_inner_size(LogicalSize::new(4.0 * SRC_W as f64, 4.0 * SRC_H as f64));
         let window = match event_loop.create_window(attrs) {
             Ok(w) => Rc::new(w),
@@ -808,6 +818,30 @@ impl<'a> App<'a> {
                     let size = w.inner_size();
                     self.hdmap.resize(size.width, size.height);
                 }
+                self.shop.close();
+                self.menu = false;
+            }
+            return;
+        }
+        // F4 — нативный экран закупки оборудования (EQUIP SHIP). Отдельный
+        // полноэкранный экран: игра на паузе, данные читаются и пишутся прямо
+        // в живой блок командира (покупки настоящие).
+        if code == KeyCode::F4 && !repeat {
+            if self.shop.active {
+                self.shop.close();
+            } else {
+                let layout = if self.opts.kladov {
+                    equip::KLADOV_SHOP
+                } else {
+                    equip::ELITE_SHOP
+                };
+                self.shop.open(&self.machine.mem, layout);
+                // Размер окна — чтобы попадание мышью работало до первого кадра.
+                if let Some(w) = &self.window {
+                    let size = w.inner_size();
+                    self.shop.resize(size.width, size.height);
+                }
+                self.hdmap.close();
                 self.menu = false;
             }
             return;
@@ -835,6 +869,29 @@ impl<'a> App<'a> {
                 KeyCode::Minus | KeyCode::NumpadSubtract => self.hdmap.zoom_by(-1),
                 KeyCode::Escape if !repeat => self.hdmap.close(),
                 _ => {}
+            }
+            return;
+        }
+        // При открытом экране закупки всё управление принадлежит ему.
+        if self.shop.active {
+            match code {
+                KeyCode::Escape if !repeat => {
+                    if self.shop.mount_open() {
+                        self.shop.cancel_mount();
+                    } else {
+                        self.shop.close();
+                    }
+                }
+                KeyCode::ArrowUp => self.shop.move_selection(-1),
+                KeyCode::ArrowDown => self.shop.move_selection(1),
+                KeyCode::Enter | KeyCode::Space if !repeat => {
+                    self.shop.confirm(&mut self.machine.mem);
+                }
+                _ => {
+                    if let Some(d) = digit_of(code) {
+                        self.shop.input_digit(&mut self.machine.mem, d);
+                    }
+                }
             }
             return;
         }
@@ -879,7 +936,7 @@ impl<'a> App<'a> {
     fn apply_input(&mut self) {
         self.machine.release_all_keys();
         self.machine.release_joystick();
-        if self.menu || self.hdmap.active {
+        if self.menu || self.hdmap.active || self.shop.active {
             return;
         }
         for (row, bits) in self.matrix.iter().enumerate() {
@@ -924,8 +981,9 @@ impl<'a> App<'a> {
         // во время эмуляции, показ накладывает слой поверх ZX-кадра.
         let size = window.inner_size();
         let layout = display::layout(size.width, size.height);
-        if self.hdmap.active {
-            // Отдельная карта галактики: HD-слой во всё окно, игра на паузе.
+        if self.hdmap.active || self.shop.active {
+            // Отдельный нативный экран (карта/закупка): HD-слой во всё окно,
+            // игра на паузе.
             self.machine.hd.resize(size.width as usize, size.height as usize);
             self.machine.hd.clear(display::TRANSPARENT);
             self.machine.release_all_keys();
@@ -959,6 +1017,9 @@ impl<'a> App<'a> {
         self.machine.render_rgba(&mut self.buf);
         if self.hdmap.active {
             self.hdmap.draw(&mut self.machine.hd, &self.font);
+        } else if self.shop.active {
+            self.shop
+                .draw(&mut self.machine.hd, &self.font, &self.machine.mem);
         } else if self.menu {
             // Меню паузы — в HD-слой, чтобы текст был чётким в любом окне.
             draw_pause_menu(&mut self.machine.hd, &self.font);
@@ -990,9 +1051,9 @@ impl<'a> App<'a> {
         let (ow, oh) = (w as usize, h as usize);
         // Фон окна — чёрные поля вокруг области 4:3.
         out.fill(0);
-        // Отдельная карта галактики показывается вместо ZX-кадра: слой
-        // непрозрачный и покрывает всё окно.
-        if self.hdmap.active {
+        // Отдельный нативный экран (карта/закупка) показывается вместо
+        // ZX-кадра: слой непрозрачный и покрывает всё окно.
+        if self.hdmap.active || self.shop.active {
             self.machine.hd.composite_onto(&mut out, ow, oh, 0, 0);
             window.pre_present_notify();
             let _ = out.present();
@@ -1053,6 +1114,11 @@ impl<'a> ApplicationHandler for App<'a> {
                     self.hdmap.point_at(position.x, position.y);
                     return;
                 }
+                // При открытом экране закупки мышь наводит строку списка.
+                if self.shop.active {
+                    self.shop.point_at(position.x, position.y);
+                    return;
+                }
                 // Координаты окна -> координаты экрана игры (целый масштаб,
                 // та же математика, что в `present`).
                 if let Some(w) = &self.window {
@@ -1078,6 +1144,13 @@ impl<'a> ApplicationHandler for App<'a> {
                 if self.hdmap.active {
                     if button == MouseButton::Left && pressed {
                         self.hdmap.snap_to_nearest();
+                    }
+                    return;
+                }
+                // При открытом экране закупки ЛКМ покупает строку/вариант.
+                if self.shop.active {
+                    if button == MouseButton::Left && pressed {
+                        self.shop.click(&mut self.machine.mem);
                     }
                     return;
                 }
@@ -1182,6 +1255,23 @@ fn matrix_pos(code: KeyCode) -> Option<(usize, u8)> {
         .iter()
         .find(|&&(c, _, _)| c == code)
         .map(|&(_, row, bit)| (row, bit))
+}
+
+/// Цифра физической клавиши (верхний ряд или цифровой блок), 0..9.
+fn digit_of(code: KeyCode) -> Option<u8> {
+    Some(match code {
+        KeyCode::Digit0 | KeyCode::Numpad0 => 0,
+        KeyCode::Digit1 | KeyCode::Numpad1 => 1,
+        KeyCode::Digit2 | KeyCode::Numpad2 => 2,
+        KeyCode::Digit3 | KeyCode::Numpad3 => 3,
+        KeyCode::Digit4 | KeyCode::Numpad4 => 4,
+        KeyCode::Digit5 | KeyCode::Numpad5 => 5,
+        KeyCode::Digit6 | KeyCode::Numpad6 => 6,
+        KeyCode::Digit7 | KeyCode::Numpad7 => 7,
+        KeyCode::Digit8 | KeyCode::Numpad8 => 8,
+        KeyCode::Digit9 | KeyCode::Numpad9 => 9,
+        _ => return None,
+    })
 }
 
 /// Бит джойстика Kempston: курсорные клавиши — направления, правая Ctrl — огонь.
@@ -1345,5 +1435,35 @@ mod intro_tests {
         assert!(app.hdmap.active);
         app.key_event(KeyCode::Escape, true, false);
         assert!(!app.hdmap.active, "Esc не закрыл карту");
+    }
+
+    /// F4 открывает нативный экран закупки: игра на паузе, ввод уходит
+    /// экрану (не эмулятору), Esc/F4 возвращают экран игры.
+    #[test]
+    fn f4_opens_and_closes_equip_shop() {
+        let opts = test_options();
+        let mut app = App::new(boot(), &opts);
+        assert!(!app.shop.active);
+        app.key_event(KeyCode::F4, true, false);
+        assert!(app.shop.active, "F4 не открыл экран закупки");
+        assert!(!app.hdmap.active, "карта галактики не должна открыться");
+        // Экран снят данные живого командира (раскладка Elite: `--elite`).
+        let p = equip::ELITE_SHOP.pilot as usize;
+        let cash = u16::from_le_bytes([app.machine.mem[p + 18], app.machine.mem[p + 19]]) as u32 * 10000
+            + u16::from_le_bytes([app.machine.mem[p + 20], app.machine.mem[p + 21]]) as u32;
+        assert_eq!(app.shop.cash_tenths(), cash, "деньги не из памяти игры");
+        // Пока экран открыт, ввод не попадает в эмулятор.
+        app.apply_input();
+        assert_eq!(app.machine.kempston, 0, "ввод не должен уходить в игру");
+        // Стрелка двигает выбор списка, а не корабль.
+        app.key_event(KeyCode::ArrowDown, true, false);
+        // Esc закрывает экран (окна крепления не было).
+        app.key_event(KeyCode::Escape, true, false);
+        assert!(!app.shop.active, "Esc не закрыл экран закупки");
+        // Повторное открытие и закрытие по F4.
+        app.key_event(KeyCode::F4, true, false);
+        assert!(app.shop.active);
+        app.key_event(KeyCode::F4, true, false);
+        assert!(!app.shop.active, "F4 не закрыл экран закупки");
     }
 }
