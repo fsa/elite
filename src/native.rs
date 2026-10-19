@@ -88,6 +88,31 @@ pub struct SaveLayout {
     /// срабатывает каждый кадр. Родная рутина в версии Кладова уходит в TR-DOS
     /// (`jp 0x3D2F`) с пейджингом 128K — в 48K-ядре это не работает.
     pub menu_save_load: u16,
+    /// Адрес вызова `MenuSaveLoad` в главном цикле (у Кладова `0x749F`, в
+    /// оригинале `0x72B5`). Сюда встаёт [`request_load`], минуя проверку
+    /// клавиши движения, — игра сама вызывает хук и уходит на перезапуск.
+    pub menu_save_load_callsite: u16,
+    /// Родная `SaveCocpitInBuffer` — сохраняет текущий экран в буфер кокпита
+    /// (`DataCocpit` и `0x5B00`).
+    ///
+    /// Буфер кокпита актуален только на станции: его обновляет эта рутина при
+    /// стыковке (`call SaveCocpitInBuffer` в `LaunchDocking`). В полёте его
+    /// затирает буфер космического вида, а родная игра в полёте загрузку и не
+    /// разрешает. [`request_load`] же работает в любом состоянии, поэтому перед
+    /// перезапуском [`load_gate`] вызывает эту рутину, чтобы перезапуск нарисовал
+    /// кокпит, а не мусор.
+    pub save_cocpit: Option<u16>,
+    /// Адрес ветки «в полёте» (`jr nz, <полёт>`) перед вызовом
+    /// `MenuSaveLoad` (у Кладова `0x7493`, в оригинале `0x72A9`).
+    ///
+    /// Родная игра разрешает сохранение/загрузку только на станции
+    /// (`IndDanger == 0`); в полёте эта ветка пропускает вызов `MenuSaveLoad`.
+    /// [`request_load`] ставит сюда одноразовый `gate_hook`, чтобы загрузка
+    /// работала и в полёте.
+    pub load_gate: Option<u16>,
+    /// Одноразовая нативная замена ветки `jr nz, <полёт>`: переводит
+    /// управление на [`Self::menu_save_load_callsite`] (см. [`request_load`]).
+    gate_hook: Hook,
     /// Первая из четырёх «залипающих» ячеек клавиш (`ControlKey1`).
     ///
     /// Родная `ResetPressedKeys` обнуляет четыре байта начиная отсюда:
@@ -106,23 +131,6 @@ pub struct SaveLayout {
     /// `sub_D41B`) — на два байта больше: `PilotMission1_1` и
     /// `Pilot_CrdXTarget`.
     pub commander_len: usize,
-    /// Точка входа перезапуска игры после загрузки — ветка `jp nz` главного
-    /// цикла (см. комментарий к [`menu_save_load`]): в оригинале `loc_71BE`,
-    /// у Кладова `loc_7394`. Игра заново проходит стартовую последовательность
-    /// и оказывается пристыкованной на станции системы из загруженного сейва.
-    pub restart_entry: u16,
-    /// Адрес рутины `SaveCocpitInBuffer` (`0x817E` у Кладова, `0x8F42` в
-    /// оригинале).
-    ///
-    /// Родной путь к перезапуску — `call SaveCocpitInBuffer; call MenuSaveLoad;
-    /// jp nz, restart_entry` (в оригинале `BeginGame+4D`, у Кладова ветка
-    /// `jp nz, loc_7394` главного цикла). Рутина сохраняет экран в буфер
-    /// кокпита: `0x5000..0x57FF`→`DataCocpit` и `0x5A00..0x5AFF`→`0x5B00`.
-    /// В [`restart_after_load`] её обязательно нужно выполнить до входа в
-    /// [`restart_entry`]: `PrnCocpit_Ifn` в точке перезапуска восстанавливает
-    /// экран именно из этих буферов, а без свежего копирования туда попадут
-    /// остатки прошлого полёта (см. журнал `PLAN.md`).
-    pub save_cocpit: u16,
     /// Теневой буфер, из которого `InitGame` восстанавливает пилота, и его
     /// длина.
     ///
@@ -153,11 +161,13 @@ pub struct SaveLayout {
 /// Раскладка версии Кладова (`zx_bin/kladov.bin`).
 pub const KLADOV_SAVE: SaveLayout = SaveLayout {
     menu_save_load: 0xD04E,
+    menu_save_load_callsite: 0x749F,
+    save_cocpit: Some(0x817E),
+    load_gate: Some(0x7493),
+    gate_hook: load_gate_kladov_hook,
     control_key1: 0xFC08,
     pilot_name: 0xD054,
     commander_len: 0x66,
-    restart_entry: 0x7394,
-    save_cocpit: 0x817E,
     pilot_shadow: Some((0xD232, 0x66)),
     sun_crd: 0x7107,
     hook: menu_save_load_kladov_hook,
@@ -166,11 +176,13 @@ pub const KLADOV_SAVE: SaveLayout = SaveLayout {
 /// Раскладка оригинальной версии (`zx_bin/elite.bin`).
 pub const ELITE_SAVE: SaveLayout = SaveLayout {
     menu_save_load: 0xD2E4,
+    menu_save_load_callsite: 0x72B5,
+    save_cocpit: Some(0x8F40),
+    load_gate: Some(0x72A9),
+    gate_hook: load_gate_elite_hook,
     control_key1: 0xFC0E,
     pilot_name: 0xA816,
     commander_len: 0x68,
-    restart_entry: 0x71BE,
-    save_cocpit: 0x8F42,
     pilot_shadow: Some((0xA910, 0x66)),
     sun_crd: 0x7065,
     hook: menu_save_load_elite_hook,
@@ -230,38 +242,65 @@ pub fn commander_load(
     Ok(())
 }
 
-/// Прервать текущий игровой процесс и перезапустить игру с только что
-/// загруженными данными командира.
+/// Попросить игру загрузиться с уже помещёнными в память данными командира
+/// (см. [`commander_load`]).
 ///
-/// Повторяет ветку `jp nz` главного цикла после `MenuSaveLoad` (в оригинале
-/// `loc_71BE`, у Кладова `loc_7394`): игра заново проходит стартовую
-/// последовательность (выбор корабля/устройства управления) и оказывается
-/// пристыкованной на станции системы из загруженного сейва.
-pub fn restart_after_load(m: &mut Spectrum, layout: SaveLayout) {
-    // Сбросить «залипшие» клавиши, как родная `ResetPressedKeys` в конце
-    // `MenuSaveLoad`: стартовая ветка ждёт отпускания клавиши, и без сброса
-    // можно застрять на этом ожидании.
-    let a = layout.control_key1 as usize;
-    m.mem[a..a + PRESSED_KEY_BYTES].fill(0);
+/// Загрузка выполняется родным путём: главный цикл вызывает `MenuSaveLoad`,
+/// перехват отвечает «загружено» (NZ) — и игра сама уходит на перезапуск
+/// (`jp nz, 0x7394` у Кладова): заново проходит стартовую последовательность и
+/// оказывается пристыкованной на станции системы из сейва.
+///
+/// Важно не подменять `PC`/`SP` вручную: вход в ветку перезапуска с кадровой
+/// границы (из произвольного места программы) ломает стек и через ~1000 кадров
+/// игру выносит в ПЗУ. Поэтому игра доходит до вызова сама.
+pub fn request_load(m: &mut Spectrum, layout: SaveLayout) {
+    m.load_requested = true;
     m.save_requested = false;
-    // Стартовая последовательность использует `halt`, поэтому прерывания
-    // должны быть разрешены (в оригинале после загрузки с ленты идёт `ei`).
-    m.cpu.iff1 = true;
-    m.cpu.iff2 = true;
-    // Родной путь к перезапуску — `call SaveCocpitInBuffer; call MenuSaveLoad;
-    // jp nz, restart_entry`. `MenuSaveLoad` мы подменяем хуком, но
-    // предшествующее копирование экрана в буфер кокпита (`0x5000`→DataCocpit,
-    // `0x5A00`→`0x5B00`) обязано произойти: `PrnCocpit_Ifn` в точке
-    // перезапуска восстанавливает экран именно из этих буферов, а без свежего
-    // копирования рядом с ними окажется мусор от прошлого полёта (сканер,
-    // записанный `CopyScaner2Scr`), который и разваливал картинку.
-    // Эмулируем `call SaveCocpitInBuffer`: кладём точку перезапуска как адрес
-    // возврата и входим в рутину.
-    let sp = m.cpu.sp.wrapping_sub(2);
-    m.mem[sp as usize] = (layout.restart_entry & 0xFF) as u8;
-    m.mem[sp as usize + 1] = (layout.restart_entry >> 8) as u8;
-    m.cpu.sp = sp;
-    m.cpu.pc = layout.save_cocpit;
+    // Родная игра разрешает сохранение/загрузку только на станции
+    // (`IndDanger == 0`); в полёте ветка `jr nz` уводит мимо вызова. Ставим
+    // одноразовый хук на эту ветку, чтобы загрузка работала в любом состоянии.
+    if let Some(gate) = layout.load_gate {
+        install_hook(m, gate, layout.gate_hook, 0);
+    }
+}
+
+/// Нативная замена ветки «в полёте» перед вызовом `MenuSaveLoad`: переводит
+/// управление прямо на вызов, как если бы игрок был на станции.
+///
+/// Перед этим обязательно вызывается родная `SaveCocpitInBuffer`
+/// ([`SaveLayout::save_cocpit`]): буфер кокпита актуален только на станции, а в
+/// полёте его затирает буфер космического вида. Без этого перезапуск нарисовал
+/// бы вместо кокпита мусор (перезапуск копирует `DataCocpit` на экран, а затем
+/// сохраняет получившийся экран обратно в буфер). Вызов делаем «вложенным»:
+/// кладём адрес возврата на стек игры и встаём на вход рутины — её `ret` вернёт
+/// управление на вызов `MenuSaveLoad`. Стек остаётся сбалансированным.
+fn load_gate(cpu: &mut Z80, m: &mut Spectrum, layout: SaveLayout) -> u64 {
+    if let Some(gate) = layout.load_gate {
+        m.hooks.remove(&gate);
+    }
+    // Хук подменяет `jr nz`: сам переход не выполняем, `PC`/`SP` задаём сами.
+    m.hook_yield = true;
+    match layout.save_cocpit {
+        Some(save) => {
+            let ret = layout.menu_save_load_callsite;
+            cpu.sp = cpu.sp.wrapping_sub(2);
+            m.mem[cpu.sp as usize] = ret as u8;
+            m.mem[cpu.sp.wrapping_add(1) as usize] = (ret >> 8) as u8;
+            cpu.pc = save;
+        }
+        None => cpu.pc = layout.menu_save_load_callsite,
+    }
+    0
+}
+
+/// Ветка «в полёте» для версии Кладова (`0x7493`).
+fn load_gate_kladov_hook(cpu: &mut Z80, m: &mut Spectrum) -> u64 {
+    load_gate(cpu, m, KLADOV_SAVE)
+}
+
+/// Ветка «в полёте» для оригинальной версии (`0x72A9`).
+fn load_gate_elite_hook(cpu: &mut Z80, m: &mut Spectrum) -> u64 {
+    load_gate(cpu, m, ELITE_SAVE)
 }
 
 /// Включить перехват игрового сохранения: при вызове `MenuSaveLoad` игра
@@ -282,15 +321,24 @@ pub fn install_save(m: &mut Spectrum, layout: SaveLayout) {
 /// открывается бесконечно). Хук подменяет рутину целиком, поэтому сброс
 /// делаем сами.
 ///
-/// Возвращает «не загружено» (A=0, Z=1), как и родная рутина при обычном
-/// возврате, чтобы главный цикл не уходил на ветку переинициализации вида
+/// Если приложение попросило загрузку ([`request_load`]), возвращает
+/// «загружено» (A=0, Z=0) — главный цикл уходит на ветку переинициализации
 /// (`jp nz, 0x7394` у Кладова, `jp nz, loc_71BE` в оригинале).
+///
+/// Иначе возвращает «не загружено» (A=0, Z=1), как родная рутина при обычном
+/// возврате: главный цикл только выставит `machine.save_requested`.
 fn menu_save_load(cpu: &mut Z80, m: &mut Spectrum, layout: SaveLayout) -> u64 {
     let a = layout.control_key1 as usize;
     m.mem[a..a + PRESSED_KEY_BYTES].fill(0);
-    m.save_requested = true;
     cpu.a = 0;
-    cpu.f |= ZF;
+    if m.load_requested {
+        m.load_requested = false;
+        m.save_requested = false;
+        cpu.f &= !ZF;
+    } else {
+        m.save_requested = true;
+        cpu.f |= ZF;
+    }
     0
 }
 
@@ -3990,35 +4038,30 @@ mod tests {
 
     /// Загрузка прерывает текущий процесс и перезапускает игру: пилот из файла
     /// сохраняется, а после стартовой последовательности корабль пристыкован
-    /// (`IndDanger=0`) — то есть мы на станции. Проверяем обе версии.
+    /// (`IndDanger=0`) — то есть мы на станции. Проверяем обе версии, причём
+    /// загрузку «в полёте» (родная игра разрешает её только на станции, поэтому
+    /// [`request_load`] обходит эту проверку).
     #[test]
     fn load_restarts_docked_with_saved_pilot() {
         let base = env!("CARGO_MANIFEST_DIR");
         let dir = format!("{base}/tmp");
         std::fs::create_dir_all(&dir).unwrap();
 
+        // Стартовая последовательность сначала ждёт отпускания клавиши, а
+        // затем её нажатия (выбор устройства управления). Подаём SPACE
+        // импульсами, чтобы попасть в оба состояния.
+        let impulse = |m: &mut Spectrum, f: u64| {
+            m.release_all_keys();
+            if f >= 30 && f % 16 < 6 {
+                m.set_key(7, 0, true);
+            }
+        };
+
         for (layout, ind_danger, mut m) in [
             (KLADOV_SAVE, 0x7104u16, boot_kladov()),
             (ELITE_SAVE, 0x7062u16, boot_elite()),
         ] {
             install_save(&mut m, layout);
-            // `save_cocpit` должен указывать на начало `SaveCocpitInBuffer`
-            // (`push af` = 0xF5), иначе перезапуск войдёт не в ту рутину.
-            assert_eq!(
-                m.mem[layout.save_cocpit as usize], 0xF5,
-                "save_cocpit 0x{:04X} — не начало SaveCocpitInBuffer",
-                layout.save_cocpit
-            );
-
-            // Стартовая последовательность сначала ждёт отпускания клавиши, а
-            // затем её нажатия (выбор устройства управления). Подаём SPACE
-            // импульсами, чтобы попасть в оба состояния.
-            let impulse = |m: &mut Spectrum, f: u64| {
-                m.release_all_keys();
-                if f >= 30 && f % 16 < 6 {
-                    m.set_key(7, 0, true);
-                }
-            };
 
             // Приводим игру в рабочее состояние и имитируем полёт.
             for f in 0..150u64 {
@@ -4038,24 +4081,12 @@ mod tests {
             std::fs::write(&path, &data).unwrap();
 
             commander_load(&mut m, &path, layout).unwrap();
-            restart_after_load(&mut m, layout);
-            // Вход идёт в `SaveCocpitInBuffer` (с адресом возврата на точке
-            // перезапуска), а не сразу в `restart_entry`.
-            assert_eq!(
-                m.cpu.pc, layout.save_cocpit,
-                "перезапуск не инициирован (0x{:04X})",
-                layout.save_cocpit
-            );
-            let ret = m.mem[m.cpu.sp as usize] as u16
-                | ((m.mem[m.cpu.sp as usize + 1] as u16) << 8);
-            assert_eq!(
-                ret, layout.restart_entry,
-                "адрес возврата не ведёт на точку перезапуска (0x{:04X})",
-                layout.restart_entry
-            );
+            request_load(&mut m, layout);
+            assert!(m.load_requested, "запрос загрузки не выставлен");
 
-            // Проходим стартовую последовательность до пристыковки.
-            for f in 0..700u64 {
+            // Игра сама доходит до вызова `MenuSaveLoad` и уходит на перезапуск;
+            // стартовая последовательность требует нажатия SPACE.
+            for f in 0..900u64 {
                 impulse(&mut m, f);
                 m.run_frame();
             }
@@ -4076,14 +4107,14 @@ mod tests {
         }
     }
 
-    /// Регрессия: после загрузки сейва и перезапуска экран не разваливается.
+    /// Регрессия: после загрузки сейва «в полёте» игра не разваливается.
     ///
-    /// Точка перезапуска (`loc_7394`) через `PrnCocpit_Ifn` восстанавливает
-    /// экран из буферов кокпита (`DataCocpit` = 0xC000 и `0x5B00`). Родной
-    /// путь входит туда после `SaveCocpitInBuffer`, поэтому в буферах лежит
-    /// свежий экран; без этого шага там остаются данные прошлого полёта
-    /// (сканер, который `CopyScaner2Scr` пишет в `0x5B00`), и атрибуты
-    /// заполняются мусором — «разваливающаяся» картинка после загрузки.
+    /// Загрузка выполняется родным путём (см. [`request_load`]): игра сама
+    /// уходит на перезапуск со своего главного цикла. Если же войти в ветку
+    /// перезапуска вручную с кадровой границы (минуя главный цикл), стек
+    /// постепенно уезжает в ПЗУ и через ~1000 кадров
+    /// игра «рассыпается»: атрибуты заполняются мусором, а `SP` уходит ниже
+    /// `0x4000`. Проверяем, что ни того, ни другого нет.
     #[test]
     fn load_restart_keeps_screen_clean() {
         let base = env!("CARGO_MANIFEST_DIR");
@@ -4091,7 +4122,7 @@ mod tests {
         std::fs::create_dir_all(&dir).unwrap();
 
         // В файле атрибутов (0x5800..0x5AFF) допустимы только 0x00/0x04/0x07
-        // и 0x17 (bright + ink 7). Всё остальное — мусор из буфера кокпита.
+        // и 0x17 (bright + ink 7). Всё остальное — мусор.
         let is_garbage = |v: u8| v & 0xF8 != 0 && v != 0x10 && v != 0x17;
 
         // Титул -> старт (импульсы SPACE), затем '1' — вылет со станции.
@@ -4104,36 +4135,52 @@ mod tests {
                 m.set_key(3, 0, true); // '1' = LaunchDocking
             }
         };
-        let run = |m: &mut Spectrum| {
-            for f in 0..1508u64 {
+        let run = |m: &mut Spectrum, n: u64| {
+            for f in 0..n {
                 frame_input(m, f);
                 m.run_frame();
             }
         };
 
-        // Полёт, в котором сохраняем сейв, затем загрузка и перезапуск.
-        let mut m = boot_kladov();
-        install_save(&mut m, KLADOV_SAVE);
-        run(&mut m);
-        let path = format!("{dir}/load_restart_screen.zxelite");
-        commander_save(&mut m, &path, KLADOV_SAVE).unwrap();
+        for (layout, ind_danger, mut m) in [
+            (KLADOV_SAVE, 0x7104u16, boot_kladov()),
+            (ELITE_SAVE, 0x7062u16, boot_elite()),
+        ] {
+            install_save(&mut m, layout);
+            // Полёт, в котором сохраняем сейв, затем загрузка и перезапуск.
+            run(&mut m, 1508);
+            let path = format!("{dir}/load_restart_screen_{:04X}.zxelite", layout.pilot_name);
+            commander_save(&mut m, &path, layout).unwrap();
+            commander_load(&mut m, &path, layout).unwrap();
+            request_load(&mut m, layout);
+            // Длинный прогон: прежний сломанный путь разваливался к ~1000 кадров.
+            run(&mut m, 3000);
+            let _ = std::fs::remove_file(&path);
 
-        commander_load(&mut m, &path, KLADOV_SAVE).unwrap();
-        restart_after_load(&mut m, KLADOV_SAVE);
-        run(&mut m);
-        let _ = std::fs::remove_file(&path);
-
-        assert_ne!(
-            m.mem[0x7104], 0,
-            "подготовка: после вылета корабль должен быть в полёте"
-        );
-        let garbage: Vec<usize> = (0x5800..0x5B00)
-            .filter(|&a| is_garbage(m.mem[a]))
-            .collect();
-        assert!(
-            garbage.is_empty(),
-            "после загрузки в атрибутах остался мусор: {garbage:04X?}"
-        );
+            assert_ne!(
+                m.mem[ind_danger as usize], 0,
+                "0x{:04X}: после вылета корабль должен быть в полёте",
+                layout.pilot_name
+            );
+            // Стек игры живёт в экранной памяти (0x40xx); уход ниже 0x4000 —
+            // признак того, что игра ушла в ПЗУ и развалилась.
+            assert!(
+                m.cpu.sp >= 0x4000,
+                "0x{:04X}: после загрузки стек ушёл в ПЗУ: SP=0x{:04X}, PC=0x{:04X}",
+                layout.pilot_name,
+                m.cpu.sp,
+                m.cpu.pc
+            );
+            let garbage: Vec<(usize, u8)> = (0x5800..0x5B00)
+                .filter(|&a| is_garbage(m.mem[a]))
+                .map(|a| (a, m.mem[a]))
+                .collect();
+            assert!(
+                garbage.is_empty(),
+                "0x{:04X}: после загрузки в атрибутах остался мусор: {garbage:04X?}",
+                layout.pilot_name
+            );
+        }
     }
 
     /// Регрессия на сохранение из «мёртвого» блока.
@@ -4202,7 +4249,7 @@ mod tests {
             // Загрузка и перезапуск: игра проходит стартовую последовательность
             // и пристыковывается, вернув загруженные данные.
             commander_load(&mut m, &path, layout).unwrap();
-            restart_after_load(&mut m, layout);
+            request_load(&mut m, layout);
             for f in 0..700u64 {
                 m.release_all_keys();
                 if f >= 30 && f % 16 < 6 {

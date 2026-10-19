@@ -73,6 +73,10 @@ pub struct Spectrum {
     /// Игра запросила сохранение (перехвачен `MenuSaveLoad`). Обрабатывает
     /// главный цикл: показывает диалог выбора файла и записывает блок командира.
     pub save_requested: bool,
+    /// Приложение попросило загрузку ([`native::request_load`]). Перехват
+    /// `MenuSaveLoad` отвечает «загружено» (NZ), и родной главный цикл сам
+    /// уходит на перезапуск (`jp nz, 0x7394` у Кладова).
+    pub load_requested: bool,
 }
 
 impl Spectrum {
@@ -116,6 +120,7 @@ impl Spectrum {
             hook_yield: false,
             frame_target: u64::MAX,
             save_requested: false,
+            load_requested: false,
         }
     }
 

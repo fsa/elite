@@ -606,8 +606,9 @@ fn do_load(machine: &mut Spectrum, opts: &Options, last: &mut String) {
             *last = path.to_string_lossy().into_owned();
             // Прервать текущий процесс и запустить игру с новыми данными:
             // после стартовой последовательности корабль пристыкован на
-            // станции системы из сейва.
-            native::restart_after_load(machine, save_layout(opts));
+            // станции системы из сейва. Перезапуск делает сама игра (родной
+            // путь через `MenuSaveLoad`), см. `native::request_load`.
+            native::request_load(machine, save_layout(opts));
         }
         Err(e) => eprintln!("Ошибка загрузки: {e}"),
     }
