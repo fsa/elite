@@ -275,10 +275,23 @@ pub fn request_load(m: &mut Spectrum, layout: SaveLayout) {
 /// кладём адрес возврата на стек игры и встаём на вход рутины — её `ret` вернёт
 /// управление на вызов `MenuSaveLoad`. Стек остаётся сбалансированным.
 fn load_gate(cpu: &mut Z80, m: &mut Spectrum, layout: SaveLayout) -> u64 {
-    if let Some(gate) = layout.load_gate {
+    // Удаляем одноразовый хук в любом случае
+    let gate_addr = layout.load_gate;
+    if let Some(gate) = gate_addr {
         m.hooks.remove(&gate);
     }
-    // Хук подменяет `jr nz`: сам переход не выполняем, `PC`/`SP` задаём сами.
+    // Если загрузка не запрошена (случайный проход через gate), просто
+    // пропускаем инструкцию jr nz (как будто не взята в docked-состоянии)
+    if !m.load_requested {
+        m.hook_yield = true;
+        if let Some(gate) = gate_addr {
+            cpu.pc = gate + 2;
+        } else {
+            // fallback: не трогаем PC
+        }
+        return 0;
+    }
+    // load_requested == true: форсируем путь к MenuSaveLoad с обновлением кокпит-буферов
     m.hook_yield = true;
     match layout.save_cocpit {
         Some(save) => {
@@ -334,6 +347,23 @@ fn menu_save_load(cpu: &mut Z80, m: &mut Spectrum, layout: SaveLayout) -> u64 {
     if m.load_requested {
         m.load_requested = false;
         m.save_requested = false;
+        // Обновим буферы кокпита перед перезапуском, чтобы панель
+        // отрисовалась корректно (особенно при загрузке со станции).
+        if let Some(save_cocpit) = layout.save_cocpit {
+            // Вложенный вызов: кладём адрес возврата 0 (пустышка) и
+            // временно уходим в SaveCocpitInBuffer; она сделает RET.
+            // Но нам нужно вернуться обратно в этот хук? Проще - 
+            // Копируем буферы кокпита вручную (DataCocpit -> 0xC000, 0x5A00 -> 0x5B00)
+            {
+                let mem = &mut m.mem;
+                for i in 0..0x800 {
+                    mem[0xC000 + i] = mem[0x5000 + i];
+                }
+                for i in 0..0x100 {
+                    mem[0x5B00 + i] = mem[0x5A00 + i];
+                }
+            }
+        }
         cpu.f &= !ZF;
     } else {
         m.save_requested = true;

@@ -112,9 +112,10 @@ fn parse_args() -> Options {
                 println!("  --save FILE фиксированный файл командира вместо диалога");
                 println!();
                 println!("Управление:");
-                println!("  Esc        меню: сохранить / загрузить / выйти");
-                println!("  F5         сохранить командира");
+                println!("  Esc        пауза");
                 println!("  F9         загрузить командира");
+                println!("  F5         сохранить командира");
+                println!("  Ctrl+Q     выход");
                 println!("  Ctrl+Q     выход из игры");
                 exit(0);
             }
@@ -704,7 +705,7 @@ impl<'a> App<'a> {
             return;
         }
         let attrs = Window::default_attributes()
-            .with_title("Elite — Esc: меню, F5: сохранить, F9: загрузить, Ctrl+Q: выход")
+            .with_title("Elite — Esc: пауза, Ctrl+Q: выход")
             .with_inner_size(LogicalSize::new(2.0 * SRC_W as f64, 2.0 * SRC_H as f64));
         let window = match event_loop.create_window(attrs) {
             Ok(w) => Rc::new(w),
@@ -751,17 +752,12 @@ impl<'a> App<'a> {
         }
         match code {
             KeyCode::Escape => self.menu = !self.menu,
-            KeyCode::F5 => do_save(&mut self.machine, self.opts, &mut self.last_path),
-            KeyCode::F9 => do_load(&mut self.machine, self.opts, &mut self.last_path),
             KeyCode::Digit1 if self.menu => {
-                do_save(&mut self.machine, self.opts, &mut self.last_path);
-                self.menu = false;
-            }
-            KeyCode::Digit2 if self.menu => {
-                do_load(&mut self.machine, self.opts, &mut self.last_path);
                 self.menu = false;
             }
             KeyCode::Digit3 if self.menu => self.quit = true,
+            KeyCode::F9 => do_load(&mut self.machine, self.opts, &mut self.last_path),
+            KeyCode::F5 => do_save(&mut self.machine, self.opts, &mut self.last_path),
             _ => {}
         }
     }
@@ -987,10 +983,9 @@ fn draw_pause_menu(buf: &mut [u32], font: &[u8]) {
     }
     let lines = [
         (y0 + 8, "ELITE - PAUSED"),
-        (y0 + 24, "1  SAVE GAME"),
-        (y0 + 36, "2  LOAD GAME"),
-        (y0 + 48, "3  QUIT GAME"),
-        (y0 + 68, "ESC RESUME"),
+        (y0 + 24, "1  RESUME"),
+        (y0 + 36, "3  QUIT GAME"),
+        (y0 + 56, "ESC RESUME"),
     ];
     for (y, s) in lines {
         draw_text(buf, font, x0 + 12, y, s, FG);
@@ -1107,7 +1102,8 @@ mod intro_tests {
         assert_eq!(matrix_pos(KeyCode::KeyB), Some((7, 4)));
         // Вне матрицы (управление игрой) — ничего.
         assert_eq!(matrix_pos(KeyCode::ArrowUp), None);
-        assert_eq!(matrix_pos(KeyCode::F5), None);
+        // F5/F9 removed from UI
+        assert!(matrix_pos(KeyCode::F5).is_none());
         // Все 40 клавиш матрицы заданы и уникальны.
         assert_eq!(MATRIX_MAP.len(), 40);
         let mut seen = std::collections::HashSet::new();
