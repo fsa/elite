@@ -1,5 +1,7 @@
 mod audio;
 mod display;
+mod galaxy;
+mod hdmap;
 mod machine;
 mod native;
 mod z80;
@@ -117,6 +119,8 @@ fn parse_args() -> Options {
                 println!("  --native   включить нативные (Rust) замены подпрограмм");
                 println!("  --save FILE фиксированный файл командира вместо диалога");
                 println!("  --fullscreen запуск в полноэкранном режиме (borderless)");
+                println!("В игре: F10 — карта галактики (нативная), Esc — пауза,");
+                println!("        F11 — полный экран, F5/F9 — сохранить/загрузить.");
                 println!();
                 println!("Экран: ZX-кадр 256x192 показывается целым множителем (чёткие");
                 println!("квадратные пиксели) по центру; нативные (Rust) реализации");
@@ -669,6 +673,8 @@ struct App<'a> {
     last_path: String,
     /// Открыто ли меню паузы (Esc) — игра не выполняется.
     menu: bool,
+    /// Отдельная нативная карта галактики (F10) — заменяет экран игры.
+    hdmap: hdmap::Map,
     quit: bool,
     buf: Vec<u32>,
     window: Option<Rc<Window>>,
@@ -705,6 +711,7 @@ impl<'a> App<'a> {
             wav_samples: opts.wav.as_ref().map(|_| Vec::new()),
             last_path: String::new(),
             menu: false,
+            hdmap: hdmap::Map::new(),
             quit: false,
             buf: vec![0u32; SRC_W * SRC_H],
             window: None,
@@ -736,7 +743,7 @@ impl<'a> App<'a> {
             return;
         }
         let attrs = Window::default_attributes()
-            .with_title("Elite — Esc: пауза, F11: полный экран, Ctrl+Q: выход")
+            .with_title("Elite — Esc: пауза, F10: карта, F11: полный экран, Ctrl+Q: выход")
             .with_inner_size(LogicalSize::new(4.0 * SRC_W as f64, 4.0 * SRC_H as f64));
         let window = match event_loop.create_window(attrs) {
             Ok(w) => Rc::new(w),
@@ -776,7 +783,47 @@ impl<'a> App<'a> {
         if let Some(bit) = kempston_bit(code) {
             self.kempston[bit as usize] = pressed;
         }
-        if !pressed || repeat {
+        if !pressed {
+            return;
+        }
+        // F10 — отдельная нативная карта галактики. Пока это самостоятельный
+        // просмотрщик: он не связан с игровыми картами (клавиши I/O) и не
+        // трогает состояние командира.
+        if code == KeyCode::F10 && !repeat {
+            if self.hdmap.active {
+                self.hdmap.close();
+            } else {
+                let layout = if self.opts.kladov {
+                    galaxy::KLADOV_GALAXY
+                } else {
+                    galaxy::ELITE_GALAXY
+                };
+                self.hdmap.open(&self.machine.mem, layout);
+                // Размер окна — чтобы зум/наведение работали до первого кадра.
+                if let Some(w) = &self.window {
+                    let size = w.inner_size();
+                    self.hdmap.resize(size.width, size.height);
+                }
+                self.menu = false;
+            }
+            return;
+        }
+        // При открытой карте всё управление принадлежит ей (игра на паузе).
+        if self.hdmap.active {
+            match code {
+                KeyCode::ArrowLeft | KeyCode::KeyN => self.hdmap.move_by(-4, 0),
+                KeyCode::ArrowRight | KeyCode::KeyM => self.hdmap.move_by(4, 0),
+                KeyCode::ArrowUp | KeyCode::KeyS => self.hdmap.move_by(0, -4),
+                KeyCode::ArrowDown | KeyCode::KeyX => self.hdmap.move_by(0, 4),
+                KeyCode::Enter | KeyCode::Space if !repeat => self.hdmap.snap_to_nearest(),
+                KeyCode::Equal | KeyCode::NumpadAdd => self.hdmap.zoom_by(1),
+                KeyCode::Minus | KeyCode::NumpadSubtract => self.hdmap.zoom_by(-1),
+                KeyCode::Escape if !repeat => self.hdmap.close(),
+                _ => {}
+            }
+            return;
+        }
+        if repeat {
             return;
         }
         // Ctrl+Q — выход из игры.
@@ -817,7 +864,7 @@ impl<'a> App<'a> {
     fn apply_input(&mut self) {
         self.machine.release_all_keys();
         self.machine.release_joystick();
-        if self.menu {
+        if self.menu || self.hdmap.active {
             return;
         }
         for (row, bits) in self.matrix.iter().enumerate() {
@@ -862,32 +909,42 @@ impl<'a> App<'a> {
         // во время эмуляции, показ накладывает слой поверх ZX-кадра.
         let size = window.inner_size();
         let layout = display::layout(size.width, size.height);
-        self.machine.hd.resize(layout.w as usize, layout.h as usize);
-        self.machine.hd.clear(display::TRANSPARENT);
-        if self.menu {
-            // В меню игра не выполняется, клавиши не попадают в эмулятор.
+        if self.hdmap.active {
+            // Отдельная карта галактики: HD-слой во всё окно, игра на паузе.
+            self.machine.hd.resize(size.width as usize, size.height as usize);
+            self.machine.hd.clear(display::TRANSPARENT);
             self.machine.release_all_keys();
             self.machine.release_joystick();
         } else {
-            self.apply_input();
-            self.machine.run_frame();
-            if self.machine.save_requested {
-                self.machine.save_requested = false;
-                do_save(&mut self.machine, self.opts, &mut self.last_path);
-            }
-            self.machine.render_audio(&mut self.audio_buf);
-            if let Some(audio) = &self.audio {
-                audio.push(&self.audio_buf);
-            }
-            if let Some(wav) = &mut self.wav_samples {
-                wav.extend_from_slice(&self.audio_buf);
+            self.machine.hd.resize(layout.w as usize, layout.h as usize);
+            self.machine.hd.clear(display::TRANSPARENT);
+            if self.menu {
+                // В меню игра не выполняется, клавиши не попадают в эмулятор.
+                self.machine.release_all_keys();
+                self.machine.release_joystick();
+            } else {
+                self.apply_input();
+                self.machine.run_frame();
+                if self.machine.save_requested {
+                    self.machine.save_requested = false;
+                    do_save(&mut self.machine, self.opts, &mut self.last_path);
+                }
+                self.machine.render_audio(&mut self.audio_buf);
+                if let Some(audio) = &self.audio {
+                    audio.push(&self.audio_buf);
+                }
+                if let Some(wav) = &mut self.wav_samples {
+                    wav.extend_from_slice(&self.audio_buf);
+                }
             }
         }
         // Сбрасываем однократные события мыши
         self.mouse_wheel_up = false;
         self.mouse_wheel_down = false;
         self.machine.render_rgba(&mut self.buf);
-        if self.menu {
+        if self.hdmap.active {
+            self.hdmap.draw(&mut self.machine.hd, &self.font);
+        } else if self.menu {
             // Меню паузы — в HD-слой, чтобы текст был чётким в любом окне.
             draw_pause_menu(&mut self.machine.hd, &self.font);
         }
@@ -918,6 +975,14 @@ impl<'a> App<'a> {
         let (ow, oh) = (w as usize, h as usize);
         // Фон окна — чёрные поля вокруг области 4:3.
         out.fill(0);
+        // Отдельная карта галактики показывается вместо ZX-кадра: слой
+        // непрозрачный и покрывает всё окно.
+        if self.hdmap.active {
+            self.machine.hd.composite_onto(&mut out, ow, oh, 0, 0);
+            window.pre_present_notify();
+            let _ = out.present();
+            return;
+        }
         // Целочисленное масштабирование: каждый пиксель ZX — квадрат
         // scale x scale, картинка строго без смаза.
         let (dw, dh) = ((l.w as usize).min(ow), (l.h as usize).min(oh));
@@ -968,6 +1033,11 @@ impl<'a> ApplicationHandler for App<'a> {
                 }
             }
             WindowEvent::CursorMoved { position, .. } => {
+                // При открытой карте мышь наводит её курсор.
+                if self.hdmap.active {
+                    self.hdmap.point_at(position.x, position.y);
+                    return;
+                }
                 // Координаты окна -> координаты экрана игры (целый масштаб,
                 // та же математика, что в `present`).
                 if let Some(w) = &self.window {
@@ -989,28 +1059,39 @@ impl<'a> ApplicationHandler for App<'a> {
             }
             WindowEvent::MouseInput { state, button, .. } => {
                 let pressed = state == ElementState::Pressed;
+                // При открытой карте ЛКМ ставит курсор на ближайшую планету.
+                if self.hdmap.active {
+                    if button == MouseButton::Left && pressed {
+                        self.hdmap.snap_to_nearest();
+                    }
+                    return;
+                }
                 match button {
                     MouseButton::Left => self.mouse_left = pressed,
                     MouseButton::Right => self.mouse_right = pressed,
                     _ => {}
                 }
             }
-            WindowEvent::MouseWheel { delta, .. } => match delta {
-                MouseScrollDelta::LineDelta(_, y) => {
-                    if y > 0.0 {
-                        self.mouse_wheel_up = true;
-                    } else if y < 0.0 {
-                        self.mouse_wheel_down = true;
-                    }
+            WindowEvent::MouseWheel { delta, .. } => {
+                let dy = match delta {
+                    MouseScrollDelta::LineDelta(_, y) => y,
+                    MouseScrollDelta::PixelDelta(p) => p.y as f32,
+                };
+                if dy == 0.0 {
+                    return;
                 }
-                MouseScrollDelta::PixelDelta(p) => {
-                    if p.y > 0.0 {
-                        self.mouse_wheel_up = true;
-                    } else if p.y < 0.0 {
-                        self.mouse_wheel_down = true;
-                    }
+                // При открытой карте колесо меняет масштаб (зум к текущей
+                // системе — карта всегда центрирована на ней).
+                if self.hdmap.active {
+                    self.hdmap.zoom_by(if dy > 0.0 { 1 } else { -1 });
+                    return;
                 }
-            },
+                if dy > 0.0 {
+                    self.mouse_wheel_up = true;
+                } else {
+                    self.mouse_wheel_down = true;
+                }
+            }
             _ => {}
         }
     }
@@ -1202,5 +1283,52 @@ mod intro_tests {
         assert_eq!(kempston_bit(KeyCode::ArrowRight), Some(0));
         assert_eq!(kempston_bit(KeyCode::ControlRight), Some(4));
         assert_eq!(kempston_bit(KeyCode::Space), None);
+    }
+
+    fn test_options() -> Options {
+        Options {
+            game: String::new(),
+            rom: None,
+            headless: true,
+            frames: 0,
+            dump: None,
+            mute: true,
+            audio: false,
+            wav: None,
+            kladov: false,
+            native: false,
+            save: None,
+            fullscreen: false,
+        }
+    }
+
+    /// F10 открывает отдельную нативную карту галактики: игра на паузе, ввод
+    /// уходит карте, повторный F10/Esc возвращает экран игры.
+    #[test]
+    fn f10_opens_and_closes_galaxy_map() {
+        let opts = test_options();
+        let mut app = App::new(boot(), &opts);
+        assert!(!app.hdmap.active);
+        app.key_event(KeyCode::F10, true, false);
+        assert!(app.hdmap.active, "F10 не открыл карту");
+        assert_eq!(app.hdmap.planet_count(), galaxy::COUNT);
+        // Курсор карты стартует на текущей системе (из памяти игры).
+        let sys_x = app.machine.mem[galaxy::ELITE_GALAXY.sys_x] as i32;
+        let sys_y = app.machine.mem[galaxy::ELITE_GALAXY.sys_y] as i32;
+        assert_eq!(app.hdmap.cursor(), (sys_x, sys_y));
+        // Стрелка двигает курсор карты, а не корабль.
+        app.key_event(KeyCode::ArrowRight, true, false);
+        assert_eq!(app.hdmap.cursor().0, (sys_x + 4).min(255));
+        // Пока карта открыта, ввод не попадает в эмулятор.
+        app.apply_input();
+        assert_eq!(app.machine.kempston, 0, "ввод не должен уходить в игру");
+        // Повторное F10 закрывает карту.
+        app.key_event(KeyCode::F10, true, false);
+        assert!(!app.hdmap.active, "F10 не закрыл карту");
+        // Открыть заново и закрыть по Esc.
+        app.key_event(KeyCode::F10, true, false);
+        assert!(app.hdmap.active);
+        app.key_event(KeyCode::Escape, true, false);
+        assert!(!app.hdmap.active, "Esc не закрыл карту");
     }
 }

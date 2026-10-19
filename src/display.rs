@@ -56,6 +56,9 @@ pub struct Frame {
     pub width: usize,
     pub height: usize,
     px: Vec<u32>,
+    /// Необязательная область отсечения `(x0, y0, x1, y1)` (правый/нижний
+    /// край исключается). `None` — рисовать во всю поверхность.
+    clip: Option<(i32, i32, i32, i32)>,
 }
 
 impl Frame {
@@ -64,6 +67,7 @@ impl Frame {
             width,
             height,
             px: vec![TRANSPARENT; width * height],
+            clip: None,
         }
     }
 
@@ -82,6 +86,43 @@ impl Frame {
         self.px.fill(color);
     }
 
+    /// Ограничить рисование прямоугольником `(x, y)` размером `w` x `h`.
+    ///
+    /// Действует на `plot`/`fill_rect` и всё, что через них построено
+    /// (линии, круги, текст). Нужно, например, чтобы поле карты галактики
+    /// при увеличении не вылезало на заголовок и панель.
+    pub fn set_clip(&mut self, x: i32, y: i32, w: usize, h: usize) {
+        let x0 = x.max(0);
+        let y0 = y.max(0);
+        let x1 = (x.max(0) as usize + w).min(self.width) as i32;
+        let y1 = (y.max(0) as usize + h).min(self.height) as i32;
+        self.clip = Some((x0, y0, x1, y1));
+    }
+
+    /// Снять ограничение рисования (рисовать во всю поверхность).
+    pub fn clear_clip(&mut self) {
+        self.clip = None;
+    }
+
+    /// Пересечение запрошенного прямоугольника с границей отсечения и слоя.
+    fn clamped_rect(&self, x: i32, y: i32, w: usize, h: usize) -> Option<(usize, usize, usize, usize)> {
+        let mut x0 = x.max(0);
+        let mut y0 = y.max(0);
+        let mut x1 = (x.max(0) as usize + w).min(self.width) as i32;
+        let mut y1 = (y.max(0) as usize + h).min(self.height) as i32;
+        if let Some((cx0, cy0, cx1, cy1)) = self.clip {
+            x0 = x0.max(cx0);
+            y0 = y0.max(cy0);
+            x1 = x1.min(cx1);
+            y1 = y1.min(cy1);
+        }
+        if x0 >= x1 || y0 >= y1 {
+            None
+        } else {
+            Some((x0 as usize, y0 as usize, x1 as usize, y1 as usize))
+        }
+    }
+
     /// Пиксели слоя (только для чтения).
     #[allow(dead_code)] // читают тесты и будущие нативные реализации
     pub fn pixels(&self) -> &[u32] {
@@ -91,19 +132,20 @@ impl Frame {
     /// Одиночный пиксель с отсечением по границам.
     pub fn plot(&mut self, x: i32, y: i32, color: u32) {
         if x >= 0 && y >= 0 && (x as usize) < self.width && (y as usize) < self.height {
+            if let Some((cx0, cy0, cx1, cy1)) = self.clip {
+                if x < cx0 || y < cy0 || x >= cx1 || y >= cy1 {
+                    return;
+                }
+            }
             self.px[y as usize * self.width + x as usize] = color;
         }
     }
 
     /// Залитый прямоугольник `(x, y)` размером `w` x `h` (с отсечением).
     pub fn fill_rect(&mut self, x: i32, y: i32, w: usize, h: usize, color: u32) {
-        let x0 = x.max(0) as usize;
-        let y0 = y.max(0) as usize;
-        let x1 = (x0 + w).min(self.width);
-        let y1 = (y0 + h).min(self.height);
-        if x0 >= x1 || y0 >= y1 {
+        let Some((x0, y0, x1, y1)) = self.clamped_rect(x, y, w, h) else {
             return;
-        }
+        };
         for yy in y0..y1 {
             self.px[yy * self.width + x0..yy * self.width + x1].fill(color);
         }
@@ -141,6 +183,42 @@ impl Frame {
             if e2 <= dx {
                 err += dx;
                 y += sy;
+            }
+        }
+    }
+
+    /// Залитый круг радиуса `r` с центром `(cx, cy)`.
+    pub fn disc(&mut self, cx: i32, cy: i32, r: i32, color: u32) {
+        if r < 0 {
+            return;
+        }
+        for dy in -r..=r {
+            let dx = isqrt(r * r - dy * dy);
+            self.hline(cx - dx, cy + dy, (2 * dx + 1) as usize, color);
+        }
+    }
+
+    /// Контур окружности радиуса `r` (алгоритм средней точки).
+    pub fn circle(&mut self, cx: i32, cy: i32, r: i32, color: u32) {
+        if r < 0 {
+            return;
+        }
+        let (mut x, mut y, mut d) = (r, 0, 1 - r);
+        while x >= y {
+            self.plot(cx + x, cy + y, color);
+            self.plot(cx + y, cy + x, color);
+            self.plot(cx - y, cy + x, color);
+            self.plot(cx - x, cy + y, color);
+            self.plot(cx - x, cy - y, color);
+            self.plot(cx - y, cy - x, color);
+            self.plot(cx + y, cy - x, color);
+            self.plot(cx + x, cy - y, color);
+            y += 1;
+            if d <= 0 {
+                d += 2 * y + 1;
+            } else {
+                x -= 1;
+                d += 2 * (y - x) + 1;
             }
         }
     }
@@ -215,6 +293,18 @@ impl Frame {
             }
         }
     }
+}
+
+/// Целочисленный квадратный корень (для радиусов кругов).
+fn isqrt(n: i32) -> i32 {
+    if n <= 0 {
+        return 0;
+    }
+    let mut x = 0;
+    while (x + 1) * (x + 1) <= n {
+        x += 1;
+    }
+    x
 }
 
 #[cfg(test)]
@@ -296,6 +386,46 @@ mod tests {
         f.draw_text(&font, 0, 0, "A", 0xFF_FF_FF, 2);
         let lit_2x = f.pixels().iter().filter(|&&p| p != 0).count();
         assert_eq!(lit_2x, lit_1x * 4, "scale=2 must give 4x pixels");
+    }
+
+    /// Круг и его контур: залитый диск — все точки внутри радиуса,
+    /// контур — границы (не меньше 2*r*... точек).
+    #[test]
+    fn disc_and_circle_cover_expected_pixels() {
+        let mut f = Frame::new(32, 32);
+        f.disc(16, 16, 5, 0xFF_FF_FF);
+        assert_eq!(f.pixels()[16 * 32 + 16], 0xFF_FF_FF, "center");
+        assert_eq!(f.pixels()[16 * 32 + 21], 0xFF_FF_FF, "right edge");
+        assert_eq!(f.pixels()[16 * 32 + 22], 0, "outside");
+        assert_ne!(f.pixels()[16 * 32 + 11], 0, "left edge");
+        let mut g = Frame::new(32, 32);
+        g.circle(16, 16, 5, 0xFF_FF_FF);
+        assert_eq!(g.pixels()[16 * 32 + 16], 0, "outline has hollow center");
+        assert_ne!(g.pixels()[16 * 32 + 21], 0, "outline on right edge");
+        // Радиус 0 — один пиксель.
+        let mut h = Frame::new(4, 4);
+        h.disc(1, 1, 0, 0xFF_FF_FF);
+        assert_eq!(h.pixels().iter().filter(|&&p| p != 0).count(), 1);
+    }
+
+    /// Отсечение: рисование ограничивается прямоугольником `set_clip`.
+    #[test]
+    fn clip_limits_drawing() {
+        let mut f = Frame::new(16, 16);
+        f.set_clip(4, 4, 8, 8);
+        f.fill_rect(0, 0, 16, 16, 0xFF_FF_FF); // во всю поверхность
+        assert_eq!(f.pixels()[4 * 16 + 4], 0xFF_FF_FF, "inside clip");
+        assert_eq!(f.pixels()[11 * 16 + 11], 0xFF_FF_FF, "clip corner");
+        assert_eq!(f.pixels()[3 * 16 + 4], 0, "left of clip");
+        assert_eq!(f.pixels()[12 * 16 + 4], 0, "right of clip");
+        assert_eq!(f.pixels()[4 * 16 + 3], 0, "above clip");
+        // plot тоже уважает отсечение.
+        f.plot(2, 2, 0xFF_00_00);
+        assert_eq!(f.pixels()[2 * 16 + 2], 0, "plot outside clip");
+        // Снятие отсечения возвращает рисование во всю поверхность.
+        f.clear_clip();
+        f.plot(2, 2, 0xFF_00_00);
+        assert_eq!(f.pixels()[2 * 16 + 2], 0xFF_00_00, "plot after clear_clip");
     }
 
     /// Нативный хук рисует в HD-слой машины в полном разрешении —
