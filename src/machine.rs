@@ -1,6 +1,7 @@
 //! Sinclair ZX Spectrum 48K machine: 64K address space, ULA (border, beeper,
 //! keyboard) and a 256x192 bitmap framebuffer.
 
+use crate::display;
 use crate::z80::{Bus, Z80};
 
 pub const ROM_SIZE: usize = 0x4000;
@@ -77,6 +78,13 @@ pub struct Spectrum {
     /// `MenuSaveLoad` отвечает «загружено» (NZ), и родной главный цикл сам
     /// уходит на перезапуск (`jp nz, 0x7394` у Кладова).
     pub load_requested: bool,
+    /// HD-слой нативного рендера (см. [`display::Frame`]): поверхность в
+    /// разрешении области показа окна. ZX-кадр (256x192) показывается
+    /// целым множителем, а нативные хуки рисуют в этот слой поверх него
+    /// в полном разрешении. Приложение очищает слой перед каждым кадром и
+    /// меняет размер под окно; непрозрачные пиксели слоя (старший байт
+    /// != 0) накладываются на масштабированный ZX-кадр при показе.
+    pub hd: display::Frame,
 }
 
 impl Spectrum {
@@ -121,6 +129,7 @@ impl Spectrum {
             frame_target: u64::MAX,
             save_requested: false,
             load_requested: false,
+            hd: display::Frame::new(display::ZX_W, display::ZX_H),
         }
     }
 
@@ -278,6 +287,11 @@ impl Spectrum {
     }
 
     /// Decode the bitmap and attributes into a 256x192 RGBA pixel buffer.
+    ///
+    /// Это «старый» путь отрисовки: кадр всегда 256x192 независимо от
+    /// разрешения окна — масштабирование до HD делает оконный слой
+    /// (`main.rs`, целое множитель). В полном разрешении рисует HD-слой
+    /// [`Spectrum::hd`] (нативные реализации).
     pub fn render_rgba(&self, out: &mut [u32]) {
         for y in 0..192u16 {
             for x in 0..256u16 {

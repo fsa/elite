@@ -1,4 +1,5 @@
 mod audio;
+mod display;
 mod machine;
 mod native;
 mod z80;
@@ -15,10 +16,10 @@ use std::rc::Rc;
 use std::time::{Duration, Instant};
 use winit::application::ApplicationHandler;
 use winit::dpi::LogicalSize;
-use winit::event::{ElementState, WindowEvent};
+use winit::event::{ElementState, MouseButton, MouseScrollDelta, WindowEvent};
 use winit::event_loop::{ActiveEventLoop, ControlFlow, EventLoop};
 use winit::keyboard::{KeyCode, ModifiersState, PhysicalKey};
-use winit::window::{Window, WindowId};
+use winit::window::{Fullscreen, Window, WindowId};
 
 /// Load address of the assembled game image.
 const GAME_LOAD_ADDR: u16 = 0x6048;
@@ -67,6 +68,9 @@ struct Options {
     /// Фиксированный путь сохранения командира. `None` — спрашивать через
     /// нативный диалог выбора файла (по умолчанию, расширение `.zxelite`).
     save: Option<String>,
+    /// Запустить игру сразу в полноэкранном режиме (borderless).
+    /// Переключение во время игры: F11 или Alt+Enter.
+    fullscreen: bool,
 }
 
 fn parse_args() -> Options {
@@ -82,6 +86,7 @@ fn parse_args() -> Options {
         kladov: true,
         native: false,
         save: None,
+        fullscreen: false,
     };
     let mut args = env::args().skip(1);
     while let Some(a) = args.next() {
@@ -100,9 +105,10 @@ fn parse_args() -> Options {
             "--native" => opts.native = true,
             "--wav" => opts.wav = args.next(),
             "--save" => opts.save = args.next(),
+            "--fullscreen" => opts.fullscreen = true,
             "-h" | "--help" => {
                 println!(
-                    "usage: elite [game.bin] [--elite] [--rom rom.bin] [--headless] [--frames N] [--dump out.ppm] [--mute] [--audio] [--wav out.wav] [--native] [--save FILE]"
+                    "usage: elite [game.bin] [--elite] [--rom rom.bin] [--headless] [--frames N] [--dump out.ppm] [--mute] [--audio] [--wav out.wav] [--native] [--save FILE] [--fullscreen]"
                 );
                 println!("  по умолчанию запускается версия Кладова (zx_bin/kladov.bin)");
                 println!("  --mute     отключить вывод звука через PipeWire");
@@ -110,12 +116,17 @@ fn parse_args() -> Options {
                 println!("  --wav FILE сохранить звук в WAV-файл");
                 println!("  --native   включить нативные (Rust) замены подпрограмм");
                 println!("  --save FILE фиксированный файл командира вместо диалога");
+                println!("  --fullscreen запуск в полноэкранном режиме (borderless)");
+                println!();
+                println!("Экран: ZX-кадр 256x192 показывается целым множителем (чёткие");
+                println!("квадратные пиксели) по центру; нативные (Rust) реализации");
+                println!("рисуют в HD-слой поверх него в полном разрешении окна.");
                 println!();
                 println!("Управление:");
                 println!("  Esc        пауза");
                 println!("  F9         загрузить командира");
                 println!("  F5         сохранить командира");
-                println!("  Ctrl+Q     выход");
+                println!("  F11, Alt+Enter полный экран");
                 println!("  Ctrl+Q     выход из игры");
                 exit(0);
             }
@@ -615,9 +626,9 @@ fn do_load(machine: &mut Spectrum, opts: &Options, last: &mut String) {
     }
 }
 
-/// Размер кадра игры (ZX Spectrum).
-const SRC_W: usize = 256;
-const SRC_H: usize = 192;
+/// Размер кадра игры (ZX Spectrum). HD-слой и масштабирование — см. `display`.
+const SRC_W: usize = display::ZX_W;
+const SRC_H: usize = display::ZX_H;
 
 /// Частота кадров ZX Spectrum: 50 кадров в секунду (кадр каждые 20 мс).
 const FRAME_TIME: Duration = Duration::from_micros(1_000_000 / 50);
@@ -640,7 +651,11 @@ fn run_window(machine: Spectrum, opts: &Options) {
     }
 }
 
-/// Оконное приложение на winit: окно, кадр 256x192 и состояние клавиатуры.
+/// Оконное приложение на winit: окно, кадр и состояние клавиатуры.
+///
+/// ZX-кадр 256x192 показывается целым множителем по центру окна (см.
+/// [`display::layout`]), HD-слой [`Spectrum::hd`](machine::Spectrum)
+/// накладывается поверх в полном разрешении.
 ///
 /// Клавиши читаются как `physical_key` (позиция клавиши), поэтому активная
 /// раскладка (в частности русская) на управление не влияет.
@@ -664,6 +679,15 @@ struct App<'a> {
     /// Состояние джойстика Kempston (5 бит).
     kempston: [bool; 5],
     ctrl: bool,
+    /// Зажата ли Alt (для переключения полного экрана по Alt+Enter).
+    alt: bool,
+    /// Позиция мыши в координатах экрана игры (0..255, 0..191)
+    mouse_x: i32,
+    mouse_y: i32,
+    mouse_left: bool,
+    mouse_right: bool,
+    mouse_wheel_up: bool,
+    mouse_wheel_down: bool,
     next_frame: Instant,
 }
 
@@ -689,6 +713,13 @@ impl<'a> App<'a> {
             matrix: [[false; 5]; 8],
             kempston: [false; 5],
             ctrl: false,
+            alt: false,
+            mouse_x: -1,
+            mouse_y: -1,
+            mouse_left: false,
+            mouse_right: false,
+            mouse_wheel_up: false,
+            mouse_wheel_down: false,
             next_frame: Instant::now(),
         }
     }
@@ -705,8 +736,8 @@ impl<'a> App<'a> {
             return;
         }
         let attrs = Window::default_attributes()
-            .with_title("Elite — Esc: пауза, Ctrl+Q: выход")
-            .with_inner_size(LogicalSize::new(2.0 * SRC_W as f64, 2.0 * SRC_H as f64));
+            .with_title("Elite — Esc: пауза, F11: полный экран, Ctrl+Q: выход")
+            .with_inner_size(LogicalSize::new(4.0 * SRC_W as f64, 4.0 * SRC_H as f64));
         let window = match event_loop.create_window(attrs) {
             Ok(w) => Rc::new(w),
             Err(e) => {
@@ -714,6 +745,9 @@ impl<'a> App<'a> {
                 exit(1);
             }
         };
+        if self.opts.fullscreen {
+            window.set_fullscreen(Some(Fullscreen::Borderless(None)));
+        }
         let context = match Context::new(window.clone()) {
             Ok(c) => c,
             Err(e) => {
@@ -750,6 +784,11 @@ impl<'a> App<'a> {
             self.quit = true;
             return;
         }
+        // F11 / Alt+Enter — переключение полноэкранного режима.
+        if code == KeyCode::F11 || (code == KeyCode::Enter && self.alt) {
+            self.toggle_fullscreen();
+            return;
+        }
         match code {
             KeyCode::Escape => self.menu = !self.menu,
             KeyCode::Digit1 if self.menu => {
@@ -759,6 +798,18 @@ impl<'a> App<'a> {
             KeyCode::F9 => do_load(&mut self.machine, self.opts, &mut self.last_path),
             KeyCode::F5 => do_save(&mut self.machine, self.opts, &mut self.last_path),
             _ => {}
+        }
+    }
+
+    /// Переключить полноэкранный (borderless) режим.
+    fn toggle_fullscreen(&mut self) {
+        let Some(window) = &self.window else {
+            return;
+        };
+        if window.fullscreen().is_some() {
+            window.set_fullscreen(None);
+        } else {
+            window.set_fullscreen(Some(Fullscreen::Borderless(None)));
         }
     }
 
@@ -803,6 +854,16 @@ impl<'a> App<'a> {
 
     /// Один кадр: ввод, эмуляция, звук, отрисовка и показ.
     fn frame(&mut self) {
+        let Some(window) = self.window.clone() else {
+            return;
+        };
+        // Область показа и HD-слой нативного рендера — в разрешении окна.
+        // Слой очищается каждый кадр: нативные хуки рисуют в него заново
+        // во время эмуляции, показ накладывает слой поверх ZX-кадра.
+        let size = window.inner_size();
+        let layout = display::layout(size.width, size.height);
+        self.machine.hd.resize(layout.w as usize, layout.h as usize);
+        self.machine.hd.clear(display::TRANSPARENT);
         if self.menu {
             // В меню игра не выполняется, клавиши не попадают в эмулятор.
             self.machine.release_all_keys();
@@ -822,18 +883,20 @@ impl<'a> App<'a> {
                 wav.extend_from_slice(&self.audio_buf);
             }
         }
+        // Сбрасываем однократные события мыши
+        self.mouse_wheel_up = false;
+        self.mouse_wheel_down = false;
         self.machine.render_rgba(&mut self.buf);
         if self.menu {
-            draw_pause_menu(&mut self.buf, &self.font);
+            // Меню паузы — в HD-слой, чтобы текст был чётким в любом окне.
+            draw_pause_menu(&mut self.machine.hd, &self.font);
         }
-        self.present();
+        self.present(&window, &layout);
     }
 
-    /// Показать кадр 256x192 в окне, сохраняя пропорции 4:3 (по центру).
-    fn present(&mut self) {
-        let Some(window) = self.window.clone() else {
-            return;
-        };
+    /// Показать кадр: ZX-кадр 256x192 целым множителем `l.scale` по центру
+    /// окна (letterbox), поверх — непрозрачные пиксели HD-слоя.
+    fn present(&mut self, window: &Rc<Window>, l: &display::Layout) {
         let size = window.inner_size();
         let (w, h) = (size.width, size.height);
         if w == 0 || h == 0 {
@@ -852,27 +915,25 @@ impl<'a> App<'a> {
         let Ok(mut out) = surface.buffer_mut() else {
             return;
         };
-        // Масштаб с сохранением пропорций, выравнивание по центру (letterbox).
-        let scale = (w as f64 / SRC_W as f64).min(h as f64 / SRC_H as f64);
-        let dw = ((SRC_W as f64 * scale).round() as u32).clamp(1, w);
-        let dh = ((SRC_H as f64 * scale).round() as u32).clamp(1, h);
-        let ox = (w - dw) / 2;
-        let oy = (h - dh) / 2;
-        let mut i = 0usize;
-        for y in 0..h {
-            let in_y = y >= oy && y < oy + dh;
-            let sy = if in_y { ((y - oy) as u64 * SRC_H as u64 / dh as u64) as usize } else { 0 };
-            for x in 0..w {
-                let inside = in_y && x >= ox && x < ox + dw;
-                out[i] = if inside {
-                    let sx = ((x - ox) as u64 * SRC_W as u64 / dw as u64) as usize;
-                    src[sy * SRC_W + sx]
-                } else {
-                    0
-                };
-                i += 1;
+        let (ow, oh) = (w as usize, h as usize);
+        // Фон окна — чёрные поля вокруг области 4:3.
+        out.fill(0);
+        // Целочисленное масштабирование: каждый пиксель ZX — квадрат
+        // scale x scale, картинка строго без смаза.
+        let (dw, dh) = ((l.w as usize).min(ow), (l.h as usize).min(oh));
+        for row in 0..dh {
+            let sy = row / l.scale;
+            let src_row = &src[sy * SRC_W..sy * SRC_W + SRC_W];
+            let dst_lo = (l.y as usize + row) * ow + l.x as usize;
+            let dst_row = &mut out[dst_lo..dst_lo + dw];
+            for (col, d) in dst_row.iter_mut().enumerate() {
+                *d = src_row[col / l.scale];
             }
         }
+        // HD-слой нативного рендера поверх масштабированного ZX-кадра.
+        self.machine
+            .hd
+            .composite_onto(&mut out, ow, oh, l.x as usize, l.y as usize);
         window.pre_present_notify();
         let _ = out.present();
     }
@@ -891,9 +952,11 @@ impl<'a> ApplicationHandler for App<'a> {
                 self.matrix = [[false; 5]; 8];
                 self.kempston = [false; 5];
                 self.ctrl = false;
+                self.alt = false;
             }
             WindowEvent::ModifiersChanged(m) => {
                 self.ctrl = m.state().contains(ModifiersState::CONTROL);
+                self.alt = m.state().contains(ModifiersState::ALT);
             }
             WindowEvent::KeyboardInput { event, .. } => {
                 if let PhysicalKey::Code(code) = event.physical_key {
@@ -904,6 +967,50 @@ impl<'a> ApplicationHandler for App<'a> {
                     event_loop.exit();
                 }
             }
+            WindowEvent::CursorMoved { position, .. } => {
+                // Координаты окна -> координаты экрана игры (целый масштаб,
+                // та же математика, что в `present`).
+                if let Some(w) = &self.window {
+                    let size = w.inner_size();
+                    let l = display::layout(size.width, size.height);
+                    let px = position.x - l.x as f64;
+                    let py = position.y - l.y as f64;
+                    if px >= 0.0 && px < l.w as f64 && py >= 0.0 && py < l.h as f64 {
+                        self.mouse_x = (px / l.scale as f64) as i32;
+                        self.mouse_y = (py / l.scale as f64) as i32;
+                    } else {
+                        self.mouse_x = -1;
+                        self.mouse_y = -1;
+                    }
+                } else {
+                    self.mouse_x = position.x as i32;
+                    self.mouse_y = position.y as i32;
+                }
+            }
+            WindowEvent::MouseInput { state, button, .. } => {
+                let pressed = state == ElementState::Pressed;
+                match button {
+                    MouseButton::Left => self.mouse_left = pressed,
+                    MouseButton::Right => self.mouse_right = pressed,
+                    _ => {}
+                }
+            }
+            WindowEvent::MouseWheel { delta, .. } => match delta {
+                MouseScrollDelta::LineDelta(_, y) => {
+                    if y > 0.0 {
+                        self.mouse_wheel_up = true;
+                    } else if y < 0.0 {
+                        self.mouse_wheel_down = true;
+                    }
+                }
+                MouseScrollDelta::PixelDelta(p) => {
+                    if p.y > 0.0 {
+                        self.mouse_wheel_up = true;
+                    } else if p.y < 0.0 {
+                        self.mouse_wheel_down = true;
+                    }
+                }
+            },
             _ => {}
         }
     }
@@ -926,69 +1033,35 @@ impl<'a> ApplicationHandler for App<'a> {
     }
 }
 
-/// Нарисовать закрашенный прямоугольник поверх кадра.
-fn fill_rect(buf: &mut [u32], x0: usize, y0: usize, x1: usize, y1: usize, color: u32) {
-    for y in y0..=y1 {
-        for x in x0..=x1 {
-            if x < 256 && y < 192 {
-                buf[y * 256 + x] = color;
-            }
-        }
-    }
-}
-
 /// Адрес знакогенератора ZX Spectrum в ПЗУ (коды символов 0x20..0x7F).
 const PAUSE_FONT_ADDR: usize = 0x3D00;
 /// Длина знакогенератора: 96 символов по 8 байт.
 const PAUSE_FONT_LEN: usize = 0x300;
 
-/// Нарисовать строку шрифтом ПЗУ (8x8, знакогенератор ZX Spectrum) поверх
-/// кадра. Рисуются только установленные биты (фон не закрашивается).
-fn draw_text(buf: &mut [u32], font: &[u8], x: usize, y: usize, s: &str, color: u32) {
-    let mut cx = x;
-    for b in s.bytes() {
-        let ch = b.clamp(0x20, 0x7F) as usize;
-        let off = (ch - 0x20) * 8;
-        if off + 8 > font.len() {
-            break;
-        }
-        for (row, bits) in font[off..off + 8].iter().enumerate() {
-            for col in 0..8 {
-                if bits & (0x80 >> col) != 0 {
-                    let (px, py) = (cx + col, y + row);
-                    if px < 256 && py < 192 {
-                        buf[py * 256 + px] = color;
-                    }
-                }
-            }
-        }
-        cx += 8;
-    }
-}
-
-/// Наложение меню паузы: рамка и пункты «1 сохранить / 2 загрузить / 3 выйти».
-fn draw_pause_menu(buf: &mut [u32], font: &[u8]) {
-    const FG: u32 = 0x00D7_D7D7; // белый
-    const BG: u32 = 0x0000_0000; // чёрный
-    let (x0, y0, x1, y1) = (40usize, 52usize, 216usize, 140usize);
-    fill_rect(buf, x0, y0, x1, y1, BG);
+/// Наложение меню паузы в HD-слой: рамка и пункты «1 сохранить /
+/// 2 загрузить / 3 выйти». Панель задана в пикселях ZX (256x192) и
+/// увеличивается до целого масштаба слоя — текст чёткий в любом окне.
+fn draw_pause_menu(frame: &mut display::Frame, font: &[u8]) {
+    const FG: u32 = 0xFFD7_D7D7; // белый (непрозрачный)
+    const BG: u32 = 0xFF00_0000; // чёрный (непрозрачный)
+    let scale = (frame.width / SRC_W).max(1);
+    let s = scale as i32;
+    let (x0, y0) = (40 * s, 52 * s);
+    let (w, h) = (177 * scale, 89 * scale);
+    frame.fill_rect(x0, y0, w, h, BG);
     // Рамка: внешняя и внутренняя линии.
-    for x in x0..=x1 {
-        buf[y0 * 256 + x] = FG;
-        buf[y1 * 256 + x] = FG;
-    }
-    for y in y0..=y1 {
-        buf[y * 256 + x0] = FG;
-        buf[y * 256 + x1] = FG;
-    }
+    frame.hline(x0, y0, w, FG);
+    frame.hline(x0, y0 + h as i32 - s, w, FG);
+    frame.vline(x0, y0, h, FG);
+    frame.vline(x0 + w as i32 - s, y0, h, FG);
     let lines = [
-        (y0 + 8, "ELITE - PAUSED"),
-        (y0 + 24, "1  RESUME"),
-        (y0 + 36, "3  QUIT GAME"),
-        (y0 + 56, "ESC RESUME"),
+        (52 + 8, "ELITE - PAUSED"),
+        (52 + 24, "1  RESUME"),
+        (52 + 36, "3  QUIT GAME"),
+        (52 + 56, "ESC RESUME"),
     ];
-    for (y, s) in lines {
-        draw_text(buf, font, x0 + 12, y, s, FG);
+    for (y, text) in lines {
+        frame.draw_text(font, x0 + 12 * s, y as i32 * s, text, FG, scale);
     }
 }
 
@@ -1065,28 +1138,42 @@ mod intro_tests {
         );
     }
 
-    /// Меню паузы (Esc) рисуется поверх кадра: рамка и текст шрифтом ПЗУ.
-    /// `ELITE_DUMP_MENU=<file>` сохраняет кадр в PPM для визуальной проверки.
+    /// Меню паузы (Esc) рисуется в HD-слой поверх кадра: рамка и текст
+    /// шрифтом ПЗУ в полном разрешении (масштаб x5 для слоя 1280x960).
+    /// `ELITE_DUMP_MENU=<file>` сохраняет слой в PPM для визуальной проверки.
     #[test]
     fn pause_menu_overlay_renders() {
         let m = boot();
-        let mut buf = vec![0u32; 256 * 192];
-        m.render_rgba(&mut buf);
-        let before = buf.clone();
+        let mut hd = display::Frame::new(256 * 5, 192 * 5);
         let font = &m.mem[PAUSE_FONT_ADDR..PAUSE_FONT_ADDR + PAUSE_FONT_LEN];
-        draw_pause_menu(&mut buf, font);
+        draw_pause_menu(&mut hd, font);
 
-        const WHITE: u32 = 0x00D7_D7D7;
-        // Угол рамки панели — белый (панель x0=40,y0=52).
-        assert_eq!(buf[52 * 256 + 40], WHITE, "panel border not drawn");
+        const WHITE: u32 = 0xFFD7_D7D7;
+        // Угол рамки панели (ZX 40,52 -> HD 200,260) — белый.
+        assert_eq!(hd.pixels()[260 * 1280 + 200], WHITE, "panel border not drawn");
         // Внутри панели нарисован текст: заметное число белых пикселей.
-        let white = buf.iter().filter(|&&p| p == WHITE).count();
-        assert!(white > 200, "menu text too sparse: white={white}");
-        // Меню действительно поверх прежнего кадра.
-        assert!(buf != before, "overlay did not change the frame");
+        let white = hd.pixels().iter().filter(|&&p| p == WHITE).count();
+        assert!(white > 5000, "menu text too sparse: white={white}");
+        // Панель непрозрачная (старший байт != 0), фон слоя — прозрачный.
+        assert_eq!(hd.pixels()[261 * 1280 + 201], 0xFF00_0000, "panel bg not opaque");
+        assert_eq!(hd.pixels()[0], display::TRANSPARENT, "outside panel must stay transparent");
+
+        // Композитинг поверх масштабированного ZX-кадра действительно меняет картинку.
+        let mut zx = vec![0u32; 256 * 192];
+        m.render_rgba(&mut zx);
+        let mut out = vec![0u32; 1280 * 960];
+        for y in 0..960 {
+            for x in 0..1280 {
+                out[y * 1280 + x] = zx[(y / 5) * 256 + x / 5];
+            }
+        }
+        let before = out.clone();
+        hd.composite_onto(&mut out, 1280, 960, 0, 0);
+        assert!(out != before, "overlay did not change the frame");
+        assert_eq!(out[260 * 1280 + 200], WHITE, "overlay not composited");
 
         if let Ok(path) = env::var("ELITE_DUMP_MENU") {
-            write_ppm(&path, &buf, 256, 192);
+            write_ppm(&path, &out, 1280, 960);
         }
     }
 

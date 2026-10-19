@@ -7,6 +7,7 @@
 # Дополнительные аргументы передаются эмулятору, например:
 #   ./run.sh --frames 600 --dump out.ppm
 #   ./run.sh --headless --frames 300
+#   ./run.sh --fullscreen        — полный экран (или F11 / Alt+Enter в игре)
 #   ./run.sh --rom /path/to/48.rom
 set -e
 cd "$(dirname "$0")"
