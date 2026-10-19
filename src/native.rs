@@ -161,8 +161,29 @@ pub struct SaveLayout {
     /// (`ld de,7065h`); поле `PilotDataOfSun` лежит на смещении 93 живого
     /// блока в обеих версиях (`byte_A96D` = `PilotDataSaved`+93).
     pub sun_crd: u16,
+    /// Точка входа главного цикла игры (`GameMain`, у Кладова `0x7471`, в
+    /// оригинале `0x7287`).
+    ///
+    /// Достигается переходом (`jr`/`jp`), поэтому стек сбалансирован —
+    /// [`request_teleport`] может повесить сюда одноразовый хук и увести
+    /// управление в сторону, не ломая стек.
+    pub game_main: u16,
+    /// Ветка «переинициализация и старт на станции» (у Кладова `0x73FD`, в
+    /// оригинале `0x721F`): зовёт `InitGame`, обнуляет `InFreeSpace`/`IndDanger`
+    /// и печатает экран станции, после чего `jr GameMain`.
+    ///
+    /// Сюда переводит управление хук чита телепортации (`F1` на карте), чтобы
+    /// оказаться пристыкованным в текущей (только что переписанной) системе.
+    pub docked_setup: u16,
+    /// Адрес системного флага `FlagsSetUp` (у Кладова `0xFC0E`, в оригинале
+    /// `0xFC14`). Младшие 2 бита — тип устройства управления; ветка
+    /// переинициализации делает `and 0FCh / or b`, поэтому хук восстанавливает
+    /// их из этого байта.
+    pub flags_setup: u16,
     /// Нативная реализация `MenuSaveLoad` для этой версии.
     hook: Hook,
+    /// Одноразовый хук чита телепортации (см. [`request_teleport`]).
+    teleport_hook: Hook,
 }
 
 /// Раскладка версии Кладова (`zx_bin/kladov.bin`).
@@ -177,7 +198,11 @@ pub const KLADOV_SAVE: SaveLayout = SaveLayout {
     commander_len: 0x66,
     pilot_shadow: Some((0xD232, 0x66)),
     sun_crd: 0x7107,
+    game_main: 0x7471,
+    docked_setup: 0x73FD,
+    flags_setup: 0xFC0E,
     hook: menu_save_load_kladov_hook,
+    teleport_hook: teleport_kladov_hook,
 };
 
 /// Раскладка оригинальной версии (`zx_bin/elite.bin`).
@@ -192,7 +217,11 @@ pub const ELITE_SAVE: SaveLayout = SaveLayout {
     commander_len: 0x68,
     pilot_shadow: Some((0xA910, 0x66)),
     sun_crd: 0x7065,
+    game_main: 0x7287,
+    docked_setup: 0x721F,
+    flags_setup: 0xFC14,
     hook: menu_save_load_elite_hook,
+    teleport_hook: teleport_elite_hook,
 };
 
 /// Блок сохранения командира в памяти.
@@ -269,6 +298,75 @@ pub fn request_load(m: &mut Spectrum, layout: SaveLayout) {
     if let Some(gate) = layout.load_gate {
         install_hook(m, gate, layout.gate_hook, 0);
     }
+}
+
+/// Смещение `Pilot_CrdYSystem` в блоке командира (`PilotName`).
+///
+/// Одинаково в обеих версиях: у Кладова `0xD097 - 0xD054`, в оригинале
+/// `0xA859 - 0xA816`.
+const CRD_Y_SYSTEM_OFF: usize = 0x43;
+/// Смещение `Pilot_CrdXSystem` в блоке командира (`PilotName`).
+const CRD_X_SYSTEM_OFF: usize = 0x45;
+
+/// Телепорт «на станцию» системы с координатами `(x, y_raw)` — временный чит
+/// (клавиша `F1` на нативной карте галактики, см. `hdmap`).
+///
+/// Всё делает родной код:
+/// 1. Синхронизируем теневой блок командира из живого — ровно как при
+///    сохранении. `InitGame` восстанавливает пилота из тени, поэтому без этой
+///    копии телепорт откатил бы деньги/груз/приборы к последнему сохранению.
+/// 2. Пишем координаты системы в живой и теневой блоки командира.
+/// 3. Ставим одноразовый хук на [`SaveLayout::game_main`]. Дойдя до `GameMain`,
+///    хук уводит управление на ветку переинициализации
+///    ([`SaveLayout::docked_setup`]): она зовёт `InitGame` (пересобирает данные
+///    текущей планеты по координатам, печатает название и цены), обнуляет
+///    `InFreeSpace`/`IndDanger` и печатает экран станции — корабль оказывается
+///    пристыкованным в новой системе.
+pub fn request_teleport(m: &mut Spectrum, layout: SaveLayout, x: u8, y: u8) {
+    // 1. Тень ← живой блок (как в `commander_save`).
+    if let Some((shadow, len)) = layout.pilot_shadow {
+        let live = layout.pilot_name as usize;
+        let n = layout.commander_len.min(len);
+        let data = m.mem[live..live + n].to_vec();
+        m.mem[shadow as usize..shadow as usize + n].copy_from_slice(&data);
+    }
+    // 2. Координаты системы в живом и теневом блоках. Цель (`Pilot_CrdXTarget`)
+    //    выставит сам `InitGame` (`target = system`).
+    let live = layout.pilot_name as usize;
+    m.mem[live + CRD_Y_SYSTEM_OFF] = y;
+    m.mem[live + CRD_X_SYSTEM_OFF] = x;
+    if let Some((shadow, len)) = layout.pilot_shadow {
+        if len > CRD_X_SYSTEM_OFF {
+            let s = shadow as usize;
+            m.mem[s + CRD_Y_SYSTEM_OFF] = y;
+            m.mem[s + CRD_X_SYSTEM_OFF] = x;
+        }
+    }
+    // 3. Одноразовый хук на главный цикл.
+    install_hook(m, layout.game_main, layout.teleport_hook, 0);
+}
+
+/// Тело хука телепортации (см. [`request_teleport`]).
+fn teleport(cpu: &mut Z80, m: &mut Spectrum, layout: SaveLayout) -> u64 {
+    m.hooks.remove(&layout.game_main);
+    m.hook_max.remove(&layout.game_main);
+    // Ветка переинициализации выполняет `and 0FCh / or b`, где `b` — младшие
+    // два бита `FlagsSetUp` (тип устройства управления). Берём их из памяти,
+    // чтобы не сбить настройку.
+    cpu.b = m.mem[layout.flags_setup as usize] & 3;
+    cpu.pc = layout.docked_setup;
+    m.hook_yield = true;
+    0
+}
+
+/// Хук телепортации для версии Кладова.
+fn teleport_kladov_hook(cpu: &mut Z80, m: &mut Spectrum) -> u64 {
+    teleport(cpu, m, KLADOV_SAVE)
+}
+
+/// Хук телепортации для оригинальной версии.
+fn teleport_elite_hook(cpu: &mut Z80, m: &mut Spectrum) -> u64 {
+    teleport(cpu, m, ELITE_SAVE)
 }
 
 /// Нативная замена ветки «в полёте» перед вызовом `MenuSaveLoad`: переводит
@@ -4319,6 +4417,126 @@ mod tests {
             );
 
             let _ = std::fs::remove_file(&path);
+        }
+    }
+
+    /// Чит `F1`: телепорт «на станцию» выбранной планеты.
+    ///
+    /// После [`request_teleport`] игра должна оказаться пристыкованной
+    /// (`IndDanger == 0`) в системе с заданными координатами, а данные планеты
+    /// (имя) — пересобраны под неё. Проверяем обе версии.
+    #[test]
+    fn teleport_docks_at_selected_system() {
+        // Буфер сгенерированного имени планеты (`TempName`): Кладова 0xDEDB,
+        // оригинала 0xAC2E.
+        for (layout, gal, temp_name, ind_danger, mut m) in [
+            (
+                KLADOV_SAVE,
+                crate::galaxy::KLADOV_GALAXY,
+                0xDEDBusize,
+                0x7104u16,
+                boot_kladov(),
+            ),
+            (
+                ELITE_SAVE,
+                crate::galaxy::ELITE_GALAXY,
+                0xAC2Eusize,
+                0x7062u16,
+                boot_elite(),
+            ),
+        ] {
+            // Стартовая последовательность: подаём SPACE импульсами, пока игра
+            // не окажется на станции.
+            for f in 0..900u64 {
+                m.release_all_keys();
+                if f >= 30 && f % 16 < 6 {
+                    m.set_key(7, 0, true); // SPACE
+                }
+                m.run_frame();
+            }
+            assert_eq!(
+                m.mem[ind_danger as usize], 0,
+                "подготовка: корабль должен быть на станции"
+            );
+
+            // Выбираем планету из модели галактики (не текущую систему).
+            let mut seed = [0u8; 6];
+            seed.copy_from_slice(&m.mem[gal.seed..gal.seed + 6]);
+            let planets = crate::galaxy::planets(seed);
+            let sys = (m.mem[gal.sys_x] as i32, m.mem[gal.sys_y] as i32);
+            let target = planets
+                .iter()
+                .find(|p| (p.x, p.y_raw) != sys)
+                .expect("в галактике нет планеты кроме текущей системы");
+            let (x, y) = (target.x as u8, target.y_raw as u8);
+            let want = crate::galaxy::name(target.state, &m.mem[gal.digraphs..gal.digraphs + 64]);
+
+            request_teleport(&mut m, layout, x, y);
+            for _ in 0..200u64 {
+                m.release_all_keys();
+                m.run_frame();
+            }
+            assert_eq!(
+                m.mem[ind_danger as usize], 0,
+                "0x{:04X}: после телепорта корабль не пристыкован",
+                layout.pilot_name
+            );
+            let live = layout.pilot_name as usize;
+            assert_eq!(
+                m.mem[live + CRD_X_SYSTEM_OFF], x,
+                "0x{:04X}: X системы не переписана",
+                layout.pilot_name
+            );
+            assert_eq!(
+                m.mem[live + CRD_Y_SYSTEM_OFF], y,
+                "0x{:04X}: Y системы не переписана",
+                layout.pilot_name
+            );
+
+            let got: Vec<u8> = m.mem[temp_name..temp_name + 8]
+                .iter()
+                .copied()
+                .take_while(|&b| b != 0)
+                .collect();
+            assert_eq!(
+                String::from_utf8_lossy(&got),
+                want,
+                "0x{:04X}: имя планеты после телепорта не совпало",
+                layout.pilot_name
+            );
+
+            // Игра из этого состояния должна нормально вылетать со станции:
+            // жмём '1' (LaunchDocking) и проверяем, что корабль в полёте, стек
+            // не ушёл в ПЗУ и атрибуты экрана не забиты мусором.
+            m.release_all_keys();
+            m.set_key(3, 0, true); // '1'
+            m.run_frame();
+            m.release_all_keys();
+            for _ in 0..1200u64 {
+                m.run_frame();
+            }
+            assert_ne!(
+                m.mem[ind_danger as usize], 0,
+                "0x{:04X}: после вылета со станции корабль не в полёте",
+                layout.pilot_name
+            );
+            assert!(
+                m.cpu.sp >= 0x4000,
+                "0x{:04X}: после вылета стек ушёл в ПЗУ: SP=0x{:04X}",
+                layout.pilot_name,
+                m.cpu.sp
+            );
+            let is_garbage =
+                |v: u8| v & 0xF8 != 0 && v != 0x10 && v != 0x17;
+            let garbage: Vec<(usize, u8)> = (0x5800..0x5B00)
+                .filter(|&a| is_garbage(m.mem[a]))
+                .map(|a| (a, m.mem[a]))
+                .collect();
+            assert!(
+                garbage.is_empty(),
+                "0x{:04X}: после вылета в атрибутах мусор: {garbage:04X?}",
+                layout.pilot_name
+            );
         }
     }
 }

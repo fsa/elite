@@ -377,6 +377,16 @@ impl Map {
         galaxy::name(self.planets[index].state, &self.digraphs)
     }
 
+    /// Координаты системы `(x, y_raw)` выбранной курсором планеты.
+    ///
+    /// Это те же числа, что игра хранит в `Pilot_CrdXSystem`/`Pilot_CrdYSystem`
+    /// (поле карты `x` `0..255`, `y_raw` `0..255`), — их и нужно записать для
+    /// телепорта (см. `native::request_teleport`).
+    pub fn selected_coords(&self) -> Option<(u8, u8)> {
+        self.nearest_index()
+            .map(|i| (self.planets[i].x as u8, self.planets[i].y_raw as u8))
+    }
+
     /// Расстояние (св. годы) от текущей системы до планеты `index`.
     pub fn distance_to(&self, index: usize) -> f32 {
         match self.system_index() {
@@ -611,6 +621,20 @@ mod tests {
         map.cursor_y_raw = 216;
         map.snap_to_nearest();
         assert_eq!((map.cursor_x, map.cursor_y_raw), (22, 217));
+    }
+
+    /// Координаты выбранной планеты для чита телепортации (F1): те же числа,
+    /// что игра хранит в `Pilot_CrdXSystem`/`Pilot_CrdYSystem`.
+    #[test]
+    fn selected_coords_follow_cursor() {
+        let mut map = opened();
+        // Сразу после открытия курсор стоит на текущей системе — LAVE.
+        assert_eq!(map.selected_coords(), Some((20, 173)));
+        // Наводимся на ORESQU (№204) — координаты меняются вместе с курсором.
+        map.cursor_x = 22;
+        map.cursor_y_raw = 217;
+        map.snap_to_nearest();
+        assert_eq!(map.selected_coords(), Some((22, 217)));
     }
 
     /// Расстояние до выбранной планеты: LAVE -> DISO = 3.6 св. года.

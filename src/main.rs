@@ -132,6 +132,10 @@ fn parse_args() -> Options {
                 println!("  F5         сохранить командира");
                 println!("  F11, Alt+Enter полный экран");
                 println!("  Ctrl+Q     выход из игры");
+                println!();
+                println!("Карта галактики (F10): стрелки/NM/XS — курсор, Enter —");
+                println!("  ближайшая планета, +/- или колесо — масштаб, F1 — чит:");
+                println!("  телепорт на станцию выбранной планеты, Esc — закрыть.");
                 exit(0);
             }
             other => opts.game = other.to_string(),
@@ -816,6 +820,17 @@ impl<'a> App<'a> {
                 KeyCode::ArrowUp | KeyCode::KeyS => self.hdmap.move_by(0, -4),
                 KeyCode::ArrowDown | KeyCode::KeyX => self.hdmap.move_by(0, 4),
                 KeyCode::Enter | KeyCode::Space if !repeat => self.hdmap.snap_to_nearest(),
+                // F1 — временный чит: телепорт «на станцию» выбранной планеты.
+                // Пишем координаты системы и уходим в родную ветку
+                // переинициализации (см. `native::request_teleport`), затем
+                // закрываем карту — игра перерисует экран станции.
+                KeyCode::F1 if !repeat => {
+                    if let Some((x, y)) = self.hdmap.selected_coords() {
+                        let layout = save_layout(&self.opts);
+                        native::request_teleport(&mut self.machine, layout, x, y);
+                        self.hdmap.close();
+                    }
+                }
                 KeyCode::Equal | KeyCode::NumpadAdd => self.hdmap.zoom_by(1),
                 KeyCode::Minus | KeyCode::NumpadSubtract => self.hdmap.zoom_by(-1),
                 KeyCode::Escape if !repeat => self.hdmap.close(),
