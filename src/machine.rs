@@ -244,8 +244,8 @@ impl Spectrum {
             }
             if !self.dump_at.is_empty() && self.dump_at.contains(&pc) {
                 println!(
-                    "AT pc=0x{:04X} hl=0x{:04X} de=0x{:04X} bc=0x{:04X} a=0x{:02X} f=0x{:02X} sp=0x{:04X} ix=0x{:04X} iy=0x{:04X}",
-                    pc, cpu.hl(), cpu.de(), cpu.bc(), cpu.a, cpu.f, cpu.sp, cpu.ix, cpu.iy
+                    "AT pc=0x{:04X} hl=0x{:04X} de=0x{:04X} bc=0x{:04X} a=0x{:02X} f=0x{:02X} sp=0x{:04X} ix=0x{:04X} iy=0x{:04X} mem[0xAA0F]=0x{:02X}",
+                    pc, cpu.hl(), cpu.de(), cpu.bc(), cpu.a, cpu.f, cpu.sp, cpu.ix, cpu.iy, self.mem[0xAA0F]
                 );
                 let _ = std::fs::write(
                     format!("/tmp/opencode/at_{:04X}.bin", pc),
