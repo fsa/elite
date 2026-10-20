@@ -258,6 +258,11 @@ fn main() {
         native::install(&mut machine, opts.kladov);
     }
 
+    // Отслеживание заставки: на ней нативные экраны не открываются.
+    let (intro, game_start) = scene_markers(opts.kladov);
+    machine.intro_range = intro;
+    machine.game_marker = game_start;
+
     // Нативный сейв/лоад командира: перехват `MenuSaveLoad` выставляет флаг,
     // а главный цикл показывает диалог выбора файла (`.zxelite`). Раскладка
     // адресов зависит от версии игры.
@@ -339,6 +344,28 @@ fn save_layout(opts: &Options) -> native::SaveLayout {
         native::KLADOV_SAVE
     } else {
         native::ELITE_SAVE
+    }
+}
+
+/// Маркеры «заставки» и старта игры для выбранной версии. Пока игра
+/// проигрывает заставку, нативные экраны (карта F10, закупка F4) открывать
+/// нельзя — как и у оригинальных команд, которых на заставке нет.
+///
+/// Интро определяется «залипающе»: адрес из первого диапазона взводит флаг
+/// [`machine::Spectrum::intro_seen`], а вход в `GameMain` (второе значение) его
+/// снимает. Просто держать флаг по кадру нельзя: цикл заставки вызывает
+/// длинные рутины (очистка/копирование экрана) вне своего диапазона, и флаг
+/// мерцал бы.
+///
+/// * Кладова — аттракт-цикл `sub_728D` (`loc_739E`..`loc_73FD`), старт игры
+///   `GameMain` = `0x7471`.
+/// * Оригинал — `BeginGame` (`loc_71A2`..`loc_721F`), старт игры `GameMain`
+///   = `0x7287`.
+fn scene_markers(kladov: bool) -> (Option<(u16, u16)>, Option<u16>) {
+    if kladov {
+        (Some((0x739E, 0x73FD)), Some(0x7471))
+    } else {
+        (Some((0x71A2, 0x721F)), Some(0x7287))
     }
 }
 
@@ -695,6 +722,9 @@ struct App<'a> {
     surface: Option<Surface<Rc<Window>, Rc<Window>>>,
     /// Состояние ZX-матрицы (полуряд, бит) — обновляется событиями клавиш.
     matrix: [[bool; 5]; 8],
+    /// Нажатие игровой клавиши, которым был закрыт нативный экран: один кадр
+    /// принудительно подаётся в эмулятор, даже если клавишу уже отпустили.
+    pending_key: Option<(usize, u8)>,
     /// Состояние джойстика Kempston (5 бит).
     kempston: [bool; 5],
     ctrl: bool,
@@ -732,6 +762,7 @@ impl<'a> App<'a> {
             context: None,
             surface: None,
             matrix: [[false; 5]; 8],
+            pending_key: None,
             kempston: [false; 5],
             ctrl: false,
             alt: false,
@@ -806,7 +837,7 @@ impl<'a> App<'a> {
         if code == KeyCode::F10 && !repeat {
             if self.hdmap.active {
                 self.hdmap.close();
-            } else {
+            } else if !self.machine.intro_seen {
                 let layout = if self.opts.kladov {
                     galaxy::KLADOV_GALAXY
                 } else {
@@ -820,6 +851,7 @@ impl<'a> App<'a> {
                 }
                 self.shop.close();
                 self.menu = false;
+                self.pending_key = None;
             }
             return;
         }
@@ -829,7 +861,7 @@ impl<'a> App<'a> {
         if code == KeyCode::F4 && !repeat {
             if self.shop.active {
                 self.shop.close();
-            } else {
+            } else if !self.machine.intro_seen {
                 let layout = if self.opts.kladov {
                     equip::KLADOV_SHOP
                 } else {
@@ -843,6 +875,7 @@ impl<'a> App<'a> {
                 }
                 self.hdmap.close();
                 self.menu = false;
+                self.pending_key = None;
             }
             return;
         }
@@ -853,7 +886,12 @@ impl<'a> App<'a> {
                 KeyCode::ArrowRight | KeyCode::KeyM => self.hdmap.move_by(4, 0),
                 KeyCode::ArrowUp | KeyCode::KeyS => self.hdmap.move_by(0, -4),
                 KeyCode::ArrowDown | KeyCode::KeyX => self.hdmap.move_by(0, 4),
-                KeyCode::Enter | KeyCode::Space if !repeat => self.hdmap.snap_to_nearest(),
+                KeyCode::Enter | KeyCode::Space => {
+                    // На автоповторе не переходим в игру (Space — огонь).
+                    if !repeat {
+                        self.hdmap.snap_to_nearest();
+                    }
+                }
                 // F1 — временный чит: телепорт «на станцию» выбранной планеты.
                 // Пишем координаты системы и уходим в родную ветку
                 // переинициализации (см. `native::request_teleport`), затем
@@ -868,7 +906,15 @@ impl<'a> App<'a> {
                 KeyCode::Equal | KeyCode::NumpadAdd => self.hdmap.zoom_by(1),
                 KeyCode::Minus | KeyCode::NumpadSubtract => self.hdmap.zoom_by(-1),
                 KeyCode::Escape if !repeat => self.hdmap.close(),
-                _ => {}
+                // Игровая клавиша: закрываем карту и отдаём нажатие игре,
+                // чтобы из карты сразу перейти к экранам игры (командир,
+                // станция и т.п.), не закрывая её вручную.
+                _ => {
+                    if is_game_key(code) {
+                        self.hdmap.close();
+                        self.pending_key = matrix_pos(code);
+                    }
+                }
             }
             return;
         }
@@ -884,12 +930,19 @@ impl<'a> App<'a> {
                 }
                 KeyCode::ArrowUp => self.shop.move_selection(-1),
                 KeyCode::ArrowDown => self.shop.move_selection(1),
-                KeyCode::Enter | KeyCode::Space if !repeat => {
-                    self.shop.confirm(&mut self.machine.mem);
+                KeyCode::Enter | KeyCode::Space => {
+                    // На автоповторе не переходим в игру (Space — огонь).
+                    if !repeat {
+                        self.shop.confirm(&mut self.machine.mem);
+                    }
                 }
                 _ => {
                     if let Some(d) = digit_of(code) {
                         self.shop.input_digit(&mut self.machine.mem, d);
+                    } else if is_game_key(code) {
+                        // Игровая клавиша: закрываем закупку и отдаём нажатие игре.
+                        self.shop.close();
+                        self.pending_key = matrix_pos(code);
                     }
                 }
             }
@@ -945,6 +998,11 @@ impl<'a> App<'a> {
                     self.machine.set_key(row, bit as u8, true);
                 }
             }
+        }
+        // Нажатие, которым закрыли нативный экран, подаём один кадр даже если
+        // клавишу уже отпустили (иначе быстрый тап игра бы не заметила).
+        if let Some((row, bit)) = self.pending_key.take() {
+            self.machine.set_key(row, bit, true);
         }
         for (bit, &down) in self.kempston.iter().enumerate() {
             self.machine.set_kempston(bit as u8, down);
@@ -1286,6 +1344,13 @@ fn kempston_bit(code: KeyCode) -> Option<u8> {
     })
 }
 
+/// Нажатие, которое игра использует как управление (матрица ZX или джойстик
+/// Kempston). По такой клавише нативный экран закрывается и нажатие уходит
+/// в игру — чтобы из карты/закупки можно было сразу перейти к экранам игры.
+fn is_game_key(code: KeyCode) -> bool {
+    matrix_pos(code).is_some() || kempston_bit(code).is_some()
+}
+
 #[cfg(test)]
 mod intro_tests {
     use super::*;
@@ -1465,5 +1530,194 @@ mod intro_tests {
         assert!(app.shop.active);
         app.key_event(KeyCode::F4, true, false);
         assert!(!app.shop.active, "F4 не закрыл экран закупки");
+    }
+
+    /// Загрузка версии Кладова: снапшот сразу после запуска — на заставке.
+    fn boot_kladov() -> Spectrum {
+        let base = env!("CARGO_MANIFEST_DIR");
+        let rom = fs::read(format!("{base}/zx_bin/48.rom")).expect("zx_bin/48.rom");
+        let game = fs::read(format!("{base}/zx_bin/kladov.bin")).expect("zx_bin/kladov.bin");
+        let mut m = Spectrum::new(Some(&rom));
+        m.load(KLADOV_LOAD_ADDR, &game);
+        let c = &mut m.cpu;
+        c.a = KLADOV_STATE_A;
+        c.f = KLADOV_STATE_F;
+        c.b = (KLADOV_STATE_BC >> 8) as u8;
+        c.c = (KLADOV_STATE_BC & 0xFF) as u8;
+        c.d = (KLADOV_STATE_DE >> 8) as u8;
+        c.e = (KLADOV_STATE_DE & 0xFF) as u8;
+        c.h = (KLADOV_STATE_HL >> 8) as u8;
+        c.l = (KLADOV_STATE_HL & 0xFF) as u8;
+        c.ix = KLADOV_STATE_IX;
+        c.iy = KLADOV_STATE_IY;
+        c.sp = KLADOV_STATE_SP;
+        c.pc = KLADOV_STATE_PC;
+        c.i = KLADOV_I;
+        c.r = KLADOV_STATE_R;
+        c.im = 2;
+        c.iff1 = true;
+        c.iff2 = true;
+        m
+    }
+
+    fn kladov_options() -> Options {
+        Options {
+            kladov: true,
+            ..test_options()
+        }
+    }
+
+    /// На заставке нативные экраны не открываются: F10/F4 игнорируются, пока
+    /// игра проигрывает интро (обе версии).
+    #[test]
+    fn native_screens_blocked_on_intro() {
+        // Оригинал: интро-цикл `BeginGame` 0x71A2..0x721F, старт `GameMain`.
+        let opts = test_options();
+        let mut m = boot();
+        let (intro, game) = scene_markers(false);
+        m.intro_range = intro;
+        m.game_marker = game;
+        for _ in 0..600 {
+            m.run_frame();
+        }
+        assert!(m.intro_seen, "интро оригинала не распознано");
+        let mut app = App::new(m, &opts);
+        app.key_event(KeyCode::F10, true, false);
+        assert!(!app.hdmap.active, "F10 не должен открываться на заставке");
+        app.key_event(KeyCode::F4, true, false);
+        assert!(!app.shop.active, "F4 не должен открываться на заставке");
+
+        // Кладова: аттракт-цикл `sub_728D` 0x739E..0x73FD, старт `GameMain`.
+        let opts = kladov_options();
+        let mut m = boot_kladov();
+        let (intro, game) = scene_markers(true);
+        m.intro_range = intro;
+        m.game_marker = game;
+        for _ in 0..30 {
+            m.run_frame();
+        }
+        assert!(m.intro_seen, "заставка Кладова не распознана");
+        let mut app = App::new(m, &opts);
+        app.key_event(KeyCode::F10, true, false);
+        assert!(
+            !app.hdmap.active,
+            "F10 не должен открываться на заставке Кладова"
+        );
+        app.key_event(KeyCode::F4, true, false);
+        assert!(
+            !app.shop.active,
+            "F4 не должен открываться на заставке Кладова"
+        );
+    }
+
+    /// Сброс флага заставки по входу в `GameMain`: как только игра вошла в
+    /// игровой цикл, нативные экраны снова доступны.
+    #[test]
+    fn native_screens_available_after_game_main() {
+        // Кладова: интро взводит флаг, вход в `GameMain` его снимает.
+        let opts = kladov_options();
+        let mut m = boot_kladov();
+        let (intro, game) = scene_markers(true);
+        m.intro_range = intro;
+        m.game_marker = game;
+        for _ in 0..30 {
+            m.run_frame();
+        }
+        assert!(m.intro_seen, "сначала должны быть на заставке");
+        m.note_pc(game.unwrap());
+        assert!(!m.intro_seen, "вход в GameMain не снял флаг заставки");
+        let mut app = App::new(m, &opts);
+        app.key_event(KeyCode::F10, true, false);
+        assert!(
+            app.hdmap.active,
+            "после старта игры F10 должен открывать карту"
+        );
+    }
+
+    /// Проверка на живом образе Кладова: пока не нажат SPACE, флаг заставки
+    /// держится; после старта игры (вход в `GameMain`) снимается.
+    #[test]
+    fn kladov_intro_clears_after_space() {
+        let mut m = boot_kladov();
+        let (intro, game) = scene_markers(true);
+        m.intro_range = intro;
+        m.game_marker = game;
+        for _ in 0..30 {
+            m.run_frame();
+        }
+        assert!(m.intro_seen, "должны быть на заставке");
+        m.set_key(7, 0, true); // SPACE
+        let mut cleared_at = None;
+        for f in 0..3000 {
+            m.run_frame();
+            if !m.intro_seen {
+                cleared_at = Some(f);
+                break;
+            }
+        }
+        assert!(cleared_at.is_some(), "SPACE не запустил игру (флаг не снят)");
+    }
+
+    /// Точная логика «залипающего» флага заставки.
+    #[test]
+    fn intro_flag_is_sticky() {
+        let mut m = Spectrum::new(None);
+        m.intro_range = Some((0x1000, 0x1010));
+        m.game_marker = Some(0x2000);
+        m.note_pc(0x0800);
+        assert!(!m.intro_seen, "флаг не должен взводиться вне диапазонов");
+        m.note_pc(0x1005);
+        assert!(m.intro_seen, "адрес интро должен взводить флаг");
+        m.note_pc(0x0800);
+        assert!(m.intro_seen, "флаг заставки должен «залипать»");
+        m.note_pc(0x2000);
+        assert!(!m.intro_seen, "вход в GameMain должен снимать флаг");
+        m.note_pc(0x1010);
+        assert!(m.intro_seen, "верхняя граница диапазона включается");
+        m.note_pc(0x1011);
+        assert!(m.intro_seen, "за верхней границей флаг держится");
+    }
+
+    /// Игровая клавиша при открытом нативном экране закрывает его и уходит в
+    /// игру — из карты можно сразу перейти к экранам игры, не закрывая карту.
+    #[test]
+    fn game_key_closes_native_screen_and_forwards() {
+        let opts = test_options();
+        let mut app = App::new(boot(), &opts);
+        app.key_event(KeyCode::F10, true, false);
+        assert!(app.hdmap.active);
+        // `L` (матрица 6,1) — игровая клавиша: карта закрывается.
+        app.key_event(KeyCode::KeyL, true, false);
+        assert!(!app.hdmap.active, "игровая клавиша не закрыла карту");
+        app.apply_input();
+        assert_eq!(
+            app.machine.keyboard[6] & (1 << 1),
+            0,
+            "нажатие L не передано игре"
+        );
+        // Управляющая клавиша карты (стрелка) карту не закрывает.
+        app.key_event(KeyCode::F10, true, false);
+        assert!(app.hdmap.active);
+        app.key_event(KeyCode::ArrowRight, true, false);
+        assert!(app.hdmap.active, "стрелка не должна закрывать карту");
+        // Автоповтор управляющей клавиши тоже не закрывает (иначе Space
+        // «залипал» бы в игру как огонь).
+        app.key_event(KeyCode::Space, true, false);
+        assert!(app.hdmap.active, "Space должен листать карту, а не закрывать");
+        app.key_event(KeyCode::Space, true, true);
+        assert!(app.hdmap.active, "автоповтор Space не должен закрывать карту");
+
+        // То же для экрана закупки.
+        app.key_event(KeyCode::F4, true, false);
+        assert!(app.shop.active);
+        app.key_event(KeyCode::KeyO, true, false);
+        assert!(!app.shop.active, "игровая клавиша не закрыла закупку");
+        app.apply_input();
+        let (row, bit) = matrix_pos(KeyCode::KeyO).expect("O в матрице");
+        assert_eq!(
+            app.machine.keyboard[row] & (1 << bit),
+            0,
+            "нажатие O не передано игре"
+        );
     }
 }

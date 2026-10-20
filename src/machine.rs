@@ -43,6 +43,17 @@ pub struct Spectrum {
     pub sp_for_write: u16,
     pub spat: std::collections::BTreeMap<u16, u64>,
     pub dump_at: Vec<u16>,
+    /// Диапазон адресов «заставки» (интро) для выбранной версии игры; `None`
+    /// — отслеживание выключено. Любой исполненный адрес из диапазона
+    /// взводит [`Spectrum::intro_seen`].
+    pub intro_range: Option<(u16, u16)>,
+    /// Адрес входа в игровой цикл (`GameMain`): его исполнение снимает
+    /// [`Spectrum::intro_seen`]. Так флаг «залипает» на заставке, хотя её
+    /// цикл вызывает длинные рутины вне своего диапазона.
+    pub game_marker: Option<u16>,
+    /// Игра сейчас на заставке (интро). Пока игра на заставке, нативные
+    /// экраны (карта/закупка) не открываются — как и у оригинальных команд.
+    pub intro_seen: bool,
     /// Частота дискретизации синтезируемого звука (Гц).
     pub audio_rate: u32,
     /// Переходы бипера (порт 0xFE, бит 4) в текущем кадре: (такт CPU, уровень).
@@ -118,6 +129,9 @@ impl Spectrum {
             sp_for_write: 0,
             spat: std::collections::BTreeMap::new(),
             dump_at: Vec::new(),
+            intro_range: None,
+            game_marker: None,
+            intro_seen: false,
             audio_rate: crate::audio::SAMPLE_RATE,
             beeper_edges: Vec::new(),
             beeper_frame_start: false,
@@ -168,6 +182,22 @@ impl Spectrum {
         self.kempston = 0;
     }
 
+    /// Обновляет флаг заставки по адресу исполняемой инструкции.
+    ///
+    /// «Залипающе»: вход в игровой цикл (`game_marker`) снимает флаг, адрес из
+    /// интро-диапазона — взводит. Так флаг не мерцает между итерациями цикла
+    /// заставки, которые вызывают длинные рутины вне её диапазона.
+    #[inline]
+    pub fn note_pc(&mut self, pc: u16) {
+        if self.game_marker == Some(pc) {
+            self.intro_seen = false;
+        } else if let Some((lo, hi)) = self.intro_range {
+            if pc >= lo && pc <= hi {
+                self.intro_seen = true;
+            }
+        }
+    }
+
     /// Run one PAL frame's worth of instructions, raising a maskable
     /// interrupt at the start of the frame (IM1 -> 0x0038).
     pub fn run_frame(&mut self) {
@@ -181,6 +211,7 @@ impl Spectrum {
         cpu.interrupt(self, 0xFF);
         while cpu.cycles < target {
             let pc = cpu.pc;
+            self.note_pc(pc);
             self.pc_for_write = pc;
             if self.wtrace.is_some() {
                 self.sp_for_write = cpu.sp;
