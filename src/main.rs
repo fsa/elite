@@ -5,6 +5,7 @@ mod galaxy;
 mod hdmap;
 mod machine;
 mod native;
+mod shipdata;
 mod z80;
 
 use audio::Audio;
