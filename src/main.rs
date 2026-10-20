@@ -1,4 +1,5 @@
 mod audio;
+mod cockpit;
 mod display;
 mod equip;
 mod galaxy;
@@ -6,6 +7,7 @@ mod hdmap;
 mod machine;
 mod native;
 mod shipdata;
+mod splash;
 mod z80;
 
 use audio::Audio;
@@ -122,20 +124,25 @@ fn parse_args() -> Options {
                 println!("  --save FILE фиксированный файл командира вместо диалога");
                 println!("  --fullscreen запуск в полноэкранном режиме (borderless)");
                 println!("В игре: F10 — карта галактики (нативная), F4 — закупка");
-                println!("        оборудования (нативная), Esc — пауза,");
-                println!("        F11 — полный экран, F5/F9 — сохранить/загрузить.");
+                println!("        оборудования (нативная), Esc — меню паузы");
+                println!("        (продолжить/сохранить/загрузить/выход),");
+                println!("        F11 — полный экран.");
+                println!();
+                println!("Заставка нативная: [SPACE] — начать игру, [Esc] — меню");
+                println!("  паузы (на заставке только загрузка, сохранение без игры");
+                println!("  отключено).");
                 println!();
                 println!("Экран: ZX-кадр 256x192 показывается целым множителем (чёткие");
                 println!("квадратные пиксели) по центру; нативные (Rust) реализации");
                 println!("рисуют в HD-слой поверх него в полном разрешении окна.");
                 println!();
                 println!("Управление:");
-                println!("  Esc        пауза");
+                println!("  Esc        меню паузы (продолжить/сохранить/загрузить/выход)");
                 println!("  F4         закупка оборудования (нативный экран)");
-                println!("  F9         загрузить командира");
-                println!("  F5         сохранить командира");
                 println!("  F11, Alt+Enter полный экран");
                 println!("  Ctrl+Q     выход из игры");
+                println!();
+                println!("Заставка: SPACE запускает игру, остальные клавиши не срабатывают.");
                 println!();
                 println!("Карта галактики (F10): стрелки/NM/XS — курсор, Enter —");
                 println!("  ближайшая планета, +/- или колесо — масштаб, F1 — чит:");
@@ -367,6 +374,15 @@ fn scene_markers(kladov: bool) -> (Option<(u16, u16)>, Option<u16>) {
         (Some((0x739E, 0x73FD)), Some(0x7471))
     } else {
         (Some((0x71A2, 0x721F)), Some(0x7287))
+    }
+}
+
+/// Адреса переменных панели кокпита для выбранной версии игры.
+fn cockpit_layout(opts: &Options) -> cockpit::CockpitLayout {
+    if opts.kladov {
+        cockpit::KLADOV_COCKPIT
+    } else {
+        cockpit::ELITE_COCKPIT
     }
 }
 
@@ -716,6 +732,16 @@ struct App<'a> {
     hdmap: hdmap::Map,
     /// Нативный экран закупки оборудования (F4) — заменяет экран игры.
     shop: equip::Shop,
+    /// Нативная заставка (титульный экран): пока игра на интро, эмуляция не
+    /// идёт, а окно занимает нативный рендер (`splash`).
+    splash: splash::Splash,
+    /// Нативный кокпит (приборная панель) — рисуется в нижней части окна
+    /// поверх ZX-кадра, растянут на всю ширину (16:10).
+    cockpit: cockpit::Cockpit,
+    /// Выбранный пункт меню паузы (0 — продолжить, 1 — сохранить, 2 — загрузить,
+    /// 3 — выйти). Стрелки двигают выбор, Enter подтверждает.
+    menu_sel: usize,
+    /// Признак выхода из игры.
     quit: bool,
     buf: Vec<u32>,
     window: Option<Rc<Window>>,
@@ -757,6 +783,9 @@ impl<'a> App<'a> {
             menu: false,
             hdmap: hdmap::Map::new(),
             shop: equip::Shop::new(),
+            splash: splash::Splash::new(),
+            cockpit: cockpit::Cockpit::new(),
+            menu_sel: 0,
             quit: false,
             buf: vec![0u32; SRC_W * SRC_H],
             window: None,
@@ -789,7 +818,7 @@ impl<'a> App<'a> {
             return;
         }
         let attrs = Window::default_attributes()
-            .with_title("Elite — Esc: пауза, F10: карта, F4: закупка, F11: полный экран, Ctrl+Q: выход")
+            .with_title("Elite — Esc: меню паузы, F10: карта, F4: закупка, F11: полный экран, Ctrl+Q: выход")
             .with_inner_size(LogicalSize::new(4.0 * SRC_W as f64, 4.0 * SRC_H as f64));
         let window = match event_loop.create_window(attrs) {
             Ok(w) => Rc::new(w),
@@ -962,14 +991,60 @@ impl<'a> App<'a> {
             self.toggle_fullscreen();
             return;
         }
-        match code {
-            KeyCode::Escape => self.menu = !self.menu,
-            KeyCode::Digit1 if self.menu => {
-                self.menu = false;
+        // Меню паузы: своё управление, в эмулятор клавиши не уходят.
+        if self.menu {
+            self.menu_key(code);
+            return;
+        }
+        // На заставке своя нативная логика: запускает игру только SPACE,
+        // остальные клавиши (кроме управления приложением) игнорируются.
+        if self.machine.intro_seen {
+            if code == KeyCode::Space {
+                let layout = save_layout(self.opts);
+                native::start_game(&mut self.machine, layout);
+            } else if code == KeyCode::Escape {
+                self.menu = true;
+                self.menu_sel = 0;
             }
-            KeyCode::Digit3 if self.menu => self.quit = true,
-            KeyCode::F9 => do_load(&mut self.machine, self.opts, &mut self.last_path),
-            KeyCode::F5 => do_save(&mut self.machine, self.opts, &mut self.last_path),
+            return;
+        }
+        match code {
+            KeyCode::Escape => {
+                self.menu = true;
+                self.menu_sel = 0;
+            }
+            _ => {}
+        }
+    }
+
+    /// Обработка клавиш в меню паузы (Esc). Пункты: 0 — продолжить,
+    /// 1 — сохранить, 2 — загрузить, 3 — выйти. На заставке сохранение
+    /// отключено (игрового процесса ещё нет), загрузка разрешена: данные
+    /// ложатся в блок командира, и запуск по `SPACE` начнёт игру с ними.
+    fn menu_key(&mut self, code: KeyCode) {
+        let intro = self.machine.intro_seen;
+        match code {
+            KeyCode::Escape => self.menu = false,
+            KeyCode::ArrowUp => self.menu_sel = self.menu_sel.saturating_sub(1),
+            KeyCode::ArrowDown => self.menu_sel = (self.menu_sel + 1).min(3),
+            KeyCode::Digit1 => self.menu_sel = 0,
+            KeyCode::Digit2 => self.menu_sel = 1,
+            KeyCode::Digit3 => self.menu_sel = 2,
+            KeyCode::Digit4 => self.menu_sel = 3,
+            KeyCode::Enter | KeyCode::Space => match self.menu_sel {
+                0 => self.menu = false,
+                1 => {
+                    if !intro {
+                        do_save(&mut self.machine, self.opts, &mut self.last_path);
+                        self.menu = false;
+                    }
+                }
+                2 => {
+                    do_load(&mut self.machine, self.opts, &mut self.last_path);
+                    self.menu = false;
+                }
+                _ => self.quit = true,
+            },
             _ => {}
         }
     }
@@ -1040,15 +1115,32 @@ impl<'a> App<'a> {
         // во время эмуляции, показ накладывает слой поверх ZX-кадра.
         let size = window.inner_size();
         let layout = display::layout(size.width, size.height);
-        if self.hdmap.active || self.shop.active {
-            // Отдельный нативный экран (карта/закупка): HD-слой во всё окно,
-            // игра на паузе.
+        if self.hdmap.active || self.shop.active || self.machine.intro_seen {
+            // Отдельный нативный экран (карта/закупка/заставка): HD-слой во
+            // всё окно, игра на паузе. Слой непрозрачный и покрывает окно
+            // целиком, поэтому композитится в левый верхний угол (0, 0).
             self.machine.hd.resize(size.width as usize, size.height as usize);
             self.machine.hd.clear(display::TRANSPARENT);
-            self.machine.release_all_keys();
-            self.machine.release_joystick();
+            if self.machine.intro_seen {
+                // Нативная заставка: вращающаяся тестовая фигура, ZX-кадр не
+                // показывается. Эмуляция продолжается, чтобы Z80 шёл по своему
+                // циклу (запуск игры делает `native::start_game`).
+                self.splash.tick();
+                self.machine.release_all_keys();
+                self.machine.release_joystick();
+                if !self.menu {
+                    self.machine.run_frame();
+                }
+            } else {
+                self.machine.release_all_keys();
+                self.machine.release_joystick();
+            }
         } else {
-            self.machine.hd.resize(layout.w as usize, layout.h as usize);
+            // Игровой режим: HD-слой в разрешении области показа; кокпит
+            // пока рисуется только на заставке (см. ветку интро выше).
+            self.machine
+                .hd
+                .resize(layout.w as usize, layout.h as usize);
             self.machine.hd.clear(display::TRANSPARENT);
             if self.menu {
                 // В меню игра не выполняется, клавиши не попадают в эмулятор.
@@ -1079,9 +1171,24 @@ impl<'a> App<'a> {
         } else if self.shop.active {
             self.shop
                 .draw(&mut self.machine.hd, &self.font, &self.machine.mem);
+        } else if self.machine.intro_seen {
+            // Нативная заставка; внизу — демонстрация нативной приборной
+            // панели (кокпит). Заголовок с фигурой занимают верхнюю область,
+            // поэтому не заходят под панель.
+            let g = cockpit::panel_geometry(size.width, size.height);
+            self.splash
+                .draw_in(&mut self.machine.hd, &self.font, g.panel_y.max(1));
+            if self.menu {
+                draw_pause_menu(&mut self.machine.hd, &self.font, self.menu_sel, true);
+            } else {
+                // Показания берутся из памяти Z80 (на заставке они нулевые).
+                let cl = cockpit_layout(self.opts);
+                self.cockpit
+                    .draw(&mut self.machine.hd, &self.machine.mem, &self.font, cl);
+            }
         } else if self.menu {
             // Меню паузы — в HD-слой, чтобы текст был чётким в любом окне.
-            draw_pause_menu(&mut self.machine.hd, &self.font);
+            draw_pause_menu(&mut self.machine.hd, &self.font, self.menu_sel, false);
         }
         self.present(&window, &layout);
     }
@@ -1110,9 +1217,9 @@ impl<'a> App<'a> {
         let (ow, oh) = (w as usize, h as usize);
         // Фон окна — чёрные поля вокруг области 4:3.
         out.fill(0);
-        // Отдельный нативный экран (карта/закупка) показывается вместо
-        // ZX-кадра: слой непрозрачный и покрывает всё окно.
-        if self.hdmap.active || self.shop.active {
+        // Отдельный нативный экран (карта/закупка/заставка) показывается
+        // вместо ZX-кадра: слой непрозрачный и покрывает всё окно.
+        if self.hdmap.active || self.shop.active || self.machine.intro_seen {
             self.machine.hd.composite_onto(&mut out, ow, oh, 0, 0);
             window.pre_present_notify();
             let _ = out.present();
@@ -1266,12 +1373,16 @@ const PAUSE_FONT_ADDR: usize = 0x3D00;
 /// Длина знакогенератора: 96 символов по 8 байт.
 const PAUSE_FONT_LEN: usize = 0x300;
 
-/// Наложение меню паузы в HD-слой: рамка и пункты «1 сохранить /
-/// 2 загрузить / 3 выйти». Панель задана в пикселях ZX (256x192) и
-/// увеличивается до целого масштаба слоя — текст чёткий в любом окне.
-fn draw_pause_menu(frame: &mut display::Frame, font: &[u8]) {
+/// Наложение меню паузы в HD-слой: рамка и пункты «1 продолжить /
+/// 2 сохранить / 3 загрузить / 4 выйти». Панель задана в пикселях ZX
+/// (256x192) и увеличивается до целого масштаба слоя — текст чёткий в любом
+/// окне. `sel` — выбранный пункт (0..3) для подсветки, `intro` — заставка
+/// (сохранение отключено, поэтому пункт «сохранить» затемнён).
+fn draw_pause_menu(frame: &mut display::Frame, font: &[u8], sel: usize, intro: bool) {
     const FG: u32 = 0xFFD7_D7D7; // белый (непрозрачный)
     const BG: u32 = 0xFF00_0000; // чёрный (непрозрачный)
+    const DIM: u32 = 0x0080_8080; // затемнённый текст (прозрачный)
+    const MARK: u32 = 0xFFFF_FF00; // жёлтый маркер выбора
     let scale = (frame.width / SRC_W).max(1);
     let s = scale as i32;
     let (x0, y0) = (40 * s, 52 * s);
@@ -1285,11 +1396,21 @@ fn draw_pause_menu(frame: &mut display::Frame, font: &[u8]) {
     let lines = [
         (52 + 8, "ELITE - PAUSED"),
         (52 + 24, "1  RESUME"),
-        (52 + 36, "3  QUIT GAME"),
-        (52 + 56, "ESC RESUME"),
+        (52 + 36, "2  SAVE"),
+        (52 + 48, "3  LOAD"),
+        (52 + 60, "4  QUIT GAME"),
     ];
-    for (y, text) in lines {
-        frame.draw_text(font, x0 + 12 * s, y as i32 * s, text, FG, scale);
+    for (i, (y, text)) in lines.iter().enumerate() {
+        // Пункты 1..4 идут после заголовка (i == 0).
+        let item = i as isize - 1;
+        let dim = intro && item == 1;
+        let color = if dim { DIM } else { FG };
+        let tx = x0 + 12 * s;
+        let ty = *y as i32 * s;
+        frame.draw_text(font, tx, ty, text, color, scale);
+        if item >= 0 && item as usize == sel {
+            frame.fill_rect(x0 + 4 * s, ty, (6 * scale) as usize, 8 * scale, MARK);
+        }
     }
 }
 
@@ -1366,6 +1487,9 @@ mod intro_tests {
         install_im2_table(&mut m);
         m.cpu.pc = GAME_ENTRY;
         m.cpu.sp = 0x6000;
+        // В `main` перехват `MenuSaveLoad` ставится всегда — повторяем, иначе
+        // проверки сохранения/загрузки из меню паузы в тестах не сработают.
+        native::install_save(&mut m, native::ELITE_SAVE);
         m
     }
 
@@ -1398,7 +1522,7 @@ mod intro_tests {
         let m = boot();
         let mut hd = display::Frame::new(256 * 5, 192 * 5);
         let font = &m.mem[PAUSE_FONT_ADDR..PAUSE_FONT_ADDR + PAUSE_FONT_LEN];
-        draw_pause_menu(&mut hd, font);
+        draw_pause_menu(&mut hd, font, 0, false);
 
         const WHITE: u32 = 0xFFD7_D7D7;
         // Угол рамки панели (ZX 40,52 -> HD 200,260) — белый.
@@ -1558,6 +1682,7 @@ mod intro_tests {
         c.im = 2;
         c.iff1 = true;
         c.iff2 = true;
+        native::install_save(&mut m, native::KLADOV_SAVE);
         m
     }
 
@@ -1677,6 +1802,216 @@ mod intro_tests {
         assert!(m.intro_seen, "верхняя граница диапазона включается");
         m.note_pc(0x1011);
         assert!(m.intro_seen, "за верхней границей флаг держится");
+    }
+
+    /// На заставке работает только SPACE: остальные клавиши (в т.ч. F10/F4)
+    /// игнорируются и в эмулятор не уходят. SPACE запускает игру родным путём.
+    #[test]
+    fn intro_accepts_only_space() {
+        let opts = test_options();
+        let mut m = boot();
+        let (intro, game) = scene_markers(false);
+        m.intro_range = intro;
+        m.game_marker = game;
+        for _ in 0..30 {
+            m.run_frame();
+        }
+        assert!(m.intro_seen, "интро не распознано");
+        let mut app = App::new(m, &opts);
+        // Лишние клавиши на заставке ничего не делают.
+        app.key_event(KeyCode::F5, true, false);
+        app.key_event(KeyCode::F9, true, false);
+        app.key_event(KeyCode::F10, true, false);
+        app.key_event(KeyCode::F4, true, false);
+        app.key_event(KeyCode::Digit1, true, false);
+        app.key_event(KeyCode::KeyO, true, false);
+        assert!(!app.menu, "лишние клавиши не должны открывать меню");
+        assert!(!app.hdmap.active && !app.shop.active);
+        assert!(app.machine.intro_seen, "игра должна остаться на заставке");
+        // Esc открывает меню паузы (в нём сохранить недоступно).
+        app.key_event(KeyCode::Escape, true, false);
+        assert!(app.menu, "Esc на заставке должен открывать меню");
+        app.key_event(KeyCode::Escape, true, false);
+        assert!(!app.menu, "Esc должен закрывать меню");
+        // SPACE запускает игру: хук переводит Z80 на ветку переинициализации,
+        // она зовёт `InitGame`, печатает станцию и уходит в `GameMain`.
+        native::start_game(&mut app.machine, save_layout(&opts));
+        let mut cleared = false;
+        for _ in 0..5000 {
+            app.machine.run_frame();
+            if !app.machine.intro_seen {
+                cleared = true;
+                break;
+            }
+        }
+        assert!(cleared, "SPACE не запустил игру");
+    }
+
+    /// Нативная заставка рисуется в HD-слой во всё окно: непрозрачный фон,
+    /// заголовок и подсказки, вращающаяся фигура. `ELITE_DUMP_SPLASH=<file>`
+    /// сохраняет слой в PPM для визуальной проверки.
+    #[test]
+    fn splash_overlay_renders() {
+        let m = boot();
+        let mut hd = display::Frame::new(256 * 5, 192 * 5);
+        let font = &m.mem[PAUSE_FONT_ADDR..PAUSE_FONT_ADDR + PAUSE_FONT_LEN];
+        let mut st = splash::Splash::new();
+        st.draw(&mut hd, font);
+        // Фон полностью непрозрачный.
+        assert_eq!(hd.pixels()[0], 0xFF00_0000, "фон заставки не непрозрачный");
+        // Заголовок «ELITE» (белый) и подсказка меню (серый) нарисованы.
+        let white = hd.pixels().iter().filter(|&&p| p == 0xFFD7_D7D7).count();
+        let grey = hd.pixels().iter().filter(|&&p| p == 0xFF90_9090).count();
+        assert!(white > 1000, "заголовок заставки не нарисован: {white}");
+        assert!(grey > 1000, "подсказка меню не нарисована: {grey}");
+        if let Ok(path) = env::var("ELITE_DUMP_SPLASH") {
+            write_ppm(&path, hd.pixels(), 256 * 5, 192 * 5);
+        }
+    }
+
+    /// Нативный кокпит: панель рисуется под заставкой (пока игра не
+    /// запущена). `ELITE_DUMP_COCKPIT=<file>` сохраняет заставку вместе с
+    /// панелью в PPM для визуальной проверки.
+    #[test]
+    fn cockpit_overlay_renders() {
+        let base = env!("CARGO_MANIFEST_DIR");
+        let m = boot();
+        let font = &m.mem[PAUSE_FONT_ADDR..PAUSE_FONT_ADDR + PAUSE_FONT_LEN];
+        let (w, h) = (256 * 5, 192 * 5);
+        let mut hd = display::Frame::new(w, h);
+        let g = cockpit::panel_geometry(w as u32, h as u32);
+        // Заставка в верхней области, панель — внизу (как в игровом цикле).
+        splash::Splash::new().draw_in(&mut hd, font, g.panel_y.max(1));
+        cockpit::Cockpit::new().draw(&mut hd, &m.mem, font, cockpit::ELITE_COCKPIT);
+        // Панель непрозрачна.
+        for y in g.panel_y..h as i32 {
+            for x in 0..w {
+                assert_ne!(
+                    hd.pixels()[y as usize * w + x],
+                    0,
+                    "прозрачный пиксель панели ({x},{y})"
+                );
+            }
+        }
+        if let Ok(path) = env::var("ELITE_DUMP_COCKPIT") {
+            std::fs::create_dir_all(format!("{base}/tmp")).unwrap();
+            write_ppm(&path, hd.pixels(), w, h);
+        }
+    }
+
+    /// На заставке в меню паузы доступна только загрузка: сохранение отключено.
+    #[test]
+    fn intro_menu_allows_load_but_not_save() {
+        let base = env!("CARGO_MANIFEST_DIR");
+        let mut opts = test_options();
+        opts.save = Some(format!("{base}/tmp/test_intro_load.zxelite"));
+        // Создаём минимальный файл для загрузки.
+        std::fs::create_dir_all(format!("{base}/tmp")).unwrap();
+        std::fs::write(&opts.save.as_ref().unwrap(), vec![0u8; 0x68]).unwrap();
+
+        let mut m = boot();
+        let (intro, game) = scene_markers(false);
+        m.intro_range = intro;
+        m.game_marker = game;
+        for _ in 0..600 {
+            m.run_frame();
+        }
+        let mut app = App::new(m, &opts);
+        app.machine.intro_seen = true;
+        app.machine.save_requested = false;
+        app.key_event(KeyCode::Escape, true, false);
+        assert!(app.menu);
+        // Пункт «сохранить» (1) на заставке не срабатывает.
+        app.menu_sel = 1;
+        app.key_event(KeyCode::Enter, true, false);
+        assert!(app.menu, "на заставке сохранение не должно закрывать меню");
+        assert!(!app.machine.save_requested, "на заставке сохранять нельзя");
+        // Пункт «загрузить» (2) работает: просит загрузку у игры.
+        app.menu_sel = 2;
+        app.key_event(KeyCode::Enter, true, false);
+        assert!(!app.menu, "загрузка должна закрыть меню");
+        assert!(app.machine.load_requested, "загрузка не запрошена");
+    }
+
+    /// Меню паузы в игре: стрелки двигают выбор, Enter по «сохранить»
+    /// закрывает меню и просит игру сохраниться.
+    #[test]
+    fn pause_menu_selection_and_actions() {
+        let base = env!("CARGO_MANIFEST_DIR");
+        let mut opts = test_options();
+        opts.save = Some(format!("{base}/tmp/test_menu_save.zxelite"));
+        let mut app = App::new(boot(), &opts);
+        app.machine.intro_seen = false;
+        app.machine.save_requested = false;
+        app.key_event(KeyCode::Escape, true, false);
+        assert!(app.menu);
+        assert_eq!(app.menu_sel, 0);
+        // Стрелка вниз двигает выбор, вверх — назад (не ниже нуля).
+        app.key_event(KeyCode::ArrowDown, true, false);
+        assert_eq!(app.menu_sel, 1);
+        app.key_event(KeyCode::ArrowUp, true, false);
+        app.key_event(KeyCode::ArrowUp, true, false);
+        assert_eq!(app.menu_sel, 0, "выбор не должен уходить ниже нуля");
+        // Цифра задаёт пункт напрямую, Enter по «сохранить» закрывает меню и
+        // сохраняет блок командира.
+        app.key_event(KeyCode::Digit2, true, false);
+        assert_eq!(app.menu_sel, 1);
+        app.key_event(KeyCode::Enter, true, false);
+        assert!(!app.menu, "сохранение должно закрыть меню");
+        assert!(
+            std::path::Path::new(&opts.save.as_ref().unwrap()).exists(),
+            "файл сохранения не создан"
+        );
+    }
+
+    /// На заставке Кладова `SPACE` запускает игру: хук на точках цикла
+    /// заставки уводит Z80 на ветку переинициализации и снимает `intro_seen`.
+    #[test]
+    fn kladov_intro_accepts_space() {
+        let mut opts = test_options();
+        opts.kladov = true;
+        let mut m = boot_kladov();
+        let (intro, gs) = scene_markers(true);
+        m.intro_range = intro;
+        m.game_marker = gs;
+        for _ in 0..120 {
+            m.run_frame();
+        }
+        assert!(m.intro_seen, "заставка Кладова не распознана");
+        let mut app = App::new(m, &opts);
+        app.key_event(KeyCode::Space, true, false);
+        let mut started = false;
+        for _ in 0..300 {
+            app.machine.run_frame();
+            if !app.machine.intro_seen {
+                started = true;
+                break;
+            }
+        }
+        assert!(started, "SPACE не запустил игру Кладова");
+    }
+
+    /// Меню паузы рисует затемнённый пункт SAVE на заставке.
+    #[test]
+    fn intro_pause_menu_dims_save() {
+        let m = boot();
+        let font = &m.mem[PAUSE_FONT_ADDR..PAUSE_FONT_ADDR + PAUSE_FONT_LEN];
+        // Цвета пунктов SAVE: затемнённый на заставке и обычный в игре.
+        let counts = |intro: bool| {
+            let mut hd = display::Frame::new(256 * 5, 192 * 5);
+            draw_pause_menu(&mut hd, font, 0, intro);
+            let dim = hd.pixels().iter().filter(|&&p| p == 0x0080_8080).count();
+            let white = hd.pixels().iter().filter(|&&p| p == 0xFFD7_D7D7).count();
+            (dim, white)
+        };
+        let (dim_on_intro, white_on_intro) = counts(true);
+        let (dim_in_game, white_in_game) = counts(false);
+        assert!(dim_on_intro > 0, "на заставке пункт SAVE должен быть затемнён");
+        assert_eq!(dim_in_game, 0, "в игре SAVE не затемняется");
+        assert!(
+            white_on_intro < white_in_game,
+            "затемнение должно уменьшать белый текст"
+        );
     }
 
     /// Игровая клавиша при открытом нативном экране закрывает его и уходит в

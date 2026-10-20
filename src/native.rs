@@ -184,6 +184,21 @@ pub struct SaveLayout {
     hook: Hook,
     /// Одноразовый хук чита телепортации (см. [`request_teleport`]).
     teleport_hook: Hook,
+    /// Точки цикла заставки, на которые [`start_game`] вешает одноразовый хук
+    /// запуска игры. Хук срабатывает на первой же исполненной точке и уводит Z80
+    /// на ветку переинициализации ([`Self::docked_setup`]) — ровно то, что
+    /// делала заставка по `SPACE`.
+    ///
+    /// У каждой версии цикл заставки состоит из нескольких участков, и в
+    /// зависимости от состояния входа исполняются разные: у Кладова первый
+    /// участок (`loc_739E`) крутится только пока «нажата» клавиша
+    /// (`inc a; jr nz` при `PressKeyPrnSymbol != 0xFF`), поэтому в начале игры
+    /// исполняется второй участок (`loc_73C3`↔`loc_73E2`); в оригинале —
+    /// наоборот, первый (`loc_71A2`). Чтобы запуск не зависел от того, в каком
+    /// участке застала игра, хук вешается сразу на все точки.
+    pub intro_loop_start: &'static [u16],
+    /// Одноразовый хук запуска игры с заставки (см. [`start_game`]).
+    start_hook: Hook,
 }
 
 /// Раскладка версии Кладова (`zx_bin/kladov.bin`).
@@ -203,6 +218,8 @@ pub const KLADOV_SAVE: SaveLayout = SaveLayout {
     flags_setup: 0xFC0E,
     hook: menu_save_load_kladov_hook,
     teleport_hook: teleport_kladov_hook,
+    intro_loop_start: &[0x739E, 0x73C3, 0x73E2],
+    start_hook: start_game_kladov_hook,
 };
 
 /// Раскладка оригинальной версии (`zx_bin/elite.bin`).
@@ -222,6 +239,8 @@ pub const ELITE_SAVE: SaveLayout = SaveLayout {
     flags_setup: 0xFC14,
     hook: menu_save_load_elite_hook,
     teleport_hook: teleport_elite_hook,
+    intro_loop_start: &[0x71A2, 0x71E5],
+    start_hook: start_game_elite_hook,
 };
 
 /// Блок сохранения командира в памяти.
@@ -307,6 +326,50 @@ pub fn request_load(m: &mut Spectrum, layout: SaveLayout) {
 const CRD_Y_SYSTEM_OFF: usize = 0x43;
 /// Смещение `Pilot_CrdXSystem` в блоке командира (`PilotName`).
 const CRD_X_SYSTEM_OFF: usize = 0x45;
+
+/// Одноразовая нативная замена точек цикла заставки (см. [`start_game`]).
+///
+/// Хук срабатывает на первой же исполненной точке цикла (`intro_loop_start`)
+/// и уводит Z80 на ветку переинициализации ([`SaveLayout::docked_setup`]) —
+/// ровно туда, куда родная заставка попадала по `SPACE`. Снимаем хук со всех
+/// точек цикла (они могли быть поставлены все сразу). `B` выставляем как
+/// делает сама ветка: младшие 2 бита `FlagsSetUp` — тип устройства управления.
+fn start_game_gate(cpu: &mut Z80, m: &mut Spectrum, layout: SaveLayout) -> u64 {
+    for &addr in layout.intro_loop_start {
+        m.hooks.remove(&addr);
+        m.hook_max.remove(&addr);
+    }
+    cpu.b = m.mem[layout.flags_setup as usize] & 3;
+    cpu.pc = layout.docked_setup;
+    m.hook_yield = true;
+    0
+}
+
+/// Хук старта для версии Кладова.
+fn start_game_kladov_hook(cpu: &mut Z80, m: &mut Spectrum) -> u64 {
+    start_game_gate(cpu, m, KLADOV_SAVE)
+}
+
+/// Хук старта для оригинальной версии.
+fn start_game_elite_hook(cpu: &mut Z80, m: &mut Spectrum) -> u64 {
+    start_game_gate(cpu, m, ELITE_SAVE)
+}
+
+/// Запустить игру с нативной заставки (клавиша `SPACE`).
+///
+/// Родного цикла ожидания на заставке больше нет — он заменён нативным
+/// (`splash`), поэтому запуск выполняем так же, как телепорт: одноразовыми
+/// хуками на все точки цикла заставки ([`SaveLayout::intro_loop_start`]) уводим
+/// Z80 на ветку переинициализации ([`SaveLayout::docked_setup`]). Она зовёт
+/// `InitGame`, очищает флаги полёта, печатает экран станции и переходит в
+/// `GameMain`, поэтому [`machine::Spectrum::intro_seen`] снимается корректно.
+/// Как и при загрузке/телепорте, стек не ломаем — переход с кадровой границы
+/// на ветку, достигаемую обычно тоже переходом.
+pub fn start_game(m: &mut Spectrum, layout: SaveLayout) {
+    for &addr in layout.intro_loop_start {
+        install_hook(m, addr, layout.start_hook, 0);
+    }
+}
 
 /// Телепорт «на станцию» системы с координатами `(x, y_raw)` — временный чит
 /// (клавиша `F1` на нативной карте галактики, см. `hdmap`).
@@ -4239,6 +4302,36 @@ mod tests {
             );
 
             let _ = std::fs::remove_file(&path);
+        }
+    }
+
+    /// Запуск игры с нативной заставки: `start_game` вешает одноразовые хуки
+    /// на точки цикла заставки, они уводят Z80 в ветку переинициализации, и
+    /// после `InitGame`/`GameMain` корабль оказывается на станции
+    /// (`IndDanger == 0`). Клавиши не подаём — запуск делает сам хук.
+    #[test]
+    fn start_game_from_intro_proceeds() {
+        for (layout, ind_danger, mut m) in [
+            (KLADOV_SAVE, 0x7104u16, boot_kladov()),
+            (ELITE_SAVE, 0x7062u16, boot_elite()),
+        ] {
+            install_save(&mut m, layout);
+            // Даём игре дойти до заставки.
+            for _ in 0..60 {
+                m.run_frame();
+            }
+
+            start_game(&mut m, layout);
+            // Должен сработать хук и запустить игру.
+            let mut started = false;
+            for _ in 0..1200 {
+                m.run_frame();
+                if m.mem[ind_danger as usize] == 0 {
+                    started = true;
+                    break;
+                }
+            }
+            assert!(started, "игра не стартовала по start_game (0x{:04X})", ind_danger);
         }
     }
 
