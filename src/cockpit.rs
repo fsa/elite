@@ -7,21 +7,23 @@
 //! компас и радиолокатор (`UpdateAllIndicators`, `PrintCompass`,
 //! `PrintObjScaner`).
 //!
-//! Здесь панель рисуется заново средствами [`crate::display::Frame`] **точно по
-//! оригинальной раскладке знакомест** (32x8), но растягивается на всю ширину
-//! окна: радар на широком экране крупнее, чем в ZX-версии. Вид из кабины
-//! (верхние 2/3) сохраняет пропорции 4:3.
-//!
-//! Раскладка оригинала (координаты в знакоместах, панель = столбцы 1..30):
+//! В оригинале 64 строки панели были вынужденной платой за экран ZX 256x192:
+//! вид занимал верхние 128 строк, а нижняя треть уходила под приборы. На
+//! современном окне такой пропорции не нужно — панель здесь занимает около
+//! пятой части высоты, а вид из кабины получает всю остальную площадь. При
+//! этом раскладка остаётся узнаваемо оригинальной (32 знакоместа, столбцы
+//! 1..31):
 //!
 //! ```text
-//!   столбцы:  3..7        10..20              21..23      24..28
-//!   ┌────────────────────────────────────────────────────────────┐
-//!   │ 6 полос   │  радиолокатор (круг)   │ компас │ скорость +   │
-//!   │ (иконка + │  с осями и точками     │ (круг) │ 4 энергоблока│
-//!   │  шкала)   │                        │        │              │
-//!   └────────────────────────────────────────────────────────────┘
+//!   столбцы:  1..3      3..8          8..21        21..24      24..29   29..31
+//!   ┌──────────────────────────────────────────────────────────────────────┐
+//!   │ иконки │ 6 полос │ радиолокатор │ компас │ скорость/  │ подписи      │
+//!   │        │         │              │        │ энергоблоки│              │
+//!   └──────────────────────────────────────────────────────────────────────┘
 //! ```
+//!
+//! Узкая рамка вокруг вида из кабины рисуется отдельно
+//! ([`Cockpit::draw_view_frame`]) — как линия кокпита в оригинальном растре.
 //!
 //! Значения читаются из живой памяти Z80 (`mem`) после кадра, поэтому панель
 //! показывает текущее состояние полёта без вмешательства в эмуляцию.
@@ -87,10 +89,11 @@ pub struct Cockpit;
 
 /// Геометрия панели и вида сверху для текущего окна.
 ///
-/// Панель занимает всю ширину окна; её высота — `PANEL_FRAC` от высоты окна
-/// (в оригинале панель — треть экрана, здесь чуть больше для читаемости на
-/// широких окнах). Внутри панели координаты считаются в «единицах знакомест»
-/// шириной `cell`: 32 знакоместа по горизонтали, `PANEL_ROWS` по вертикали.
+/// Панель занимает всю ширину окна; её высота — `PANEL_FRAC` от высоты окна.
+/// В оригинале панель занимала треть экрана только из-за ZX 256x192; здесь
+/// она компактнее, а освободившееся место отдано виду из кабины. Внутри
+/// панели координаты считаются в «единицах знакомест» шириной `cell`:
+/// 32 знакоместа по горизонтали, `PANEL_ROWS` по вертикали.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct PanelGeom {
     /// Экранная Y-координата панели (сверху).
@@ -113,10 +116,13 @@ pub struct PanelGeom {
     pub height: i32,
 }
 
-/// Доля высоты окна под панель (в процентах).
-const PANEL_FRAC: i32 = 34;
+/// Доля высоты окна под панель (в процентах). В оригинале было 64/192 ≈ 33%;
+/// 22% оставляют вид крупнее, но не делают приборы нечитаемыми.
+const PANEL_FRAC: i32 = 22;
 /// Высота панели в знакоместах (как в оригинале).
 pub const PANEL_ROWS: i32 = 8;
+/// Высота вида из кабины в строках ZX-кадра: верхние 128 строк.
+pub const VIEW_H: i32 = 128;
 
 impl PanelGeom {
     /// Экранная X-координата знакоместа `col` (0..32).
@@ -132,22 +138,22 @@ impl PanelGeom {
 
 /// Разложение виртуальной сетки ZX 256x192 по окну `WxH`.
 ///
-/// Верхние 2/3 (строки 0..127) — вид из кабины в пропорции 4:3 сверху;
-/// нижние 64 строки заменены панелью на всю ширину окна.
+/// Верхние 128 строк ZX-кадра — вид из кабины; нижние 64 строки заменены
+/// компактной панелью на всю ширину окна.
 pub fn panel_geometry(w: u32, h: u32) -> PanelGeom {
     let w = w as i32;
     let h = h as i32;
     let panel_h = (h * PANEL_FRAC / 100).clamp(48.min(h), h).max(1);
     let top_h = (h - panel_h).max(1);
-    // Вид сверху сохраняет 4:3: сетка 256x128 (2/3 кадра) в области top_h.
-    let scale = (w / 256).min(top_h / 128).max(1);
+    // Вид из кабины (сетка 256x128) масштабируется целым множителем.
+    let scale = (w / 256).min(top_h / VIEW_H).max(1);
     PanelGeom {
         panel_y: h - panel_h,
         panel_h,
         cell: (w / 32).max(1),
         zx_scale: scale,
         zx_x: (w - 256 * scale) / 2,
-        zx_y: (top_h - 128 * scale) / 2,
+        zx_y: (top_h - VIEW_H * scale) / 2,
         top_h,
         width: w,
         height: h,
@@ -176,20 +182,59 @@ impl Cockpit {
         self.draw_scanner(f, &g, c);
     }
 
-    /// Корпус панели: чёрный фон, рамка вокруг панели и разделители окон —
-    /// как в оригинальном растре `DataCocpit`.
+    /// Корпус панели: чёрный фон, рамка и разделители окон — как в
+    /// оригинальном растре `DataCocpit`.
+    ///
+    /// Оригинальные столбцы: внешние края `1/31`, иконки `1..3`, полосы
+    /// `3..8`, радиолокатор `8..21`, компас `21..24`, правые полосы `24..29`
+    /// и подписи `29..31`.
     fn draw_frame(&self, f: &mut Frame, g: &PanelGeom, c: Colors) {
         let h = g.panel_h;
         // Чёрный фон панели.
         f.fill_rect(0, g.panel_y, g.width as usize, h as usize, c.body);
-        // Верхняя и нижняя линии — как рамка панели в оригинале.
-        f.hline(0, g.panel_y, g.width as usize, c.frame);
-        f.hline(0, g.panel_y + h - 1, g.width as usize, c.frame);
-        // Вертикальные линии по краям (col 1 и col 30) и разделители окон.
+        let x0 = g.col_x(1);
+        let x1 = g.col_x(31);
+        let bw = (x1 - x0).max(1) as usize;
+        // Верхняя и нижняя линии рамки (с чёрными полями до краёв окна).
+        f.hline(x0, g.panel_y, bw, c.frame);
+        f.hline(x0, g.panel_y + h - 1, bw, c.frame);
+        // Вертикальные линии по краям и разделители окон.
         let lw = 1i32;
-        for col in [1, 3, 8, 10, 21, 24, 30] {
-            f.fill_rect(g.col_x(col), g.panel_y + 1, lw as usize, (h - 2) as usize, c.frame);
+        for col in [1, 3, 8, 21, 24, 29, 31] {
+            f.fill_rect(
+                g.col_x(col),
+                g.panel_y + 1,
+                lw as usize,
+                (h - 2).max(1) as usize,
+                c.frame,
+            );
         }
+    }
+
+    /// Рамка вокруг вида из кабины. В оригинале вид отделяла верхняя линия
+    /// кокпита; здесь она замкнута в прямоугольник, чтобы вид читался как
+    /// отдельное окно, а не как продолжение панели.
+    ///
+    /// Рамка рисуется по краю вида (а не снаружи), поэтому она видна и тогда,
+    /// когда вид занимает окно по ширине целиком — на стандартном окне 4x.
+    pub fn draw_view_frame(&self, f: &mut Frame, g: &PanelGeom, mem: &[u8], layout: CockpitLayout) {
+        let c = Colors::danger(read_u8(mem, layout.ind_danger));
+        let vw = 256 * g.zx_scale;
+        let vh = VIEW_H * g.zx_scale;
+        let t = (g.zx_scale / 2).max(1);
+        let x0 = g.zx_x.max(0);
+        let y0 = g.zx_y.max(0);
+        let x1 = (g.zx_x + vw).min(g.width);
+        let y1 = (g.zx_y + vh).min(g.height);
+        if x1 - x0 < 2 * t || y1 - y0 < 2 * t {
+            return;
+        }
+        let fw = (x1 - x0) as usize;
+        let fh = (y1 - y0) as usize;
+        f.fill_rect(x0, y0, fw, t as usize, c.frame);
+        f.fill_rect(x0, y1 - t, fw, t as usize, c.frame);
+        f.fill_rect(x0, y0, t as usize, fh, c.frame);
+        f.fill_rect(x1 - t, y0, t as usize, fh, c.frame);
     }
 
     /// Левое окно (col 3..7): шесть полос — иконка пиктограммы и шкала.
@@ -217,17 +262,27 @@ impl Cockpit {
         // Полосы занимают знакоместные строки 1..7; каждая — своей высоты.
         let top = g.row_y(1);
         let row_h = (g.row_y(7) - top) / 6;
-        let x_icon = g.col_x(3) + 2;
-        let x_bar = g.col_x(4);
-        let bar_w = g.col_x(8) - x_bar - 3;
+        let x_icon = g.col_x(1) + 2;
+        let icon_w = (g.col_x(3) - x_icon - 2).max(4);
+        let x_bar = g.col_x(3) + 2;
+        let bar_w = (g.col_x(8) - x_bar - 2).max(4);
         for (i, (icon, value)) in bars.iter().enumerate() {
             let y = top + i as i32 * row_h;
-            draw_icon(f, font, *icon, x_icon, y + 1, row_h - 3, c.frame);
-            draw_bar(f, *value, x_bar, y + 1, bar_w.max(4), row_h - 3, c);
+            draw_icon(
+                f,
+                font,
+                *icon,
+                x_icon,
+                y + 1,
+                icon_w.min(row_h - 3),
+                c.frame,
+            );
+            draw_bar(f, *value, x_bar, y + 1, bar_w, row_h - 3, c);
         }
     }
 
-    /// Правое окно (col 24..28): скорость и четыре энергоблока.
+    /// Правое окно (col 24..31): полосы скорости и четырёх энергоблоков,
+    /// а справа от них — компактные подписи, как в оригинале.
     fn draw_units(
         &self,
         f: &mut Frame,
@@ -239,28 +294,50 @@ impl Cockpit {
     ) {
         let top = g.row_y(1);
         let row_h = (g.row_y(7) - top) / 6;
-        let x_icon = g.col_x(24) + 2;
-        let x_val = g.col_x(25);
-        let val_w = g.col_x(29) - x_val - 2;
+        let x_bar = g.col_x(24) + 2;
+        let bar_w = (g.col_x(29) - x_bar - 2).max(4);
+        let x_label = g.col_x(29) + 2;
+        let label_w = (g.col_x(31) - x_label - 1).max(4);
         // Скорость — строка 0 окна (знакоместная строка 1).
-        f.draw_text(font, x_icon, top + 1, "SPD", c.frame, 1);
-        draw_bar(f, read_u8(mem, layout.speed), x_val, top + 1, val_w.max(4), row_h - 3, c);
+        draw_bar(
+            f,
+            read_u8(mem, layout.speed),
+            x_bar,
+            top + 1,
+            bar_w,
+            row_h - 3,
+            c,
+        );
+        draw_unit_icon(f, x_label, top + 1, label_w.min(row_h - 3), false, c);
         // Четыре энергоблока — строки 1..5 (первый энергоблок пропускает
         // строку скорости; в оригинале UNIT1..4 идут ниже).
         for i in 0..4 {
             let v = read_u8(mem, layout.shield_unit1 + (i as u16) * 2);
             let y = top + (i as i32 + 1) * row_h;
-            draw_unit_icon(f, x_icon, y + 1, row_h - 3, v >= 0xA0, c);
-            draw_bar(f, v, x_val, y + 1, val_w.max(4), row_h - 3, c);
+            draw_bar(f, v, x_bar, y + 1, bar_w, row_h - 3, c);
+            draw_unit_icon(f, x_label, y + 1, label_w.min(row_h - 3), v >= 0xA0, c);
         }
+        // Подпись скорости: маленький треугольник у первой полосы.
+        let s = (row_h / 3).clamp(4, bar_w / 2);
+        f.line(x_label, top + 1, x_label + s, top + row_h / 2, c.needle);
+        f.line(
+            x_label,
+            top + row_h - 2,
+            x_label + s,
+            top + row_h / 2,
+            c.needle,
+        );
+        let _ = font;
     }
 
-    /// Компас (col 21..23): круг с указателем. Угол берётся из памяти игры
+    /// Компас (col 21..24): круг с указателем. Угол берётся из памяти игры
     /// (`PrintCompass`); при отсутствии доступа — указатель на север.
     fn draw_compass(&self, f: &mut Frame, _mem: &[u8], g: &PanelGeom, c: Colors) {
         let cx = (g.col_x(21) + g.col_x(24)) / 2;
         let cy = g.panel_y + g.panel_h / 2;
-        let r = (g.panel_h / 5).max(6);
+        let r = ((g.col_x(24) - g.col_x(21)) / 2 - 2)
+            .min(g.panel_h / 3)
+            .max(6);
         f.disc(cx, cy, r, c.body);
         f.circle(cx, cy, r, c.frame);
         f.circle(cx, cy, r - 2, c.frame);
@@ -270,15 +347,15 @@ impl Cockpit {
         f.line(cx, cy - r / 3, cx, cy + r / 3, c.frame);
     }
 
-    /// Радиолокатор (col 10..20): круг с диагональными и прямыми осями и
+    /// Радиолокатор (col 8..21): круг с диагональными и прямыми осями и
     /// отметкой корабля игрока в центре — как сетка оригинала
     /// (`PrintObjScaner`, база точек `0x558F`). На широком экране радар
     /// крупнее, чем в ZX-версии.
     fn draw_scanner(&self, f: &mut Frame, g: &PanelGeom, c: Colors) {
-        let cx = (g.col_x(10) + g.col_x(21)) / 2;
+        let cx = (g.col_x(8) + g.col_x(21)) / 2;
         let cy = g.panel_y + g.panel_h / 2;
         // Радиус ограничен и высотой панели, и шириной отведённых знакомест.
-        let r = ((g.col_x(21) - g.col_x(10)) / 2 - 2)
+        let r = ((g.col_x(21) - g.col_x(8)) / 2 - 2)
             .min(g.panel_h / 2 - 3)
             .max(6);
         f.disc(cx, cy, r, c.body);
@@ -369,9 +446,21 @@ fn draw_unit_icon(f: &mut Frame, x: i32, y: i32, size: i32, full: bool, c: Color
     let s = size.max(4);
     f.fill_rect(x, y, s as usize, s as usize, c.frame);
     if full {
-        f.fill_rect(x + 1, y + 1, (s - 2).max(0) as usize, (s - 2).max(0) as usize, c.frame);
+        f.fill_rect(
+            x + 1,
+            y + 1,
+            (s - 2).max(0) as usize,
+            (s - 2).max(0) as usize,
+            c.frame,
+        );
     } else {
-        f.fill_rect(x + 1, y + 1, (s - 2).max(0) as usize, (s - 2).max(0) as usize, c.body);
+        f.fill_rect(
+            x + 1,
+            y + 1,
+            (s - 2).max(0) as usize,
+            (s - 2).max(0) as usize,
+            c.body,
+        );
     }
 }
 
@@ -469,9 +558,10 @@ mod tests {
         }
     }
 
-    /// Панель растянута на всю ширину окна (16:10), вид сверху остаётся 4:3.
+    /// Панель растянута на всю ширину окна (16:10), но занимает меньше
+    /// трети высоты, оставляя крупный вид из кабины.
     #[test]
-    fn cockpit_spans_full_width() {
+    fn cockpit_spans_full_width_but_is_compact() {
         let font = test_font();
         let mut f = Frame::new(1680, 1050);
         let mem = mem_with(ELITE_COCKPIT, 0xA0, 0x50, 0x04);
@@ -480,8 +570,30 @@ mod tests {
         let mid = (g.panel_y + g.panel_h / 2) as usize * 1680;
         assert_ne!(f.pixels()[mid], 0, "левый край панели пуст");
         assert_ne!(f.pixels()[mid + 1679], 0, "правый край панели пуст");
-        assert!(g.zx_scale >= 1);
-        assert!(g.panel_h >= 1050 / 4);
+        assert!(g.panel_h < 1050 / 3, "панель всё ещё занимает треть экрана");
+        assert!(g.panel_h > 0);
+        assert!(
+            g.panel_y > g.zx_y + VIEW_H * g.zx_scale,
+            "вид заходит под панель"
+        );
+    }
+
+    /// В игровом окне 16:9 вид масштабируется крупнее, чем целый ZX-кадр:
+    /// верхние 128 строк занимают больше места, чем прежние 2/3 кадра.
+    #[test]
+    fn game_view_is_larger_than_full_zx_frame() {
+        let g = panel_geometry(1920, 1080);
+        let full = crate::display::layout(1920, 1080);
+        assert_eq!(g.zx_scale, 6, "вид должен идти в масштабе x6");
+        assert!(
+            g.zx_scale as usize > full.scale,
+            "вид не стал крупнее полного ZX-кадра ({} <= {})",
+            g.zx_scale,
+            full.scale
+        );
+        assert!(g.zx_x >= 0 && g.zx_y >= 0);
+        assert!(g.zx_x + 256 * g.zx_scale <= g.width);
+        assert!(g.zx_y + VIEW_H * g.zx_scale <= g.panel_y);
     }
 
     /// Значение индикатора влияет на длину заливки: пусто и полно различны.
@@ -536,11 +648,26 @@ mod tests {
     fn scanner_is_larger_on_wide_screen() {
         let narrow = panel_geometry(1024, 768);
         let wide = panel_geometry(1920, 1200);
-        let r_narrow = ((narrow.col_x(21) - narrow.col_x(10)) / 2 - 2).min(narrow.panel_h / 2 - 3);
-        let r_wide = ((wide.col_x(21) - wide.col_x(10)) / 2 - 2).min(wide.panel_h / 2 - 3);
+        let r_narrow = ((narrow.col_x(21) - narrow.col_x(8)) / 2 - 2).min(narrow.panel_h / 2 - 3);
+        let r_wide = ((wide.col_x(21) - wide.col_x(8)) / 2 - 2).min(wide.panel_h / 2 - 3);
         assert!(
             r_wide > r_narrow,
             "радар на широком экране не крупнее ({r_wide} <= {r_narrow})"
         );
+    }
+
+    /// Рамка вида рисуется вокруг области вида и не закрывает её пиксели.
+    #[test]
+    fn view_frame_surrounds_view_without_overlap() {
+        let g = panel_geometry(1920, 1080);
+        let mut f = Frame::new(1920, 1080);
+        let mem = mem_with(ELITE_COCKPIT, 0, 0, 0x04);
+        Cockpit::new().draw_view_frame(&mut f, &g, &mem, ELITE_COCKPIT);
+        let x = g.zx_x.max(0) as usize;
+        let y = g.zx_y.max(0) as usize;
+        assert_ne!(f.pixels()[y * 1920 + x], 0, "рамка вида не нарисована");
+        // Внутри рамки слой остаётся прозрачным.
+        let t = (g.zx_scale / 2).max(1) as usize;
+        assert_eq!(f.pixels()[(y + t) * 1920 + x + t], 0);
     }
 }
