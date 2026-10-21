@@ -7,6 +7,14 @@
 //! невидимых граней — как это делает оригинальный рендер Z80
 //! (`CalcVisibleVerges` + `PrintObject`).
 //!
+//! Видимость грани повторяет оригинальный тест: грань видна, если её
+//! нормаль после поворота СКО направлена к наблюдателю. Камера в оригинале
+//! смотрит вдоль +Z (печатные координаты делятся на Z, объект стоит на
+//! Z = +0x200), поэтому условие сводится к `нормаль.z < 0` — см.
+//! [`face_visibility`]. Старшие биты 4-го байта нормали — знаки её
+//! компонентов (бит 7 — X, бит 6 — Y, бит 5 — Z), а не признак
+//! «перевёрнутой» грани.
+//!
 //! С запуском игры заставка не связана напрямую: `SPACE` переводит Z80 на
 //! ветку переинициализации (см. [`native::start_game`](crate::native)),
 //! а заставка продолжает показываться, пока игра не дойдёт до `GameMain`.
@@ -41,7 +49,11 @@ impl Splash {
             SPLASH_SHIP_IDX = idx;
         }
         Splash {
-            yaw: std::f32::consts::FRAC_PI_4,
+            // Стартовый ракурс — три четверти с носом к наблюдателю.
+            // Нос модели смотрит вдоль +Z, а камера оригинала смотрит
+            // вдоль +Z, поэтому нос разворачивается на пол-оборота
+            // (`π`), а `π/4` даёт ракурс в три четверти.
+            yaw: std::f32::consts::PI + std::f32::consts::FRAC_PI_4,
             tick: 0,
             ship: Some(&ships[unsafe { SPLASH_SHIP_IDX }]),
         }
@@ -132,9 +144,8 @@ impl Splash {
     /// Геометрия берётся из [`Ship`]; воспроизводится логика Z80-рендера
     /// (`CalcVisibleVerges` + `PrintObject`): ребро рисуется, если видна хотя
     /// бы одна из назначенных ему граней (`Edge::faces`, полубайты; `0xF` —
-    /// сентинел «видна всегда»). Грань видна, если её нормаль после поворота
-    /// направлена от наблюдателя (знак скалярного произведения), при этом
-    /// бит 7 в `Face::flags` переворачивает фронтальный тест.
+    /// сентинел «видна всегда»). Видимость грани считает
+    /// [`face_visibility`].
     fn draw_ship(&self, frame: &mut Frame, ship: &Ship, cx: i32, cy: i32, r: i32) {
         let verts = ship.vertices;
         if verts.is_empty() {
@@ -156,36 +167,20 @@ impl Splash {
         ];
         // Поворот: вокруг Y (курс) и фиксированный наклон вокруг X — нос к
         // наблюдателю чуть сверху, как в оригинальном интро.
-        let (sin_y, cos_y) = (self.yaw.sin(), self.yaw.cos());
         const TILT: f32 = 0.5;
-        let (sin_x, cos_x) = (TILT.sin(), TILT.cos());
-        let rot = |v: [f32; 3]| -> [f32; 3] {
-            let x = v[0] * cos_y + v[2] * sin_y;
-            let z = -v[0] * sin_y + v[2] * cos_y;
-            let y = v[1] * cos_x - z * sin_x;
-            let z = v[1] * sin_x + z * cos_x;
-            [x, y, z]
-        };
+        let rot = Rotation::new(self.yaw, TILT);
         // Мировые координаты после поворота (без масштаба).
         let rp: Vec<[f32; 3]> = verts
             .iter()
             .map(|v| {
-                rot([
+                rot.apply([
                     v.x as f32 - cen[0],
                     v.y as f32 - cen[1],
                     v.z as f32 - cen[2],
                 ])
             })
             .collect();
-        let face_vis: Vec<bool> = ship
-            .faces
-            .iter()
-            .map(|f| {
-                let n = rot([f.nx as f32, f.ny as f32, f.nz as f32]);
-                let s = if f.flags & 0x80 != 0 { -n[2] } else { n[2] };
-                s < 0.0
-            })
-            .collect();
+        let face_vis = face_visibility(ship, &rot);
         // Экранная нормировка: вписываем фигуру в `2r` по проекции.
         // Используем фиксированный масштаб по исходным габаритам модели,
         // чтобы избежать «дёрганья» при вращении.
@@ -223,15 +218,8 @@ impl Splash {
 
     /// Запасная фигура (куб), если модель корабля не найдена в таблице.
     fn draw_fallback(&self, frame: &mut Frame, cx: i32, cy: i32, r: i32, color: u32) {
-        let (sin_y, cos_y) = (self.yaw.sin(), self.yaw.cos());
         const TILT: f32 = 0.45;
-        let (sin_x, cos_x) = (TILT.sin(), TILT.cos());
-        let rot = |v: [f32; 3]| -> [f32; 3] {
-            let x = v[0] * cos_y + v[2] * sin_y;
-            let z = -v[0] * sin_y + v[2] * cos_y;
-            let y = v[1] * cos_x - z * sin_x;
-            [x, y, z]
-        };
+        let rot = Rotation::new(self.yaw, TILT);
         let cube = [
             [-1.0, -1.0, -1.0],
             [1.0, -1.0, -1.0],
@@ -244,7 +232,7 @@ impl Splash {
         ];
         let mut pts = [(0i32, 0i32); 8];
         for (i, v) in cube.iter().enumerate() {
-            let p = rot(*v);
+            let p = rot.apply(*v);
             pts[i] = (cx + (p[0] * r as f32) as i32, cy + (p[1] * r as f32) as i32);
         }
         for (a, b) in CUBE_EDGES {
@@ -268,6 +256,60 @@ const CUBE_EDGES: [(usize, usize); 12] = [
 
 /// Цвет линий корабля (циан — как линии объектов в оригинале).
 const SHIP_COLOR: u32 = 0xFF00_FFFF;
+
+/// Поворот модели корабля: рыскание (вокруг Y) и наклон (вокруг X).
+///
+/// Оси поворота — как в оригинале: X вправо, Y вверх, Z вглубь экрана
+/// (камера смотрит вдоль +Z). Обе операции — собственные повороты
+/// (det = +1), поэтому «ближняя» и «дальняя» половины модели не меняются
+/// местами при повороте.
+struct Rotation {
+    sin_y: f32,
+    cos_y: f32,
+    sin_x: f32,
+    cos_x: f32,
+}
+
+impl Rotation {
+    /// Поворот на угол `yaw` вокруг Y и на угол `tilt` вокруг X.
+    fn new(yaw: f32, tilt: f32) -> Self {
+        Rotation {
+            sin_y: yaw.sin(),
+            cos_y: yaw.cos(),
+            sin_x: tilt.sin(),
+            cos_x: tilt.cos(),
+        }
+    }
+
+    /// Перевести точку или вектор модели в мировые координаты.
+    fn apply(&self, v: [f32; 3]) -> [f32; 3] {
+        let x = v[0] * self.cos_y + v[2] * self.sin_y;
+        let z = -v[0] * self.sin_y + v[2] * self.cos_y;
+        let y = v[1] * self.cos_x - z * self.sin_x;
+        let z = v[1] * self.sin_x + z * self.cos_x;
+        [x, y, z]
+    }
+}
+
+/// Видимость граней корабля после поворота СКО.
+///
+/// Повторяет тест оригинального рендера (`CalcVisibleVerges`): грань видна,
+/// если скалярное произведение вектора «нормаль + позиция объекта» на саму
+/// нормаль отрицательно, т.е. нормаль направлена к наблюдателю. Камера
+/// оригинала смотрит вдоль +Z, а объект стоит перед ней (Z = +0x200),
+/// поэтому условие сводится к `нормаль.z < 0`.
+///
+/// Знаки компонентов нормали уже учтены при разборе ROM
+/// (`Face::nx/ny/nz`), так что `Face::flags` в тесте не участвует.
+fn face_visibility(ship: &Ship, rot: &Rotation) -> Vec<bool> {
+    ship.faces
+        .iter()
+        .map(|f| {
+            let n = rot.apply([f.nx as f32, f.ny as f32, f.nz as f32]);
+            n[2] < 0.0
+        })
+        .collect()
+}
 
 #[cfg(test)]
 mod tests {
@@ -399,6 +441,101 @@ mod tests {
         assert!(!s.vertices.is_empty(), "у модели нет вершин");
         assert!(!s.edges.is_empty(), "у модели нет рёбер");
         assert!(!s.faces.is_empty(), "у модели нет граней");
+    }
+
+    /// Модель «Cobra» для проверок видимости.
+    fn cobra() -> &'static Ship {
+        shipdata::ELITE_SHIPS
+            .iter()
+            .find(|x| x.name == "d_Cobra1")
+            .expect("модель корабля не найдена")
+    }
+
+    /// Видимость грани — по знаку Z повёрнутой нормали (тест оригинала).
+    ///
+    /// Раньше в тесте участвовал бит 7 `Face::flags`, который на самом деле
+    /// задаёт знак X-компоненты нормали, — из-за чего видимая и невидимая
+    /// стороны менялись местами.
+    #[test]
+    fn face_visibility_follows_rotated_normal_z() {
+        let ship = cobra();
+        for yaw in [0.0f32, 0.7, 1.5, 2.4, 3.0, 4.5] {
+            let rot = Rotation::new(yaw, 0.5);
+            let vis = face_visibility(ship, &rot);
+            assert_eq!(vis.len(), ship.faces.len());
+            for (f, &v) in ship.faces.iter().zip(vis.iter()) {
+                let n = rot.apply([f.nx as f32, f.ny as f32, f.nz as f32]);
+                assert_eq!(v, n[2] < 0.0, "грань видна не по знаку нормали");
+            }
+        }
+    }
+
+    /// При нулевом повороте видна «задняя» половина корабля (нормаль хвоста
+    /// смотрит в -Z, т.е. к наблюдателю) — как в оригинале, где камера
+    /// смотрит вдоль +Z, а противники в игре видны с кормы.
+    #[test]
+    fn face_visibility_shows_tail_side_at_identity() {
+        let ship = cobra();
+        let rot = Rotation::new(0.0, 0.0);
+        let vis = face_visibility(ship, &rot);
+        // Нормаль хвоста (0, 0, -80) — видна.
+        let tail = ship
+            .faces
+            .iter()
+            .position(|f| f.nx == 0 && f.ny == 0 && f.nz < 0)
+            .expect("нормаль хвоста не найдена");
+        assert!(vis[tail], "хвост должен быть виден");
+        // Верхние грани (nz > 0) — не видны.
+        for (i, f) in ship.faces.iter().enumerate() {
+            if f.nz > 0 {
+                assert!(!vis[i], "верхняя грань {i} не должна быть видна");
+            }
+        }
+    }
+
+    /// Видимая половина модели смотрит к наблюдателю: сумма Z-компонент
+    /// видимых нормалей отрицательна, а невидимых — положительна.
+    #[test]
+    fn face_visibility_culls_far_half_only() {
+        let ship = cobra();
+        for yaw in [0.0f32, 0.9, 2.0, 3.3, 5.0] {
+            let rot = Rotation::new(yaw, 0.5);
+            let vis = face_visibility(ship, &rot);
+            let mut near = 0.0f32;
+            let mut far = 0.0f32;
+            for (f, &v) in ship.faces.iter().zip(vis.iter()) {
+                let z = rot.apply([f.nx as f32, f.ny as f32, f.nz as f32])[2];
+                if v {
+                    near += z;
+                } else {
+                    far += z;
+                }
+            }
+            assert!(near < 0.0, "видимые грани должны смотреть к наблюдателю");
+            assert!(far > 0.0, "невидимые грани должны смотреть от наблюдателя");
+        }
+    }
+
+    /// Стартовый ракурс заставки: нос корабля обращён к наблюдателю.
+    #[test]
+    fn splash_starts_with_nose_towards_viewer() {
+        let ship = cobra();
+        let st = Splash::new();
+        let rot = Rotation::new(st.yaw, 0.5);
+        // Нос модели — самая дальняя по +Z точка (у Cobra это z = 90).
+        let nose_z = ship.vertices.iter().map(|v| v.z).max().unwrap();
+        let mut n = [0.0f32; 3];
+        for v in ship.vertices.iter().filter(|v| v.z == nose_z) {
+            let p = rot.apply([v.x as f32, v.y as f32, v.z as f32]);
+            n[0] += p[0];
+            n[1] += p[1];
+            n[2] += p[2];
+        }
+        assert!(
+            n[2] < 0.0,
+            "нос должен быть ближе к наблюдателю, чем хвост (z = {})",
+            n[2]
+        );
     }
 
     /// Дамп серии кадров вращения (`ELITE_DUMP_ANGLES=prefix` →
