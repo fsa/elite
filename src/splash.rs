@@ -15,6 +15,13 @@
 //! компонентов (бит 7 — X, бит 6 — Y, бит 5 — Z), а не признак
 //! «перевёрнутой» грани.
 //!
+//! Поворот повторяет оригинал: начальный ракурс берётся из таблицы
+//! `SKO4Intro`, а шаги — из интро-цикла (`RotateIntroObj`/`DemoRotateObj`
+//! через `RotateCrdNSCO`). Корабль вращается вокруг оси в **своей** системе
+//! координат примерно на 10.7° за итерацию (12 кадров Z80); направление оси
+//! выведено из `AngleLR4Calc`/`AngleDU4Calc` и проверено по `MatrixRotate`
+//! в эмуляторе.
+//!
 //! С запуском игры заставка не связана напрямую: `SPACE` переводит Z80 на
 //! ветку переинициализации (см. [`native::start_game`](crate::native)),
 //! а заставка продолжает показываться, пока игра не дойдёт до `GameMain`.
@@ -22,13 +29,13 @@
 use crate::display::Frame;
 use crate::shipdata::{self, Ship};
 
-/// Индекс текущей модели на заставке (для отладки).
+/// Индекс текущей модели на заставке (переключается стрелками).
 static mut SPLASH_SHIP_IDX: usize = 0;
 
 /// Состояние анимации заставки.
 pub struct Splash {
-    /// Угол поворота корабля вокруг вертикальной оси (радианы).
-    yaw: f32,
+    /// Текущая ориентация корабля (как СКО объекта в оригинале).
+    rot: Rotation,
     /// Счётчик кадров — для мигания приглашения «PRESS SPACE».
     tick: u64,
     /// Модель корабля.
@@ -49,17 +56,18 @@ impl Splash {
             SPLASH_SHIP_IDX = idx;
         }
         Splash {
-            // Стартовый ракурс — три четверти с носом к наблюдателю.
-            // Нос модели смотрит вдоль +Z, а камера оригинала смотрит
-            // вдоль +Z, поэтому нос разворачивается на пол-оборота
-            // (`π`), а `π/4` даёт ракурс в три четверти.
-            yaw: std::f32::consts::PI + std::f32::consts::FRAC_PI_4,
+            // Стартовый ракурс — ровно тот, что задан в оригинале таблицей
+            // `SKO4Intro` (см. [`Rotation::intro`]).
+            rot: Rotation::intro(),
             tick: 0,
             ship: Some(&ships[unsafe { SPLASH_SHIP_IDX }]),
         }
     }
 
-    /// Переключить корабль влево/вправо (для отладки).
+    /// Переключить корабль влево/вправо (стрелки на заставке).
+    ///
+    /// Как и оригинальный `SetShip4Intro`, смена корабля заново выставляет
+    /// СКО из `SKO4Intro`, поэтому поворот начинается с исходного ракурса.
     pub fn cycle_ship(&mut self, dir: i32) {
         let ships = shipdata::ELITE_SHIPS;
         if ships.is_empty() {
@@ -77,11 +85,18 @@ impl Splash {
             SPLASH_SHIP_IDX = idx as usize;
             self.ship = Some(&ships[SPLASH_SHIP_IDX]);
         }
+        self.rot = Rotation::intro();
     }
 
-    /// Один кадр анимации: поворот корабля и счётчик мигания.
+    /// Один кадр анимации: шаг поворота и счётчик мигания.
+    ///
+    /// Оригинал поворачивает СКО не каждый кадр: одна итерация интро-цикла
+    /// (полная очистка экрана, отрисовка и `halt`) занимает ~12 кадров
+    /// Z80 (проверено по `MatrixRotate` в эмуляторе). Повторяем этот темп.
     pub fn tick(&mut self) {
-        self.yaw += 0.01;
+        if self.tick % SPIN_TICKS == 0 {
+            self.rot = self.rot.spin(SPIN_AXIS, SPIN_STEP);
+        }
         self.tick += 1;
     }
 
@@ -165,10 +180,8 @@ impl Splash {
             (mn[1] + mx[1]) as f32 / 2.0,
             (mn[2] + mx[2]) as f32 / 2.0,
         ];
-        // Поворот: вокруг Y (курс) и фиксированный наклон вокруг X — нос к
-        // наблюдателю чуть сверху, как в оригинальном интро.
-        const TILT: f32 = 0.5;
-        let rot = Rotation::new(self.yaw, TILT);
+        // Поворот: та же матрица, что и у оригинала (`CalcMatrixRotate`).
+        let rot = &self.rot;
         // Мировые координаты после поворота (без масштаба).
         let rp: Vec<[f32; 3]> = verts
             .iter()
@@ -218,8 +231,7 @@ impl Splash {
 
     /// Запасная фигура (куб), если модель корабля не найдена в таблице.
     fn draw_fallback(&self, frame: &mut Frame, cx: i32, cy: i32, r: i32, color: u32) {
-        const TILT: f32 = 0.45;
-        let rot = Rotation::new(self.yaw, TILT);
+        let rot = &self.rot;
         let cube = [
             [-1.0, -1.0, -1.0],
             [1.0, -1.0, -1.0],
@@ -257,37 +269,92 @@ const CUBE_EDGES: [(usize, usize); 12] = [
 /// Цвет линий корабля (циан — как линии объектов в оригинале).
 const SHIP_COLOR: u32 = 0xFF00_FFFF;
 
-/// Поворот модели корабля: рыскание (вокруг Y) и наклон (вокруг X).
+/// Ось вращения СКО в системе координат модели.
 ///
-/// Оси поворота — как в оригинале: X вправо, Y вверх, Z вглубь экрана
-/// (камера смотрит вдоль +Z). Обе операции — собственные повороты
-/// (det = +1), поэтому «ближняя» и «дальняя» половины модели не меняются
-/// местами при повороте.
+/// В оригинале интро-объект крутит `RotateCrdNSCO` (через `RotateIntroObj` /
+/// `DemoRotateObj`) на углы `AngleLR4Calc` = 0x94 и `AngleDU4Calc` = 0x8C.
+/// Разбор `CalcNewCrdNAxis` даёт `LR = 20/128` и `DU = 12/128`, т.е. ось
+/// лежит в плоскости XZ, наклонена к продольной оси (носовой +Z) на
+/// `atan2(DU, LR)`. Направление и малый Y-компонент уточнены по матрицам
+/// `MatrixRotate`, снятым из эмулятора.
+const SPIN_AXIS: [f32; 3] = [-0.5091, 0.0418, 0.8597];
+
+/// Угол одного шага поворота (радианы). По эмулятору (`MatrixRotate` между
+/// соседними итерациями интро) — около 10.7°.
+const SPIN_STEP: f32 = 0.1869;
+
+/// Сколько кадров Z80 длится одна итерация интро-цикла (шаг поворота).
+/// Измерено по смене `MatrixRotate`: в среднем ~12 кадров при 50 Гц.
+const SPIN_TICKS: u64 = 12;
+
+/// Начальная ориентация интро-объекта — таблица `SKO4Intro` оригинала:
+/// три столбца матрицы поворота (X, Y, Z), записанные знаковыми байтами.
+///
+/// X = 0x5A,0xA7,0xD1; Y = 0x98,0x64,0xCB; Z = 0x58,0x44,0x41
+/// (байт со знаком в старшем бите, модуль — в младших семи).
+const INTRO_SCO: [[f32; 3]; 3] = [
+    [90.0, -39.0, -81.0],  // ось X модели
+    [-24.0, 100.0, -75.0], // ось Y модели
+    [88.0, 68.0, 65.0],    // ось Z модели
+];
+
+/// Матрица поворота «модель → вид» (3x3), как `MatrixRotate` оригинала.
+///
+/// `m[i][j]` — вклад оси `j` модели в ось `i` вида; столбцы матрицы — оси
+/// модели в координатах вида. Оси вида как в оригинале: X вправо, Y вверх,
+/// Z вглубь экрана (камера смотрит вдоль +Z).
+#[derive(Clone, Copy)]
 struct Rotation {
-    sin_y: f32,
-    cos_y: f32,
-    sin_x: f32,
-    cos_x: f32,
+    m: [[f32; 3]; 3],
 }
 
 impl Rotation {
-    /// Поворот на угол `yaw` вокруг Y и на угол `tilt` вокруг X.
-    fn new(yaw: f32, tilt: f32) -> Self {
+    /// Исходный ракурс интро-объекта из `SKO4Intro` (столбцы нормируются).
+    fn intro() -> Self {
+        let mut m = [[0.0f32; 3]; 3];
+        for (j, c) in INTRO_SCO.iter().enumerate() {
+            let n = (c[0] * c[0] + c[1] * c[1] + c[2] * c[2]).sqrt();
+            for (i, row) in m.iter_mut().enumerate() {
+                row[j] = c[i] / n;
+            }
+        }
+        Rotation { m }
+    }
+
+    /// Поворот вокруг `axis` на `angle` (матрица в той же конвенции).
+    fn axis_angle(axis: [f32; 3], angle: f32) -> Self {
+        let [x, y, z] = axis;
+        let (s, c) = angle.sin_cos();
+        let t = 1.0 - c;
         Rotation {
-            sin_y: yaw.sin(),
-            cos_y: yaw.cos(),
-            sin_x: tilt.sin(),
-            cos_x: tilt.cos(),
+            m: [
+                [c + x * x * t, x * y * t - z * s, x * z * t + y * s],
+                [y * x * t + z * s, c + y * y * t, y * z * t - x * s],
+                [z * x * t - y * s, z * y * t + x * s, c + z * z * t],
+            ],
         }
     }
 
-    /// Перевести точку или вектор модели в мировые координаты.
+    /// Сделать шаг поворота вокруг оси **в системе координат модели**:
+    /// `M' = M · R`, как поворот СКО в оригинале.
+    fn spin(&self, axis: [f32; 3], angle: f32) -> Self {
+        let r = Rotation::axis_angle(axis, angle);
+        let mut out = [[0.0f32; 3]; 3];
+        for (i, row) in out.iter_mut().enumerate() {
+            for (j, v) in row.iter_mut().enumerate() {
+                *v = self.m[i][0] * r.m[0][j]
+                    + self.m[i][1] * r.m[1][j]
+                    + self.m[i][2] * r.m[2][j];
+            }
+        }
+        Rotation { m: out }
+    }
+
+    /// Перевести точку или вектор модели в координаты вида.
     fn apply(&self, v: [f32; 3]) -> [f32; 3] {
-        let x = v[0] * self.cos_y + v[2] * self.sin_y;
-        let z = -v[0] * self.sin_y + v[2] * self.cos_y;
-        let y = v[1] * self.cos_x - z * self.sin_x;
-        let z = v[1] * self.sin_x + z * self.cos_x;
-        [x, y, z]
+        std::array::from_fn(|i| {
+            self.m[i][0] * v[0] + self.m[i][1] * v[1] + self.m[i][2] * v[2]
+        })
     }
 }
 
@@ -451,6 +518,11 @@ mod tests {
             .expect("модель корабля не найдена")
     }
 
+    /// Вспомогательный поворот вокруг вертикальной оси (для проверок видимости).
+    fn yaw_rot(angle: f32) -> Rotation {
+        Rotation::axis_angle([0.0, 1.0, 0.0], angle)
+    }
+
     /// Видимость грани — по знаку Z повёрнутой нормали (тест оригинала).
     ///
     /// Раньше в тесте участвовал бит 7 `Face::flags`, который на самом деле
@@ -460,7 +532,7 @@ mod tests {
     fn face_visibility_follows_rotated_normal_z() {
         let ship = cobra();
         for yaw in [0.0f32, 0.7, 1.5, 2.4, 3.0, 4.5] {
-            let rot = Rotation::new(yaw, 0.5);
+            let rot = yaw_rot(yaw);
             let vis = face_visibility(ship, &rot);
             assert_eq!(vis.len(), ship.faces.len());
             for (f, &v) in ship.faces.iter().zip(vis.iter()) {
@@ -476,7 +548,7 @@ mod tests {
     #[test]
     fn face_visibility_shows_tail_side_at_identity() {
         let ship = cobra();
-        let rot = Rotation::new(0.0, 0.0);
+        let rot = yaw_rot(0.0);
         let vis = face_visibility(ship, &rot);
         // Нормаль хвоста (0, 0, -80) — видна.
         let tail = ship
@@ -499,7 +571,7 @@ mod tests {
     fn face_visibility_culls_far_half_only() {
         let ship = cobra();
         for yaw in [0.0f32, 0.9, 2.0, 3.3, 5.0] {
-            let rot = Rotation::new(yaw, 0.5);
+            let rot = yaw_rot(yaw);
             let vis = face_visibility(ship, &rot);
             let mut near = 0.0f32;
             let mut far = 0.0f32;
@@ -516,26 +588,53 @@ mod tests {
         }
     }
 
-    /// Стартовый ракурс заставки: нос корабля обращён к наблюдателю.
+    /// Стартовый ракурс заставки — ровно `SKO4Intro` оригинала.
+    ///
+    /// Оси модели после поворота должны совпасть с нормированными столбцами
+    /// таблицы, а нос (локальная +Z) — смотреть от наблюдателя: оригинал
+    /// показывает корабль с кормы-сверху, а не «носом на камеру».
     #[test]
-    fn splash_starts_with_nose_towards_viewer() {
-        let ship = cobra();
+    fn splash_starts_from_original_intro_pose() {
         let st = Splash::new();
-        let rot = Rotation::new(st.yaw, 0.5);
-        // Нос модели — самая дальняя по +Z точка (у Cobra это z = 90).
-        let nose_z = ship.vertices.iter().map(|v| v.z).max().unwrap();
-        let mut n = [0.0f32; 3];
-        for v in ship.vertices.iter().filter(|v| v.z == nose_z) {
-            let p = rot.apply([v.x as f32, v.y as f32, v.z as f32]);
-            n[0] += p[0];
-            n[1] += p[1];
-            n[2] += p[2];
+        for (j, col) in INTRO_SCO.iter().enumerate() {
+            let n = (col[0] * col[0] + col[1] * col[1] + col[2] * col[2]).sqrt();
+            let mut local = [0.0f32; 3];
+            local[j] = 1.0;
+            let w = st.rot.apply(local);
+            for i in 0..3 {
+                let want = col[i] / n;
+                assert!(
+                    (w[i] - want).abs() < 1e-6,
+                    "ось {j} повёрнута не как в SKO4Intro: {w:?} vs {want}"
+                );
+            }
         }
-        assert!(
-            n[2] < 0.0,
-            "нос должен быть ближе к наблюдателю, чем хвост (z = {})",
-            n[2]
-        );
+        let nose = st.rot.apply([0.0, 0.0, 1.0]);
+        assert!(nose[2] > 0.0, "оригинал показывает корабль с кормы: {nose:?}");
+    }
+
+    /// Поворот заставки идёт шагами по 12 кадров, как интро-цикл оригинала
+    /// (между шагами матрица не меняется).
+    #[test]
+    fn splash_rotates_in_original_steps() {
+        let mut st = Splash::new();
+        // Первый шаг оригинал делает до первой отрисовки корабля.
+        st.tick();
+        let m0 = st.rot;
+        for _ in 0..(SPIN_TICKS - 1) {
+            st.tick();
+        }
+        assert_eq!(st.rot.m, m0.m, "поворот не должен меняться до 12-го кадра");
+        st.tick();
+        assert_ne!(st.rot.m, m0.m, "на 12-м кадре должен быть шаг поворота");
+        // Шаг — поворот вокруг оси модели примерно на 10.7°.
+        let mut d = 0.0f32;
+        for i in 0..3 {
+            for j in 0..3 {
+                d += (st.rot.m[i][j] - m0.m[i][j]).abs();
+            }
+        }
+        assert!(d > 0.05, "шаг поворота слишком мал: {d}");
     }
 
     /// Дамп серии кадров вращения (`ELITE_DUMP_ANGLES=prefix` →
@@ -547,7 +646,7 @@ mod tests {
         };
         let mut st = Splash::new();
         for i in 0..8 {
-            st.yaw = i as f32 * std::f32::consts::PI / 4.0;
+            st.rot = yaw_rot(i as f32 * std::f32::consts::PI / 4.0);
             let mut f = Frame::new(520, 520);
             if let Some(ship) = st.ship {
                 st.draw_ship(&mut f, ship, 260, 260, 240);

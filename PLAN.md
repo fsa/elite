@@ -1005,3 +1005,33 @@
     `face_visibility_culls_far_half_only`,
     `splash_starts_with_nose_towards_viewer`.
   - `cargo test --release` — OK (108 passed, 3 ignored).
+
+- 2026-10-21 — заставка: вращение корабля как в оригинальном интро, стрелки
+  влево/вправо снова переключают корабли.
+  - Разобрано вращение оригинала: `RotateIntroObj` (у Кладова
+    `sub_A28D`/`DemoRotateObj`) вызывает `RotateCrdNSCO` с
+    `AngleLR4Calc` = 0x94 и `AngleDU4Calc` = 0x8C. По `CalcNewCrdNAxis`
+    (`d + b*angle/128`) это LR = 20/128 и DU = 12/128, т.е. поворот идёт
+    вокруг оси в системе координат модели, лежащей в плоскости XZ.
+  - Параметры уточнены по эмулятору: дамп `MatrixRotate` (0xE2BC) показал
+    9 знаковых байт матрицы (столбцы X, Y, Z) и шаг ~10.7°; `MatrixRotate`
+    меняется в среднем каждые 12 кадров Z80 — это и есть темп интро-цикла
+    (очистка экрана + отрисовка + копирование буфера + `halt`).
+  - Начальный ракурс — ровно `SKO4Intro`: X = 0x5A,0xA7,0xD1,
+    Y = 0x98,0x64,0xCB, Z = 0x58,0x44,0x41 (знак — старший бит, модуль —
+    младшие 7 бит), столбцы нормируются. Поэтому корабль виден с
+    кормы-сверху, как в оригинале (а не носом к наблюдателю).
+  - `src/splash.rs`: `Rotation` стал матрицей 3x3 «модель → вид»
+    (`apply` = умножение на строки, как `RotateCrdNSCO` + `CalcMatrixRotate`);
+    шаг — `M' = M · R` вокруг `SPIN_AXIS` на `SPIN_STEP` каждые `SPIN_TICKS`
+    кадров. `Splash::cycle_ship` сбрасывает поворот в исходный ракурс, как
+    `SetShip4Intro`. Убраны `yaw`/`TILT`.
+  - `src/main.rs`: на заставке `ArrowLeft`/`ArrowRight` переключают корабль
+    (раньше клавиши отпускались и до заставки не доходили; `cycle_ship` был
+    мёртвым кодом).
+  - Тесты: вместо `splash_starts_with_nose_towards_viewer` —
+    `splash_starts_from_original_intro_pose` (оси совпадают со `SKO4Intro`,
+    нос смотрит от наблюдателя) и `splash_rotates_in_original_steps`
+    (шаг только на 12-м кадре); остальные тесты переведены на
+    `Rotation::axis_angle`.
+  - `cargo test --release` — OK (109 passed, 3 ignored).

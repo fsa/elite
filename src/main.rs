@@ -997,11 +997,16 @@ impl<'a> App<'a> {
             return;
         }
         // На заставке своя нативная логика: запускает игру только SPACE,
-        // остальные клавиши (кроме управления приложением) игнорируются.
+        // стрелки влево/вправо переключают корабль (как в оригинальном
+        // интро), остальные клавиши (кроме меню) игнорируются.
         if self.machine.intro_seen {
             if code == KeyCode::Space {
                 let layout = save_layout(self.opts);
                 native::start_game(&mut self.machine, layout);
+            } else if code == KeyCode::ArrowLeft {
+                self.splash.cycle_ship(-1);
+            } else if code == KeyCode::ArrowRight {
+                self.splash.cycle_ship(1);
             } else if code == KeyCode::Escape {
                 self.menu = true;
                 self.menu_sel = 0;
