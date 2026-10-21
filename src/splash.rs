@@ -29,11 +29,10 @@
 use crate::display::Frame;
 use crate::shipdata::{self, Ship};
 
-/// Индекс текущей модели на заставке (переключается стрелками).
-static mut SPLASH_SHIP_IDX: usize = 0;
-
 /// Состояние анимации заставки.
 pub struct Splash {
+    /// Индекс текущей модели в [`shipdata::SHIPS`] (переключается стрелками).
+    index: usize,
     /// Исходная ориентация (`SKO4Intro`), от которой считаются повороты.
     base: Rotation,
     /// Текущая ориентация корабля.
@@ -51,26 +50,21 @@ pub struct Splash {
 impl Splash {
     pub fn new() -> Self {
         let ships = shipdata::SHIPS;
-        let mut idx = 0;
-        for (i, s) in ships.iter().enumerate() {
-            if s.name == "d_Cobra1" {
-                idx = i;
-                break;
-            }
-        }
-        unsafe {
-            SPLASH_SHIP_IDX = idx;
-        }
+        let idx = ships
+            .iter()
+            .position(|s| s.name == "d_Cobra1")
+            .unwrap_or(0);
         // Стартовый ракурс — ровно тот, что задан в оригинале таблицей
         // `SKO4Intro` (см. [`Rotation::intro`]).
         let base = Rotation::intro();
         Splash {
+            index: idx,
             base,
             rot: base,
             yaw: 0.0,
             pitch: 0.0,
             tick: 0,
-            ship: Some(&ships[unsafe { SPLASH_SHIP_IDX }]),
+            ship: Some(&ships[idx]),
         }
     }
 
@@ -78,23 +72,26 @@ impl Splash {
     ///
     /// Как и оригинальный `SetShip4Intro`, смена корабля заново выставляет
     /// СКО из `SKO4Intro`, поэтому поворот начинается с исходного ракурса.
+    /// Модели с одинаковой геометрией (например, обычный и пиратский варианты
+    /// Cobra/Python) пропускаются: в таблице они остаются отдельными
+    /// объектами со своими характеристиками, но на витрине повторяться не
+    /// должны.
     pub fn cycle_ship(&mut self, dir: i32) {
         let ships = shipdata::SHIPS;
         if ships.is_empty() {
             return;
         }
-        unsafe {
-            let mut idx = SPLASH_SHIP_IDX as i32 + dir;
-            let len = ships.len() as i32;
-            if idx < 0 {
-                idx = len - 1;
+        let step = if dir < 0 { -1 } else { 1 };
+        let len = ships.len() as i32;
+        let mut idx = self.index as i32;
+        for _ in 0..len {
+            idx = (idx + step).rem_euclid(len);
+            if !is_duplicate_hull(ships, idx as usize) {
+                break;
             }
-            if idx >= len {
-                idx = 0;
-            }
-            SPLASH_SHIP_IDX = idx as usize;
-            self.ship = Some(&ships[SPLASH_SHIP_IDX]);
         }
+        self.index = idx as usize;
+        self.ship = Some(&ships[self.index]);
         self.base = Rotation::intro();
         self.rot = self.base;
         self.yaw = 0.0;
@@ -387,6 +384,25 @@ fn face_visibility(ship: &Ship, rot: &Rotation) -> Vec<bool> {
         .collect()
 }
 
+/// Совпадает ли геометрия двух объектов.
+///
+/// В таблице Кладова обычный и пиратский варианты Cobra/Python (а также два
+/// астероида) хранятся как отдельные записи с одинаковыми вершинами, рёбрами
+/// и гранями. Для витрины достаточно показать такой корпус один раз.
+fn same_hull(a: &Ship, b: &Ship) -> bool {
+    a.vertices == b.vertices && a.edges == b.edges && a.faces == b.faces
+}
+
+/// Является ли модель повтором уже встречавшейся геометрии.
+///
+/// Первая запись каждого корпуса считается основной, последующие варианты
+/// пропускаются при переключении кораблей на заставке.
+fn is_duplicate_hull(ships: &[Ship], index: usize) -> bool {
+    ships[..index]
+        .iter()
+        .any(|prev| same_hull(prev, &ships[index]))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -517,6 +533,34 @@ mod tests {
         assert!(!s.vertices.is_empty(), "у модели нет вершин");
         assert!(!s.edges.is_empty(), "у модели нет рёбер");
         assert!(!s.faces.is_empty(), "у модели нет граней");
+    }
+
+    /// Пиратские варианты Cobra/Python — это те же корпуса, что и обычные;
+    /// на витрине они не должны повторяться.
+    #[test]
+    fn splash_cycle_skips_duplicate_hulls() {
+        let ships = shipdata::SHIPS;
+        let unique = ships
+            .iter()
+            .enumerate()
+            .filter(|(i, _)| !is_duplicate_hull(ships, *i))
+            .count();
+        let mut st = Splash::new();
+        let mut seen = Vec::new();
+        for _ in 0..unique {
+            let idx = st.index;
+            assert!(!is_duplicate_hull(ships, idx), "повтор корпуса: {}", ships[idx].name);
+            assert!(!seen.contains(&idx), "модель {} показана дважды", ships[idx].name);
+            seen.push(idx);
+            st.cycle_ship(1);
+        }
+        assert_eq!(seen.len(), unique, "на витрине остались повторяющиеся корпуса");
+        assert_eq!(st.index, Splash::new().index, "круг переключения не замкнулся");
+        for pair in [("d_Cobra1", "d_Cobra2"), ("d_Python1", "d_Python2")] {
+            let a = shipdata::find(pair.0).expect("нет обычного варианта");
+            let b = shipdata::find(pair.1).expect("нет пиратского варианта");
+            assert!(same_hull(a, b), "{} и {} должны быть одним корпусом", pair.0, pair.1);
+        }
     }
 
     /// Модель «Cobra» для проверок видимости.

@@ -41,9 +41,9 @@
 бит 5 — Z). Отдельного признака «перевёрнутой» грани в формате нет:
 видимость определяется знаком Z повёрнутой нормали.
 
-Смещения внутри блока могут указывать на чужой блок — так модели
-разделяют геометрию (у Elite «отшельник» держит только шапку, координаты
-берёт у астероида).
+Смещения внутри блока могут указывать на другой блок того же образа — так
+модели разделяют геометрию (например, `d_Minerals` и `dTargletH` в версии
+Кладова).
 
 Использование:
     python3 tools/extract_ships.py --json tmp/ships.json
@@ -268,18 +268,24 @@ def parse_ship_kladov(img, base, addr, name, cat):
     # «свёрнуто», а лишние вершины ссылаются на уже имеющуюся координату.
     # Раньше здесь aux и coords были перепутаны местами, из-за чего в
     # координаты попадали служебные байты (например, `y = z = -103`).
-    ncoords = (eo - vo) // 3 - v if eo > vo else 0
-    if ncoords < 0:
-        ncoords = 0
+    #
+    # Блок координат заканчивается перед ближайшим следующим блоком
+    # (`eo` или `no`). У записей с общей геометрией (`d_Minerals`,
+    # `dTargletH`) `eo` указывает назад, на чужой edge-блок, поэтому
+    # опираться на `eo - vo` нельзя: координаты всё равно лежат между
+    # aux-блоком и нормалями.
     aux_off = S + vo
     coords_off = S + vo + v * 3
+    following = [S + off for off in (eo, no) if off > vo]
+    coords_end = min(following) if following else S + len(img) - base
+    ncoords = (coords_end - coords_off) // 3
+    if ncoords <= 0:
+        raise Error(f"{name}: v={v}, но в блоке нет координат "
+                    f"(vo={vo:#x}, eo={eo:#x}, no={no:#x})")
     if coords_off - base + ncoords * 3 > len(img):
         raise Error(f"{name}: coords выходят за образ")
     if aux_off - base + v * 3 > len(img):
         raise Error(f"{name}: aux выходят за образ")
-    if ncoords <= 0:
-        raise Error(f"{name}: v={v}, но в блоке нет координат "
-                    f"(vo={vo:#x}, eo={eo:#x})")
 
     vertices = []
     coords = []
@@ -390,10 +396,6 @@ def parse_ship_kladov(img, base, addr, name, cat):
     }
 
 
-# Имена, под которыми одну и ту же геометрию называют разные версии.
-ALIAS = {"dTargletH": "d_Targlet"}
-
-
 def load(game):
     cfg = GAMES[game]
     img = (ROOT / cfg["bin"]).read_bytes()
@@ -406,53 +408,9 @@ def load(game):
             raise Error(f"{game}: таблица обрывается на записи {i}")
         ptr = rec[1] | rec[2] << 8
         parse = parse_ship_kladov if game == 'kladov' else parse_ship
-        try:
-            ships.append(parse(img, base, ptr, name, rec[3]))
-        except Error as err:
-            # В части кладовских записей смещения блоков указывают на общую
-            # (разделяемую) геометрию, из-за чего координаты не читаются.
-            # Подставляем геометрию того же корабля из элитовской таблицы —
-            # корпус у версий одинаковый, а характеристики оставляем кладовские.
-            if game != 'kladov':
-                raise
-            ref = find_elite_geometry(ALIAS.get(name, name))
-            if ref is None:
-                print(f"  предупреждение: {name}: {err}", file=sys.stderr)
-                raise
-            print(f"  {name}: смещения вне блока ({err}); "
-                  f"геометрия взята из элитовской таблицы", file=sys.stderr)
-            ship = dict(ref)
-            ship["name"] = name
-            ship["addr"] = ptr
-            ship["category"] = rec[3]
-            ship["stats"] = parse_kladov_header(img, base, ptr)
-            ships.append(ship)
+        ships.append(parse(img, base, ptr, name, rec[3]))
     return img, ships
 
-
-_elite_cache = None
-
-
-def find_elite_geometry(name):
-    """Геометрия объекта с тем же именем из элитовской таблицы."""
-    global _elite_cache
-    if _elite_cache is None:
-        img, ships = load("elite")
-        _elite_cache = {s["name"]: s for s in ships}
-    return _elite_cache.get(name)
-
-
-def parse_kladov_header(img, base, addr):
-    """Только шапка `ShipData` (характеристики) без геометрии."""
-    off = addr - base
-    if off < 0 or off + HDR > len(img):
-        raise Error(f"адрес {addr:#06x} вне образа")
-    raw = img[off:off + HDR]
-    stats, pos = {}, 0
-    for key, width in STAT_FIELDS:
-        stats[key] = int.from_bytes(raw[pos:pos + width], "little")
-        pos += width
-    return stats
 
 def to_rust(ships):
     """Rust-модуль с единственным набором моделей — версии Кладова."""
@@ -461,9 +419,9 @@ def to_rust(ships):
     w("//! Автогенерированный файл — не править вручную.")
     w("//!")
     w("//! Извлечённые 3D-модели объектов игры из таблицы `AdrDataShips`")
-    w("//! версии Кладова (`zx_bin/kladov.bin`). Элитовские дубликаты не")
-    w("//! выводятся: у общих моделей геометрия та же, а характеристики и")
-    w("//! порядок данных берутся из версии Кладова.")
+    w("//! версии Кладова (`zx_bin/kladov.bin`). Данные других версий игры")
+    w("//! в модуль не попадают: у общих моделей геометрия та же, а")
+    w("//! характеристики и порядок данных берутся из версии Кладова.")
     w("//! Генерация: `python3 tools/extract_ships.py --rust src/shipdata.rs`.")
     w("//!")
     w("//! Координаты — знаковые байты локальной СКО корабля; `lod` — байт")
@@ -474,9 +432,9 @@ def to_rust(ships):
     w("//! В формате Кладова вершины и нормали сжаты: общая координата хранится")
     w("//! один раз, а признак начала новой группы — младший бит первого байта")
     w("//! (у вершины это байт lod, у грани — flags). Знаки компонентов — в")
-    w("//! старших трёх битах того же байта. Для записей со смещениями на общую")
-    w("//! геометрию (`d_Minerals`, `dTargletH`) корпус взят из элитовской")
-    w("//! таблицы — см. `tools/extract_ships.py`.")
+    w("//! старших трёх битах того же байта. Смещения блоков могут указывать")
+    w("//! на общую геометрию (`d_Minerals`, `dTargletH`) — она читается из")
+    w("//! того же образа Кладова.")
     w("//!")
     w("//! У граней (`Face`) 4-й байт — младшие 5 бит: порог дальности,")
     w("//! старшие три: знаки компонентов нормали (бит 7 — X, бит 6 — Y,")
@@ -485,7 +443,7 @@ def to_rust(ships):
     w("//! по знаку Z повёрнутой нормали (см. `src/splash.rs`).")
     w("")
     w("/// Вершина модели (6 байт в ROM).")
-    w("#[derive(Clone, Copy, Debug)]")
+    w("#[derive(Clone, Copy, Debug, PartialEq, Eq)]")
     w("pub struct Vertex {")
     w("    pub x: i16, pub y: i16, pub z: i16,")
     w("    pub lod: u8,")
@@ -493,7 +451,7 @@ def to_rust(ships):
     w("}")
     w("")
     w("/// Ребро модели (4 байта в ROM): две вершины и сдвоенные индексы граней.")
-    w("#[derive(Clone, Copy, Debug)]")
+    w("#[derive(Clone, Copy, Debug, PartialEq, Eq)]")
     w("pub struct Edge {")
     w("    pub lod: u8,")
     w("    pub v: [u8; 2],")
@@ -506,7 +464,7 @@ def to_rust(ships):
     w("/// знаки компонентов нормали (бит 7 — X, бит 6 — Y, бит 5 — Z). Знаковые")
     w("/// компоненты уже разобраны в `nx`/`ny`/`nz`, а `flags` хранит их")
     w("/// вместе с порогом дальности.")
-    w("#[derive(Clone, Copy, Debug)]")
+    w("#[derive(Clone, Copy, Debug, PartialEq, Eq)]")
     w("pub struct Face {")
     w("    pub nx: i16, pub ny: i16, pub nz: i16,")
     w("    pub flags: u8,")
@@ -611,8 +569,8 @@ def main():
         path.write_text(json.dumps(payload, indent=1, ensure_ascii=False))
         print(f"json -> {path}")
     if args.rust:
-        # Базой проекта считается версия Кладова; элитовская таблица нужна
-        # только как резерв геометрии и в Rust-модуль не попадает.
+        # Базой проекта считается версия Кладова; данные других версий в
+        # Rust-модуль не попадают.
         ships = games.get("kladov")
         if ships is None:
             raise Error("Rust-модуль генерируется только из версии Кладова "

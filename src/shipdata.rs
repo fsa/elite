@@ -1,9 +1,9 @@
 //! Автогенерированный файл — не править вручную.
 //!
 //! Извлечённые 3D-модели объектов игры из таблицы `AdrDataShips`
-//! версии Кладова (`zx_bin/kladov.bin`). Элитовские дубликаты не
-//! выводятся: у общих моделей геометрия та же, а характеристики и
-//! порядок данных берутся из версии Кладова.
+//! версии Кладова (`zx_bin/kladov.bin`). Данные других версий игры
+//! в модуль не попадают: у общих моделей геометрия та же, а
+//! характеристики и порядок данных берутся из версии Кладова.
 //! Генерация: `python3 tools/extract_ships.py --rust src/shipdata.rs`.
 //!
 //! Координаты — знаковые байты локальной СКО корабля; `lod` — байт
@@ -14,9 +14,9 @@
 //! В формате Кладова вершины и нормали сжаты: общая координата хранится
 //! один раз, а признак начала новой группы — младший бит первого байта
 //! (у вершины это байт lod, у грани — flags). Знаки компонентов — в
-//! старших трёх битах того же байта. Для записей со смещениями на общую
-//! геометрию (`d_Minerals`, `dTargletH`) корпус взят из элитовской
-//! таблицы — см. `tools/extract_ships.py`.
+//! старших трёх битах того же байта. Смещения блоков могут указывать
+//! на общую геометрию (`d_Minerals`, `dTargletH`) — она читается из
+//! того же образа Кладова.
 //!
 //! У граней (`Face`) 4-й байт — младшие 5 бит: порог дальности,
 //! старшие три: знаки компонентов нормали (бит 7 — X, бит 6 — Y,
@@ -25,7 +25,7 @@
 //! по знаку Z повёрнутой нормали (см. `src/splash.rs`).
 
 /// Вершина модели (6 байт в ROM).
-#[derive(Clone, Copy, Debug)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct Vertex {
     pub x: i16, pub y: i16, pub z: i16,
     pub lod: u8,
@@ -33,7 +33,7 @@ pub struct Vertex {
 }
 
 /// Ребро модели (4 байта в ROM): две вершины и сдвоенные индексы граней.
-#[derive(Clone, Copy, Debug)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct Edge {
     pub lod: u8,
     pub v: [u8; 2],
@@ -46,7 +46,7 @@ pub struct Edge {
 /// знаки компонентов нормали (бит 7 — X, бит 6 — Y, бит 5 — Z). Знаковые
 /// компоненты уже разобраны в `nx`/`ny`/`nz`, а `flags` хранит их
 /// вместе с порогом дальности.
-#[derive(Clone, Copy, Debug)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct Face {
     pub nx: i16, pub ny: i16, pub nz: i16,
     pub flags: u8,
@@ -350,12 +350,12 @@ static SHIP_D_MINERALS: Ship = Ship {
         Vertex { x: 12, y: 42, z: 7, lod: 0x1f, faces: [1, 34] },
     ],
     edges: &[
-        Edge { lod: 0x1f, v: [0, 1], faces: 0x23 },
-        Edge { lod: 0x1f, v: [1, 2], faces: 0x3 },
-        Edge { lod: 0x1f, v: [2, 3], faces: 0x1 },
-        Edge { lod: 0x1f, v: [3, 0], faces: 0x12 },
-        Edge { lod: 0x1f, v: [0, 2], faces: 0x13 },
-        Edge { lod: 0x1f, v: [3, 1], faces: 0x2 },
+        Edge { lod: 0x1f, v: [1, 0], faces: 0x32 },
+        Edge { lod: 0x1f, v: [2, 1], faces: 0x30 },
+        Edge { lod: 0x1f, v: [3, 2], faces: 0x10 },
+        Edge { lod: 0x1f, v: [3, 0], faces: 0x21 },
+        Edge { lod: 0x1f, v: [2, 0], faces: 0x31 },
+        Edge { lod: 0x1f, v: [3, 1], faces: 0x20 },
     ],
     faces: &[
         Face { nx: 177, ny: 12, nz: -148, flags: 0x3f },
@@ -1256,42 +1256,42 @@ static SHIP_DTARGLETH: Ship = Ship {
         factor: 2, laser: 5, rating: 100,
     },
     vertices: &[
-        Vertex { x: -9, y: 0, z: 40, lod: 0x1f, faces: [1, 85] },
-        Vertex { x: -9, y: -38, z: 12, lod: 0x1f, faces: [1, 34] },
-        Vertex { x: -9, y: -24, z: -32, lod: 0x1f, faces: [2, 51] },
-        Vertex { x: -9, y: 25, z: -32, lod: 0x1f, faces: [3, 68] },
-        Vertex { x: -9, y: 38, z: 12, lod: 0x1f, faces: [4, 85] },
-        Vertex { x: 9, y: 0, z: -8, lod: 0x1f, faces: [21, 102] },
-        Vertex { x: 9, y: -10, z: -15, lod: 0x1f, faces: [18, 102] },
-        Vertex { x: 9, y: -6, z: -26, lod: 0x1f, faces: [35, 102] },
-        Vertex { x: 9, y: 6, z: -26, lod: 0x1f, faces: [52, 102] },
-        Vertex { x: 9, y: 10, z: -15, lod: 0x1f, faces: [69, 102] },
+        Vertex { x: -9, y: -24, z: -32, lod: 0x1f, faces: [19, 34] },
+        Vertex { x: -9, y: 24, z: -32, lod: 0x1e, faces: [18, 68] },
+        Vertex { x: 9, y: -6, z: -26, lod: 0x1f, faces: [50, 0] },
+        Vertex { x: 9, y: 6, z: -26, lod: 0x1e, faces: [36, 255] },
+        Vertex { x: 9, y: 0, z: -8, lod: 0x1f, faces: [101, 0] },
+        Vertex { x: -9, y: 0, z: 40, lod: 0x1f, faces: [22, 255] },
+        Vertex { x: -9, y: -38, z: 12, lod: 0x1f, faces: [22, 51] },
+        Vertex { x: -9, y: 38, z: 12, lod: 0x1e, faces: [20, 85] },
+        Vertex { x: 9, y: -10, z: -15, lod: 0x1f, faces: [99, 0] },
+        Vertex { x: 9, y: 10, z: -15, lod: 0x1e, faces: [69, 0] },
     ],
     edges: &[
-        Edge { lod: 0x1f, v: [0, 1], faces: 0x1 },
-        Edge { lod: 0x1f, v: [1, 2], faces: 0x2 },
-        Edge { lod: 0x1f, v: [2, 3], faces: 0x3 },
-        Edge { lod: 0x1f, v: [3, 4], faces: 0x4 },
-        Edge { lod: 0x1f, v: [4, 0], faces: 0x5 },
-        Edge { lod: 0x1f, v: [0, 5], faces: 0x15 },
-        Edge { lod: 0x1f, v: [1, 6], faces: 0x12 },
-        Edge { lod: 0x1f, v: [2, 7], faces: 0x23 },
-        Edge { lod: 0x1f, v: [3, 8], faces: 0x43 },
-        Edge { lod: 0x1f, v: [4, 9], faces: 0x45 },
-        Edge { lod: 0x1f, v: [5, 6], faces: 0x61 },
-        Edge { lod: 0x1f, v: [6, 7], faces: 0x61 },
-        Edge { lod: 0x1f, v: [7, 8], faces: 0x63 },
-        Edge { lod: 0x1f, v: [8, 9], faces: 0x64 },
-        Edge { lod: 0x1f, v: [9, 5], faces: 0x65 },
+        Edge { lod: 0x1f, v: [8, 4], faces: 0x60 },
+        Edge { lod: 0x1f, v: [8, 2], faces: 0x30 },
+        Edge { lod: 0x1f, v: [3, 2], faces: 0x20 },
+        Edge { lod: 0x1f, v: [9, 3], faces: 0x40 },
+        Edge { lod: 0x1f, v: [9, 4], faces: 0x50 },
+        Edge { lod: 0x1f, v: [5, 4], faces: 0x65 },
+        Edge { lod: 0x1f, v: [8, 6], faces: 0x63 },
+        Edge { lod: 0x1f, v: [2, 0], faces: 0x32 },
+        Edge { lod: 0x1f, v: [3, 1], faces: 0x42 },
+        Edge { lod: 0x1f, v: [9, 7], faces: 0x54 },
+        Edge { lod: 0x1f, v: [6, 5], faces: 0x61 },
+        Edge { lod: 0x1f, v: [6, 0], faces: 0x31 },
+        Edge { lod: 0x1f, v: [1, 0], faces: 0x21 },
+        Edge { lod: 0x1f, v: [7, 1], faces: 0x41 },
+        Edge { lod: 0x1f, v: [7, 5], faces: 0x51 },
     ],
     faces: &[
-        Face { nx: -36, ny: 0, nz: 0, flags: 0x9f },
-        Face { nx: 20, ny: -5, nz: 7, flags: 0x5f },
-        Face { nx: 46, ny: -42, nz: -14, flags: 0x7f },
-        Face { nx: 36, ny: 0, nz: -104, flags: 0x3f },
-        Face { nx: 46, ny: 42, nz: -14, flags: 0x3f },
-        Face { nx: 20, ny: 5, nz: 7, flags: 0x1f },
         Face { nx: 36, ny: 0, nz: 0, flags: 0x1f },
+        Face { nx: -36, ny: 0, nz: 0, flags: 0x9e },
+        Face { nx: 36, ny: 0, nz: -104, flags: 0x3f },
+        Face { nx: 46, ny: -42, nz: -14, flags: 0x7f },
+        Face { nx: 46, ny: 42, nz: -14, flags: 0x3e },
+        Face { nx: 20, ny: 5, nz: 7, flags: 0x1f },
+        Face { nx: 20, ny: -5, nz: 7, flags: 0x5e },
     ],
 };
 
