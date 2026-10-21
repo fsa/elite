@@ -106,6 +106,45 @@ def signed(v):
     return v - 256 if v >= 128 else v
 
 
+def decode_vertex(b):
+    """Разбор 6 байт вершины.
+
+    Координаты хранятся по модулю: байты 0..2 — |x|, |y|, |z|. Знаки
+    закодированы в старших битах байта lod (b[3]): бит 7 — знак X, бит 6 —
+    знак Y, бит 5 — знак Z (1 = отрицательная координата). Младшие 5 бит —
+    порог дальности отрисовки (0x1F = всегда). Так же читает координаты
+    Z80-рендер (`RotateCrdN_Vertex`: `b = (ix+0)`, знак — из `(ix+3)`).
+    """
+    lod = b[3]
+    x, y, z = b[0], b[1], b[2]
+    if lod & 0x80:
+        x = -x
+    if lod & 0x40:
+        y = -y
+    if lod & 0x20:
+        z = -z
+    return [x, y, z, lod & 0x1F, b[4], b[5]]
+
+
+def decode_normal(b):
+    """Разбор 4 байт нормали (грани).
+
+    Компоненты хранятся по модулю, знаки — в старших битах 4-го байта
+    (бит 7 — X, бит 6 — Y, бит 5 — Z), как у вершин. Младшие 5 бит —
+    порог дальности; бит 7 в оригинале также меняет знак фронтального
+    теста видимости грани (см. `Face::flags`).
+    """
+    flags = b[3]
+    nx, ny, nz = b[0], b[1], b[2]
+    if flags & 0x80:
+        nx = -nx
+    if flags & 0x40:
+        ny = -ny
+    if flags & 0x20:
+        nz = -nz
+    return [nx, ny, nz, flags]
+
+
 def parse_ship(img, base, addr, name, cat):
     off = addr - base
     if off < 0 or off + HDR > len(img):
@@ -135,8 +174,7 @@ def parse_ship(img, base, addr, name, cat):
     vertices = []
     for i in range(v):
         b = img[off + vo + i * VERTEX_SZ:off + vo + (i + 1) * VERTEX_SZ]
-        vertices.append([signed(b[0]), signed(b[1]), signed(b[2]),
-                         b[3], b[4], b[5]])
+        vertices.append(decode_vertex(b))
     edges = []
     for i in range(e):
         b = img[off + eo + i * EDGE_SZ:off + eo + (i + 1) * EDGE_SZ]
@@ -144,7 +182,7 @@ def parse_ship(img, base, addr, name, cat):
     faces = []
     for i in range(n):
         b = img[off + no + i * NORMAL_SZ:off + no + (i + 1) * NORMAL_SZ]
-        faces.append([signed(b[0]), signed(b[1]), signed(b[2]), b[3]])
+        faces.append(decode_normal(b))
 
     # --- проверки связности ---
     for k, (_, a, b2, _) in enumerate(edges):
@@ -220,29 +258,40 @@ def parse_ship_kladov(img, base, addr, name, cat):
         raise Error(f"{name}: подозрительные счётчики v={v} e={e} n={n}")
     
     S = addr  # начало ShipData
-    # vo-блок: [aux V_aux*3][coords V*3]
-    vaux = (eo - vo) // 3 - v if (eo > vo) else 0
-    if vaux < 0:
-        vaux = 0
+    # vo-блок (формат Кладова): сначала `v` записей "aux" по 3 байта
+    # (lod + два полубайта граней — аналог полей Vertex в элитовском
+    # формате), затем координаты по 3 байта. Координат в блоке может быть
+    # меньше `v`: у больших кораблей совпадающие/мельчайшие точки хранятся
+    # «свёрнуто», а лишние вершины ссылаются на уже имеющуюся координату.
+    # Раньше здесь aux и coords были перепутаны местами, из-за чего в
+    # координаты попадали служебные байты (например, `y = z = -103`).
+    ncoords = (eo - vo) // 3 - v if eo > vo else 0
+    if ncoords < 0:
+        ncoords = 0
     aux_off = S + vo
-    coords_off = S + vo + vaux * 3
-    if coords_off - base + v * 3 > len(img):
+    coords_off = S + vo + v * 3
+    if coords_off - base + ncoords * 3 > len(img):
         raise Error(f"{name}: coords выходят за образ")
-    if vaux * 3 > 0 and aux_off - base + vaux * 3 > len(img):
+    if aux_off - base + v * 3 > len(img):
         raise Error(f"{name}: aux выходят за образ")
-    
+    if ncoords <= 0:
+        raise Error(f"{name}: v={v}, но в блоке нет координат "
+                    f"(vo={vo:#x}, eo={eo:#x})")
+
     vertices = []
     for i in range(v):
-        cx = img[coords_off - base + i * 3]
-        cy = img[coords_off - base + i * 3 + 1]
-        cz = img[coords_off - base + i * 3 + 2]
-        if i < vaux:
-            ax = img[aux_off - base + i * 3]
-            ay = img[aux_off - base + i * 3 + 1]
-            az = img[aux_off - base + i * 3 + 2]
-        else:
-            ax, ay, az = 0x1F, 0xFF, 0xFF
-        vertices.append([signed(cx), signed(cy), signed(cz), ax, ay, az])
+        # Лишние вершины (за пределами хранимых координат) используют
+        # последнюю доступную точку — так исчезают «шипы» из служебных байт.
+        ci = min(i, ncoords - 1)
+        cx = img[coords_off - base + ci * 3]
+        cy = img[coords_off - base + ci * 3 + 1]
+        cz = img[coords_off - base + ci * 3 + 2]
+        ax = img[aux_off - base + i * 3]
+        ay = img[aux_off - base + i * 3 + 1]
+        az = img[aux_off - base + i * 3 + 2]
+        # Координаты — по модулю; знаки в старших битах aux-байта (см.
+        # decode_vertex): бит 7 — X, бит 6 — Y, бит 5 — Z.
+        vertices.append(decode_vertex([cx, cy, cz, ax, ay, az]))
     
     # Рёбра: edge-блок в eo
     eblock_off = eo  # относит к S? нет, eo = смещение от S
@@ -251,7 +300,7 @@ def parse_ship_kladov(img, base, addr, name, cat):
         raise Error(f"{name}: edge-блок выходит за образ")
     ptr_lod = img[eblock_mem - base] | (img[eblock_mem + 1 - base] << 8)
     ptr_vtx = img[eblock_mem + 2 - base] | (img[eblock_mem + 3 - base] << 8)
-    lod_stream = img[ptr_lod - base : ptr_lod - base + 200]
+    lod_stream = img[ptr_lod - base : ptr_lod - base + 256]
     de_stream = img[ptr_vtx - base : ptr_vtx - base + e]
     lod_vals = decode_lod_rle(lod_stream, e)
     
@@ -262,10 +311,9 @@ def parse_ship_kladov(img, base, addr, name, cat):
             break
         lodbyte = lod_vals[k]
         lod = lodbyte & 0x1F
-        carry = (lodbyte >> 6) & 1
         rawv = de_stream[k]
-        v2 = rawv >> 4
-        v1 = (rawv & 0x0F) + (0x10 if carry else 0)
+        v1 = (rawv & 0x0F) | (0x10 if (lodbyte & 0x40) else 0)
+        v2 = ((rawv >> 4) & 0x0F) | (0x10 if (lodbyte & 0x80) else 0)
         if ix + 5 - base < len(img) and ix+4 - base >= 0:
             f_raw = img[ix + 4 - base]
         else:
@@ -275,20 +323,21 @@ def parse_ship_kladov(img, base, addr, name, cat):
         if ix + 5 - base < len(img) and img[ix + 5 - base] != 0xFF:
             ix += 1
     
-    # Нормали: сначала flags[N], потом coords[3N]
+    # Нормали: сначала flags[N], потом coords[3N] (координаты по модулю,
+    # знаки — в старших битах байтов flags, см. decode_normal).
     n_off = S + no
     faces = []
     if n > 0 and n_off - base + n + n * 3 <= len(img):
         for i in range(n):
             flg = img[n_off - base + i]
-            nx = signed(img[n_off - base + n + i * 3])
-            ny = signed(img[n_off - base + n + i * 3 + 1])
-            nz = signed(img[n_off - base + n + i * 3 + 2])
-            faces.append([nx, ny, nz, flg])
+            nx = img[n_off - base + n + i * 3]
+            ny = img[n_off - base + n + i * 3 + 1]
+            nz = img[n_off - base + n + i * 3 + 2]
+            faces.append(decode_normal([nx, ny, nz, flg]))
     elif n > 0:
         for i in range(n):
             b = img[n_off - base + i * NORMAL_SZ:n_off - base + (i + 1) * NORMAL_SZ]
-            faces.append([signed(b[0]), signed(b[1]), signed(b[2]), b[3]])
+            faces.append(decode_normal(b))
     
     # проверки
     for k, (_, a, b2, _) in enumerate(edges):
@@ -318,6 +367,10 @@ def parse_ship_kladov(img, base, addr, name, cat):
     }
 
 
+# Имена, под которыми одну и ту же геометрию называют разные версии.
+ALIAS = {"dTargletH": "d_Targlet"}
+
+
 def load(game):
     cfg = GAMES[game]
     img = (ROOT / cfg["bin"]).read_bytes()
@@ -329,12 +382,54 @@ def load(game):
         if len(rec) < 4:
             raise Error(f"{game}: таблица обрывается на записи {i}")
         ptr = rec[1] | rec[2] << 8
-        if game == 'kladov':
-            ships.append(parse_ship_kladov(img, base, ptr, name, rec[3]))
-        else:
-            ships.append(parse_ship(img, base, ptr, name, rec[3]))
+        parse = parse_ship_kladov if game == 'kladov' else parse_ship
+        try:
+            ships.append(parse(img, base, ptr, name, rec[3]))
+        except Error as err:
+            # В части кладовских записей смещения блоков указывают на общую
+            # (разделяемую) геометрию, из-за чего координаты не читаются.
+            # Подставляем геометрию того же корабля из элитовской таблицы —
+            # корпус у версий одинаковый, а характеристики оставляем кладовские.
+            if game != 'kladov':
+                raise
+            ref = find_elite_geometry(ALIAS.get(name, name))
+            if ref is None:
+                print(f"  предупреждение: {name}: {err}", file=sys.stderr)
+                raise
+            print(f"  {name}: смещения вне блока ({err}); "
+                  f"геометрия взята из элитовской таблицы", file=sys.stderr)
+            ship = dict(ref)
+            ship["name"] = name
+            ship["addr"] = ptr
+            ship["category"] = rec[3]
+            ship["stats"] = parse_kladov_header(img, base, ptr)
+            ships.append(ship)
     return img, ships
 
+
+_elite_cache = None
+
+
+def find_elite_geometry(name):
+    """Геометрия объекта с тем же именем из элитовской таблицы."""
+    global _elite_cache
+    if _elite_cache is None:
+        img, ships = load("elite")
+        _elite_cache = {s["name"]: s for s in ships}
+    return _elite_cache.get(name)
+
+
+def parse_kladov_header(img, base, addr):
+    """Только шапка `ShipData` (характеристики) без геометрии."""
+    off = addr - base
+    if off < 0 or off + HDR > len(img):
+        raise Error(f"адрес {addr:#06x} вне образа")
+    raw = img[off:off + HDR]
+    stats, pos = {}, 0
+    for key, width in STAT_FIELDS:
+        stats[key] = int.from_bytes(raw[pos:pos + width], "little")
+        pos += width
+    return stats
 
 def to_rust(games):
     out = []
@@ -348,11 +443,17 @@ def to_rust(games):
     w("//! детализации (младшие 5 бит = максимальная дальность отрисовки в")
     w("//! единицах 1/256, `0x1F` = всегда); `faces` — два сдвоенных индекса")
     w("//! граней (полубайт), видимость которых означает видимость элемента.")
+    w("//!")
+    w("//! Формат Кладова отличается: `aux`-записи вершины идут отдельным")
+    w("//! блоком перед координатами, и координат может храниться меньше, чем")
+    w("//! вершин (лишние вершины ссылаются на ближайшую сохранённую точку).")
+    w("//! Для записей со смещениями на общую геометрию берётся корпус из")
+    w("//! элитовской таблицы — см. `tools/extract_ships.py`.")
     w("")
     w("/// Вершина модели (6 байт в ROM).")
     w("#[derive(Clone, Copy, Debug)]")
     w("pub struct Vertex {")
-    w("    pub x: i8, pub y: i8, pub z: i8,")
+    w("    pub x: i16, pub y: i16, pub z: i16,")
     w("    pub lod: u8,")
     w("    pub faces: [u8; 2],")
     w("}")
@@ -368,7 +469,7 @@ def to_rust(games):
     w("/// Грань модели: нормаль и байт детализации/признаков (4 байта в ROM).")
     w("#[derive(Clone, Copy, Debug)]")
     w("pub struct Face {")
-    w("    pub nx: i8, pub ny: i8, pub nz: i8,")
+    w("    pub nx: i16, pub ny: i16, pub nz: i16,")
     w("    pub flags: u8,")
     w("}")
     w("")
@@ -440,6 +541,15 @@ def to_rust(games):
         w(f"/// Модели версии `{GAMES[game]['bin']}` ({len(ships)} шт.).")
         w(f"pub static {mod}_SHIPS: &[Ship] = &[{refs}];")
         w("")
+    w("/// Найти модель по внутреннему имени (`kladov` — какая версия в приоритете).")
+    w("pub fn find(name: &str, kladov: bool) -> Option<&'static Ship> {")
+    w("    let prefer = if kladov { KLADOV_SHIPS } else { ELITE_SHIPS };")
+    w("    let other = if kladov { ELITE_SHIPS } else { KLADOV_SHIPS };")
+    w("    prefer")
+    w("        .iter()")
+    w("        .chain(other.iter())")
+    w("        .find(|s| s.name == name)")
+    w("}")
     return "\n".join(out)
 
 

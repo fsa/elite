@@ -1,56 +1,75 @@
 //! Нативная заставка (титульный экран).
 //!
 //! Заменяет Z80-интро: игра на заставке не выполняется, окно целиком
-//! занимает нативный рендер в HD-слой ([`display::Frame`]). Вращение
-//! корабля из оригинального интро пока заменено вращающейся тестовой
-//! фигурой (куб) с ортографической проекцией. Грани куба залиты и
-//! отсекаются по видимости, поэтому фигура непрозрачная и объёмная —
-//! как и полагается будущим кораблям (см. требования проекта).
+//! занимает нативный рендер в HD-слой ([`display::Frame`]). Вращающийся
+//! объект — настоящая модель корабля из [`crate::shipdata`] (извлечённые из
+//! ROM `ShipData`), нарисованная **каркасом** (рёбрами) с отсечением
+//! невидимых граней — как это делает оригинальный рендер Z80
+//! (`CalcVisibleVerges` + `PrintObject`).
 //!
 //! С запуском игры заставка не связана напрямую: `SPACE` переводит Z80 на
 //! ветку переинициализации (см. [`native::start_game`](crate::native)),
 //! а заставка продолжает показываться, пока игра не дойдёт до `GameMain`.
 
 use crate::display::Frame;
+use crate::shipdata::{self, Ship};
 
-/// Вершины куба (единичный куб с центром в начале координат).
-const VERTS: [[f32; 3]; 8] = [
-    [-1.0, -1.0, -1.0],
-    [1.0, -1.0, -1.0],
-    [1.0, 1.0, -1.0],
-    [-1.0, 1.0, -1.0],
-    [-1.0, -1.0, 1.0],
-    [1.0, -1.0, 1.0],
-    [1.0, 1.0, 1.0],
-    [-1.0, 1.0, 1.0],
-];
-
-/// Грани куба: четыре индекса вершин (по кругу) и внешняя нормаль.
-const FACES: [([usize; 4], [f32; 3]); 6] = [
-    ([0, 1, 2, 3], [0.0, 0.0, -1.0]),
-    ([4, 5, 6, 7], [0.0, 0.0, 1.0]),
-    ([0, 1, 5, 4], [0.0, -1.0, 0.0]),
-    ([3, 2, 6, 7], [0.0, 1.0, 0.0]),
-    ([0, 3, 7, 4], [-1.0, 0.0, 0.0]),
-    ([1, 2, 6, 5], [1.0, 0.0, 0.0]),
-];
+/// Индекс текущей модели на заставке (для отладки).
+static mut SPLASH_SHIP_IDX: usize = 0;
 
 /// Состояние анимации заставки.
 pub struct Splash {
-    /// Угол поворота фигуры вокруг вертикальной оси (радианы).
+    /// Угол поворота корабля вокруг вертикальной оси (радианы).
     yaw: f32,
     /// Счётчик кадров — для мигания приглашения «PRESS SPACE».
     tick: u64,
+    /// Модель корабля.
+    ship: Option<&'static Ship>,
 }
 
 impl Splash {
     pub fn new() -> Self {
-        Splash { yaw: 0.0, tick: 0 }
+        let ships = shipdata::ELITE_SHIPS;
+        let mut idx = 0;
+        for (i, s) in ships.iter().enumerate() {
+            if s.name == "d_Cobra1" {
+                idx = i;
+                break;
+            }
+        }
+        unsafe {
+            SPLASH_SHIP_IDX = idx;
+        }
+        Splash {
+            yaw: std::f32::consts::FRAC_PI_4,
+            tick: 0,
+            ship: Some(&ships[unsafe { SPLASH_SHIP_IDX }]),
+        }
     }
 
-    /// Один кадр анимации: поворот фигуры и счётчик мигания.
+    /// Переключить корабль влево/вправо (для отладки).
+    pub fn cycle_ship(&mut self, dir: i32) {
+        let ships = shipdata::ELITE_SHIPS;
+        if ships.is_empty() {
+            return;
+        }
+        unsafe {
+            let mut idx = SPLASH_SHIP_IDX as i32 + dir;
+            let len = ships.len() as i32;
+            if idx < 0 {
+                idx = len - 1;
+            }
+            if idx >= len {
+                idx = 0;
+            }
+            SPLASH_SHIP_IDX = idx as usize;
+            self.ship = Some(&ships[SPLASH_SHIP_IDX]);
+        }
+    }
+
+    /// Один кадр анимации: поворот корабля и счётчик мигания.
     pub fn tick(&mut self) {
-        self.yaw += 0.02;
+        self.yaw += 0.01;
         self.tick += 1;
     }
 
@@ -65,6 +84,7 @@ impl Splash {
         frame.fill_rect(0, 0, frame.width, frame.height, 0xFF00_0000);
         self.draw_in(frame, font, frame.height as i32);
     }
+
     /// Нарисовать заставку в верхней части слоя высотой `area_h` пикселей.
     ///
     /// Композиция центрируется в области `0..area_h` — на заставке снизу
@@ -73,7 +93,6 @@ impl Splash {
     pub fn draw_in(&self, frame: &mut Frame, font: &[u8], area_h: i32) {
         const BG: u32 = 0xFF00_0000; // чёрный фон (непрозрачный)
         const FG: u32 = 0xFFD7_D7D7; // белый — заголовок
-        const SHAPE: u32 = 0xFF00_FFFF; // циан — вращающаяся фигура
         const HINT: u32 = 0xFFFF_FF00; // жёлтый — приглашение
         const GREY: u32 = 0xFF90_9090; // серый — подсказка меню
         let area_h = area_h.clamp(1, frame.height as i32);
@@ -88,162 +107,176 @@ impl Splash {
         let title = "ELITE";
         let tw = title.len() as i32 * 8 * 4 * s;
         frame.draw_text(font, cx - tw / 2, oy + 14 * s, title, FG, (4 * s) as usize);
-        // Вращающаяся фигура.
-        self.draw_shape(frame, cx, oy + 88 * s, 34 * s, SHAPE);
+        // Вращающийся корабль (или запасная фигура, если модель не найдена).
+        let cy = oy + 82 * s;
+        let r = 52 * s;
+        if let Some(ship) = self.ship {
+            self.draw_ship(frame, ship, cx, cy, r);
+        } else {
+            self.draw_fallback(frame, cx, cy, r, 0xFF00_FFFF);
+        }
         // Приглашение (мигает с периодом ~1 c) и подсказка меню.
         if (self.tick / 25) % 2 == 0 {
             let start = "PRESS SPACE";
             let w = start.len() as i32 * 8 * 2 * s;
-            frame.draw_text(font, cx - w / 2, oy + 134 * s, start, HINT, (2 * s) as usize);
+            frame.draw_text(font, cx - w / 2, oy + 140 * s, start, HINT, (2 * s) as usize);
         }
         let menu = "ESC - SAVE / LOAD MENU";
         let w = menu.len() as i32 * 8 * s;
-        frame.draw_text(font, cx - w / 2, oy + 158 * s, menu, GREY, s as usize);
+        frame.draw_text(font, cx - w / 2, oy + 160 * s, menu, GREY, s as usize);
     }
 
-    /// Вращающаяся фигура: поворот вокруг Y плюс фиксированный наклон вокруг
-    /// X, ортографическая проекция на плоскость экрана, `r` — половина
-    /// размера фигуры в пикселях.
+    /// Нарисовать вращающийся корабль **каркасом** (рёбрами), как в оригинале.
     ///
-    /// Грани, обращённые к наблюдателю (по знаку нормали после поворота),
-    /// заливаются плоским цветом: каждая грань чуть разной яркости, поэтому
-    /// фигура выглядит объёмной и непрозрачной. Задние грани не рисуются,
-    /// но их всё равно перекрывают передние.
-    fn draw_shape(&self, frame: &mut Frame, cx: i32, cy: i32, r: i32, color: u32) {
+    /// `cx`,`cy` — центр фигуры, `r` — половина её габарита в пикселях.
+    /// Геометрия берётся из [`Ship`]; воспроизводится логика Z80-рендера
+    /// (`CalcVisibleVerges` + `PrintObject`): ребро рисуется, если видна хотя
+    /// бы одна из назначенных ему граней (`Edge::faces`, полубайты; `0xF` —
+    /// сентинел «видна всегда»). Грань видна, если её нормаль после поворота
+    /// направлена от наблюдателя (знак скалярного произведения), при этом
+    /// бит 7 в `Face::flags` переворачивает фронтальный тест.
+    fn draw_ship(&self, frame: &mut Frame, ship: &Ship, cx: i32, cy: i32, r: i32) {
+        let verts = ship.vertices;
+        if verts.is_empty() {
+            return;
+        }
+        // Центр габаритов и масштаб: модели в знаковых байтах, центрируем по
+        // bounding box — как в оригинальном рендере.
+        let (mut mn, mut mx) = ([i32::MAX; 3], [i32::MIN; 3]);
+        for v in verts {
+            for (k, c) in [v.x, v.y, v.z].iter().enumerate() {
+                mn[k] = mn[k].min(*c as i32);
+                mx[k] = mx[k].max(*c as i32);
+            }
+        }
+        let cen = [
+            (mn[0] + mx[0]) as f32 / 2.0,
+            (mn[1] + mx[1]) as f32 / 2.0,
+            (mn[2] + mx[2]) as f32 / 2.0,
+        ];
+        // Поворот: вокруг Y (курс) и фиксированный наклон вокруг X — нос к
+        // наблюдателю чуть сверху, как в оригинальном интро.
+        let (sin_y, cos_y) = (self.yaw.sin(), self.yaw.cos());
+        const TILT: f32 = 0.5;
+        let (sin_x, cos_x) = (TILT.sin(), TILT.cos());
+        let rot = |v: [f32; 3]| -> [f32; 3] {
+            let x = v[0] * cos_y + v[2] * sin_y;
+            let z = -v[0] * sin_y + v[2] * cos_y;
+            let y = v[1] * cos_x - z * sin_x;
+            let z = v[1] * sin_x + z * cos_x;
+            [x, y, z]
+        };
+        // Мировые координаты после поворота (без масштаба).
+        let rp: Vec<[f32; 3]> = verts
+            .iter()
+            .map(|v| {
+                rot([
+                    v.x as f32 - cen[0],
+                    v.y as f32 - cen[1],
+                    v.z as f32 - cen[2],
+                ])
+            })
+            .collect();
+        let face_vis: Vec<bool> = ship
+            .faces
+            .iter()
+            .map(|f| {
+                let n = rot([f.nx as f32, f.ny as f32, f.nz as f32]);
+                let s = if f.flags & 0x80 != 0 { -n[2] } else { n[2] };
+                s < 0.0
+            })
+            .collect();
+        // Экранная нормировка: вписываем фигуру в `2r` по проекции.
+        // Используем фиксированный масштаб по исходным габаритам модели,
+        // чтобы избежать «дёрганья» при вращении.
+        let (mut mn2, mut mx2) = ([i32::MAX; 3], [i32::MIN; 3]);
+        for v in verts {
+            for (k, c) in [v.x, v.y, v.z].iter().enumerate() {
+                mn2[k] = mn2[k].min(*c as i32);
+                mx2[k] = mx2[k].max(*c as i32);
+            }
+        }
+        let orig_span = ((mx2[0] - mn2[0]) as f32).max((mx2[1] - mn2[1]) as f32).max((mx2[2] - mn2[2]) as f32);
+        let k = (2 * r) as f32 / orig_span.max(1.0);
+        let sx: Vec<(i32, i32)> = rp
+            .iter()
+            .map(|p| {
+                (
+                    cx + (p[0] * k) as i32,
+                    cy - (p[1] * k) as i32,
+                )
+            })
+            .collect();
+        for e in ship.edges {
+            let (a, b) = (e.v[0] as usize, e.v[1] as usize);
+            if a >= sx.len() || b >= sx.len() {
+                continue;
+            }
+            let f0 = (e.faces & 0x0F) as usize;
+            let f1 = (e.faces >> 4) as usize;
+            let vis = |f: usize| f == 0xF || face_vis.get(f).copied().unwrap_or(false);
+            if vis(f0) || vis(f1) {
+                frame.line(sx[a].0, sx[a].1, sx[b].0, sx[b].1, SHIP_COLOR);
+            }
+        }
+    }
+
+    /// Запасная фигура (куб), если модель корабля не найдена в таблице.
+    fn draw_fallback(&self, frame: &mut Frame, cx: i32, cy: i32, r: i32, color: u32) {
         let (sin_y, cos_y) = (self.yaw.sin(), self.yaw.cos());
         const TILT: f32 = 0.45;
         let (sin_x, cos_x) = (TILT.sin(), TILT.cos());
-        // Поворот: сначала вокруг Y, затем вокруг X.
         let rot = |v: [f32; 3]| -> [f32; 3] {
             let x = v[0] * cos_y + v[2] * sin_y;
             let z = -v[0] * sin_y + v[2] * cos_y;
             let y = v[1] * cos_x - z * sin_x;
             [x, y, z]
         };
+        let cube = [
+            [-1.0, -1.0, -1.0],
+            [1.0, -1.0, -1.0],
+            [1.0, 1.0, -1.0],
+            [-1.0, 1.0, -1.0],
+            [-1.0, -1.0, 1.0],
+            [1.0, -1.0, 1.0],
+            [1.0, 1.0, 1.0],
+            [-1.0, 1.0, 1.0],
+        ];
         let mut pts = [(0i32, 0i32); 8];
-        for (i, v) in VERTS.iter().enumerate() {
+        for (i, v) in cube.iter().enumerate() {
             let p = rot(*v);
             pts[i] = (cx + (p[0] * r as f32) as i32, cy + (p[1] * r as f32) as i32);
         }
-        // Сначала все грани: сортируем по глубине (средняя Z после поворота),
-        // дальние рисуем первыми, чтобы передние их перекрыли (painter's
-        // algorithm). Камера смотрит вдоль -Z, поэтому «к наблюдателю» — это
-        // бо́льшая Z.
-        let (fr, fg, fb) = ((color >> 16) & 0xFF, (color >> 8) & 0xFF, color & 0xFF);
-        let shade = |k: f32| -> u32 {
-            let c = |v: u32| ((v as f32 * k).min(255.0)) as u32;
-            0xFF00_0000 | (c(fr) << 16) | (c(fg) << 8) | c(fb)
-        };
-        // Направление на источник света (верх-слева-спереди) — для объёма.
-        let light = [-0.4f32, -0.5, 0.76];
-        let mut order: Vec<(f32, usize)> = FACES
-            .iter()
-            .enumerate()
-            .map(|(i, (f, _))| {
-                let z = f.iter().map(|&j| rot(VERTS[j])[2]).sum::<f32>() / 4.0;
-                (z, i)
-            })
-            .collect();
-        order.sort_by(|a, b| a.0.partial_cmp(&b.0).unwrap());
-        for (z, fi) in order {
-            let (f, n) = FACES[fi];
-            // Плоское «освещение»: яркость по нормали грани (нормаль тоже
-            // поворачиваем). Грань, обращённая к свету, светлее; отвёрнутая —
-            // темнее. Так каждая из видимых граней куба имеет свою яркость.
-            let nn = rot(n);
-            let dot = (nn[0] * light[0] + nn[1] * light[1] + nn[2] * light[2]).max(0.0);
-            let k = (0.4 + 0.6 * dot).clamp(0.4, 1.0);
-            // Дальние грани чуть гасим — они и так перекрыты, но по кромкам
-            // это добавляет глубины.
-            let k = if z < 0.0 { k * 0.7 } else { k };
-            let col = shade(k);
-            let quad = [pts[f[0]], pts[f[1]], pts[f[2]], pts[f[3]]];
-            fill_quad(frame, &quad, col);
-        }
-        // Контур куба поверх заливки — чётче читаются рёбра.
-        for (a, b) in EDGES {
+        for (a, b) in CUBE_EDGES {
             frame.line(pts[a].0, pts[a].1, pts[b].0, pts[b].1, color);
         }
     }
 }
 
-/// Рёбра куба (пары индексов вершин) — рисуются контуром поверх заливки.
-const EDGES: [(usize, usize); 12] = [
-    (0, 1),
-    (1, 2),
-    (2, 3),
-    (3, 0),
-    (4, 5),
-    (5, 6),
-    (6, 7),
-    (7, 4),
-    (0, 4),
-    (1, 5),
-    (2, 6),
-    (3, 7),
+impl Default for Splash {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+/// Рёбра запасного куба.
+const CUBE_EDGES: [(usize, usize); 12] = [
+    (0, 1), (1, 2), (2, 3), (3, 0),
+    (4, 5), (5, 6), (6, 7), (7, 4),
+    (0, 4), (1, 5), (2, 6), (3, 7),
 ];
 
-/// Залить выпуклый четырёхугольник `quad` (по кругу) сплошным цветом.
-///
-/// Разбиваем на два треугольника и заливаем каждый по сканлайнам — простая
-/// и достаточная для выпуклого куба растеризация (без сглаживания).
-fn fill_quad(frame: &mut Frame, quad: &[(i32, i32); 4], color: u32) {
-    fill_tri(frame, quad[0], quad[1], quad[2], color);
-    fill_tri(frame, quad[0], quad[2], quad[3], color);
-}
-
-/// Залить треугольник `(a, b, c)` сплошным цветом по сканлайнам.
-fn fill_tri(frame: &mut Frame, a: (i32, i32), b: (i32, i32), c: (i32, i32), color: u32) {
-    let (mut lo, mut mid, mut hi) = (a, b, c);
-    if lo.1 > mid.1 {
-        std::mem::swap(&mut lo, &mut mid);
-    }
-    if mid.1 > hi.1 {
-        std::mem::swap(&mut mid, &mut hi);
-    }
-    if lo.1 > mid.1 {
-        std::mem::swap(&mut lo, &mut mid);
-    }
-    if lo.1 == hi.1 {
-        return; // вырожденный по вертикали
-    }
-    // Интерполяция x по левой и правой кромкам на строке y.
-    let interp = |y: i32, p0: (i32, i32), p1: (i32, i32)| -> f32 {
-        let dy = (p1.1 - p0.1) as f32;
-        if dy == 0.0 {
-            p0.0 as f32
-        } else {
-            p0.0 as f32 + (y - p0.1) as f32 * (p1.0 - p0.0) as f32 / dy
-        }
-    };
-    let mut scan = |y0: i32, y1: i32, xl: &dyn Fn(i32) -> f32, xr: &dyn Fn(i32) -> f32| {
-        for y in y0..y1 {
-            let (mut x0, mut x1) = (xl(y), xr(y));
-            if x0 > x1 {
-                std::mem::swap(&mut x0, &mut x1);
-            }
-            let xi0 = x0.ceil() as i32;
-            let xi1 = x1.floor() as i32;
-            if xi1 >= xi0 {
-                frame.hline(xi0, y, (xi1 - xi0 + 1) as usize, color);
-            }
-        }
-    };
-    let left = |y: i32| interp(y, lo, hi);
-    let right_lo = |y: i32| interp(y, lo, mid);
-    let right_hi = |y: i32| interp(y, mid, hi);
-    scan(lo.1, mid.1, &left, &right_lo);
-    scan(mid.1, hi.1, &left, &right_hi);
-}
+/// Цвет линий корабля (циан — как линии объектов в оригинале).
+const SHIP_COLOR: u32 = 0xFF00_FFFF;
 
 #[cfg(test)]
 mod tests {
     use super::*;
 
-    /// Заставка: непрозрачный чёрный фон, белый заголовок, циановая
-    /// вращающаяся фигура, жёлтое приглашение и серая подсказка меню.
+    /// Заставка: непрозрачный чёрный фон, белый заголовок, циановый
+    /// корабль, жёлтое приглашение и серая подсказка меню.
     #[test]
-    fn splash_draws_title_shape_and_hints() {
+    fn splash_draws_title_ship_and_hints() {
         let font = vec![0xFFu8; 0x300]; // шрифт «все биты залиты»
         let mut f = Frame::new(1280, 960);
         let st = Splash::new();
@@ -255,7 +288,7 @@ mod tests {
         );
         assert!(
             f.pixels().iter().any(|&p| p == 0xFF00_FFFF),
-            "фигура не нарисована"
+            "корабль не нарисован"
         );
         assert!(
             f.pixels().iter().any(|&p| p == 0xFFFF_FF00),
@@ -265,12 +298,26 @@ mod tests {
             f.pixels().iter().any(|&p| p == 0xFF90_9090),
             "подсказка меню не нарисована"
         );
+        if let Ok(path) = std::env::var("ELITE_DUMP_SPLASH") {
+            write_ppm(&path, f.pixels(), 1280, 960);
+        }
     }
 
-    /// Анимация: фигура вращается — кадры через 40 тиков различаются.
+    /// Сохранить кадр в PPM (R8G8B8) для визуальной проверки.
+    fn write_ppm(path: &str, buf: &[u32], w: usize, h: usize) {
+        let mut out = format!("P6\n{w} {h}\n255\n").into_bytes();
+        for &p in buf {
+            out.push((p >> 16) as u8);
+            out.push((p >> 8) as u8);
+            out.push(p as u8);
+        }
+        let _ = std::fs::write(path, out);
+    }
+
+    /// Анимация: корабль вращается — кадры через 40 тиков различаются.
     #[test]
-    fn splash_animation_rotates_shape() {
-        let font = vec![0u8; 0x300]; // без текста — только фигура
+    fn splash_animation_rotates_ship() {
+        let font = vec![0u8; 0x300]; // без текста — только корабль
         let mut a = Frame::new(1280, 960);
         let mut st = Splash::new();
         st.draw(&mut a, &font);
@@ -279,7 +326,7 @@ mod tests {
         }
         let mut b = Frame::new(1280, 960);
         st.draw(&mut b, &font);
-        assert!(a.pixels() != b.pixels(), "фигура не вращается");
+        assert!(a.pixels() != b.pixels(), "корабль не вращается");
     }
 
     /// При не-кратных размерах окна (например, 16:10) композиция заставки
@@ -311,71 +358,64 @@ mod tests {
         }
     }
 
-    /// Фигура непрозрачная: её грани залиты, а не нарисованы контуром.
+    /// Корабль нарисован каркасом: в области фигуры есть линии, но нет
+    /// сплошной заливки (силуэт читается по рёбрам, как в оригинале).
     ///
-    /// Проверяем область вокруг центра фигуры (256x192 → масштаб 5 при
-    /// окне 1280x960): подавляющая часть пикселей внутри силуэта должна
-    /// быть закрашена (не фоном).
+    /// Проверяем область корабля (центр `82*s`, радиус `52*s`, `s = 5` при
+    /// окне 1280x960): должна быть заметная доля «чернил», но она не должна
+    /// приближаться к сплошной заливке.
     #[test]
-    fn splash_shape_is_opaque() {
+    fn splash_ship_is_wireframe() {
         let font = vec![0u8; 0x300];
         let mut f = Frame::new(1280, 960);
         let st = Splash::new();
         st.draw(&mut f, &font);
-        // Область фигуры: центр (88*s) и радиус (34*s), s = 5.
-        let (cx, cy, r) = (1280 / 2, 88 * 5, 34 * 5);
-        let mut filled = 0;
+        let (cx, cy, r) = (1280 / 2, 82 * 5, 52 * 5);
+        let mut ink = 0;
         let mut total = 0;
         for y in cy - r..cy + r {
             for x in cx - r..cx + r {
-                // Только внутри вписанного круга — гарантированно внутри куба.
-                let (dx, dy) = (x - cx, y - cy);
-                if dx * dx + dy * dy > (r / 2) * (r / 2) {
-                    continue;
-                }
                 total += 1;
                 if f.pixels()[y as usize * 1280 + x as usize] != 0xFF00_0000 {
-                    filled += 1;
+                    ink += 1;
                 }
             }
         }
-        assert!(total > 0, "область фигуры пуста");
+        assert!(total > 0, "область корабля пуста");
+        assert!(ink > 0, "корабль не нарисован");
+        // Каркас: линии есть, но заливки нет (не больше ~25% площади).
         assert!(
-            filled * 10 >= total * 9,
-            "фигура прозрачная: закрашено {filled} из {total}"
+            ink * 4 < total,
+            "корабль залит, а не каркас: {ink} из {total}"
         );
     }
 
-    /// На всём обороте фигура остаётся непрозрачной (нет «дыр» между
-    /// гранями): проверяем заполнение внутри вписанного круга для многих
-    /// углов поворота.
+    /// Модель корабля из `shipdata` найдена и не пуста (иначе на заставке
+    /// рисовался бы запасной куб).
     #[test]
-    fn splash_shape_stays_opaque_while_rotating() {
-        let font = vec![0u8; 0x300];
-        let (cx, cy, r) = (1280 / 2, 88 * 5, 34 * 5);
+    fn splash_ship_model_exists() {
+        let ships = shipdata::ELITE_SHIPS;
+        let s = ships.iter().find(|x| x.name == "d_Cobra1").expect("модель корабля не найдена");
+        assert!(!s.vertices.is_empty(), "у модели нет вершин");
+        assert!(!s.edges.is_empty(), "у модели нет рёбер");
+        assert!(!s.faces.is_empty(), "у модели нет граней");
+    }
+
+    /// Дамп серии кадров вращения (`ELITE_DUMP_ANGLES=prefix` →
+    /// `prefix_0.ppm`.. ) — для визуальной проверки силуэта и анимации.
+    #[test]
+    fn dump_ship_angles() {
+        let Ok(prefix) = std::env::var("ELITE_DUMP_ANGLES") else {
+            return;
+        };
         let mut st = Splash::new();
-        for _ in 0..150 {
-            let mut f = Frame::new(1280, 960);
-            st.draw(&mut f, &font);
-            let mut filled = 0;
-            let mut total = 0;
-            for y in cy - r..cy + r {
-                for x in cx - r..cx + r {
-                    let (dx, dy) = (x - cx, y - cy);
-                    if dx * dx + dy * dy > (r / 2) * (r / 2) {
-                        continue;
-                    }
-                    total += 1;
-                    if f.pixels()[y as usize * 1280 + x as usize] != 0xFF00_0000 {
-                        filled += 1;
-                    }
-                }
+        for i in 0..8 {
+            st.yaw = i as f32 * std::f32::consts::PI / 4.0;
+            let mut f = Frame::new(520, 520);
+            if let Some(ship) = st.ship {
+                st.draw_ship(&mut f, ship, 260, 260, 240);
             }
-            assert!(
-                filled * 5 >= total * 4,
-                "фигура прозрачная при повороте: {filled} из {total}"
-            );
-            st.tick();
+            write_ppm(&format!("{prefix}_{i}.ppm"), f.pixels(), 520, 520);
         }
     }
 }
