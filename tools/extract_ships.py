@@ -282,16 +282,28 @@ def parse_ship_kladov(img, base, addr, name, cat):
                     f"(vo={vo:#x}, eo={eo:#x})")
 
     vertices = []
+    coords = []
+    ci = -1
     for i in range(v):
-        # Лишние вершины (за пределами хранимых координат) используют
-        # последнюю доступную точку — так исчезают «шипы» из служебных байт.
-        ci = min(i, ncoords - 1)
-        cx = img[coords_off - base + ci * 3]
-        cy = img[coords_off - base + ci * 3 + 1]
-        cz = img[coords_off - base + ci * 3 + 2]
         ax = img[aux_off - base + i * 3]
         ay = img[aux_off - base + i * 3 + 1]
         az = img[aux_off - base + i * 3 + 2]
+        # Координаты хранятся группами: новая тройка начинается у вершины,
+        # где младший бит первого aux-байта установлен; остальные вершины
+        # группы переиспользуют ту же тройку, меняя только знаки (старшие
+        # биты aux). Сверка с элитовской таблицей: у всех общих моделей
+        # наборы вершин совпадают, а не «шипы» из служебных байт.
+        if ax & 1:
+            ci += 1
+            if ci >= ncoords:
+                raise Error(f"{name}: координата {ci} не помещается до рёбер")
+            pos = coords_off - base + ci * 3
+            if pos + 3 > len(img):
+                raise Error(f"{name}: координата {ci} выходит за образ")
+            coords.append(tuple(img[pos:pos + 3]))
+        if ci < 0:
+            raise Error(f"{name}: вершина {i} идёт до первой координаты")
+        cx, cy, cz = coords[ci]
         # Координаты — по модулю; знаки в старших битах aux-байта (см.
         # decode_vertex): бит 7 — X, бит 6 — Y, бит 5 — Z.
         vertices.append(decode_vertex([cx, cy, cz, ax, ay, az]))
@@ -326,21 +338,29 @@ def parse_ship_kladov(img, base, addr, name, cat):
         if ix + 5 - base < len(img) and img[ix + 5 - base] != 0xFF:
             ix += 1
     
-    # Нормали: сначала flags[N], потом coords[3N] (координаты по модулю,
-    # знаки — в старших битах байтов flags, см. decode_normal).
+    # Нормали: сначала n байтов flags, затем координаты по модулю (знаки —
+    # в старших битах flags, см. decode_normal). Координаты, как и у вершин,
+    # хранятся группами: новая тройка начинается там, где младший бит flags
+    # установлен, остальные грани группы переиспользуют её со своими знаками.
     n_off = S + no
     faces = []
-    if n > 0 and n_off - base + n + n * 3 <= len(img):
-        for i in range(n):
-            flg = img[n_off - base + i]
-            nx = img[n_off - base + n + i * 3]
-            ny = img[n_off - base + n + i * 3 + 1]
-            nz = img[n_off - base + n + i * 3 + 2]
-            faces.append(decode_normal([nx, ny, nz, flg]))
-    elif n > 0:
-        for i in range(n):
-            b = img[n_off - base + i * NORMAL_SZ:n_off - base + (i + 1) * NORMAL_SZ]
-            faces.append(decode_normal(b))
+    coords = []
+    ci = -1
+    for i in range(n):
+        pos = n_off - base + i
+        if pos >= len(img):
+            raise Error(f"{name}: нормаль {i} выходит за образ")
+        flg = img[pos]
+        if flg & 1:
+            ci += 1
+            cpos = n_off - base + n + ci * 3
+            if cpos + 3 > len(img):
+                raise Error(f"{name}: координата нормали {ci} выходит за образ")
+            coords.append(tuple(img[cpos:cpos + 3]))
+        if ci < 0:
+            raise Error(f"{name}: нормаль {i} идёт до первой координаты")
+        nx, ny, nz = coords[ci]
+        faces.append(decode_normal([nx, ny, nz, flg]))
     
     # проверки
     for k, (_, a, b2, _) in enumerate(edges):
@@ -434,12 +454,16 @@ def parse_kladov_header(img, base, addr):
         pos += width
     return stats
 
-def to_rust(games):
+def to_rust(ships):
+    """Rust-модуль с единственным набором моделей — версии Кладова."""
     out = []
     w = out.append
     w("//! Автогенерированный файл — не править вручную.")
     w("//!")
-    w("//! Извлечённые 3D-модели объектов игры из таблицы `AdrDataShips`.")
+    w("//! Извлечённые 3D-модели объектов игры из таблицы `AdrDataShips`")
+    w("//! версии Кладова (`zx_bin/kladov.bin`). Элитовские дубликаты не")
+    w("//! выводятся: у общих моделей геометрия та же, а характеристики и")
+    w("//! порядок данных берутся из версии Кладова.")
     w("//! Генерация: `python3 tools/extract_ships.py --rust src/shipdata.rs`.")
     w("//!")
     w("//! Координаты — знаковые байты локальной СКО корабля; `lod` — байт")
@@ -447,17 +471,18 @@ def to_rust(games):
     w("//! единицах 1/256, `0x1F` = всегда); `faces` — два сдвоенных индекса")
     w("//! граней (полубайт), видимость которых означает видимость элемента.")
     w("//!")
+    w("//! В формате Кладова вершины и нормали сжаты: общая координата хранится")
+    w("//! один раз, а признак начала новой группы — младший бит первого байта")
+    w("//! (у вершины это байт lod, у грани — flags). Знаки компонентов — в")
+    w("//! старших трёх битах того же байта. Для записей со смещениями на общую")
+    w("//! геометрию (`d_Minerals`, `dTargletH`) корпус взят из элитовской")
+    w("//! таблицы — см. `tools/extract_ships.py`.")
+    w("//!")
     w("//! У граней (`Face`) 4-й байт — младшие 5 бит: порог дальности,")
     w("//! старшие три: знаки компонентов нормали (бит 7 — X, бит 6 — Y,")
     w("//! бит 5 — Z); сами знаковые компоненты уже в `nx`/`ny`/`nz`.")
     w("//! Признака «перевёрнутой» грани в формате нет — видимость считается")
     w("//! по знаку Z повёрнутой нормали (см. `src/splash.rs`).")
-    w("//!")
-    w("//! Формат Кладова отличается: `aux`-записи вершины идут отдельным")
-    w("//! блоком перед координатами, и координат может храниться меньше, чем")
-    w("//! вершин (лишние вершины ссылаются на ближайшую сохранённую точку).")
-    w("//! Для записей со смещениями на общую геометрию берётся корпус из")
-    w("//! элитовской таблицы — см. `tools/extract_ships.py`.")
     w("")
     w("/// Вершина модели (6 байт в ROM).")
     w("#[derive(Clone, Copy, Debug)]")
@@ -500,7 +525,7 @@ def to_rust(games):
     w("#[derive(Clone, Copy, Debug)]")
     w("pub struct Ship {")
     w("    pub name: &'static str,")
-    w("    /// Адрес блока в ROM версии, из которой извлечено.")
+    w("    /// Адрес блока в ROM версии Кладова.")
     w("    pub addr: u16,")
     w("    /// 4-й байт записи таблицы (категория).")
     w("    pub category: u8,")
@@ -511,61 +536,53 @@ def to_rust(games):
     w("}")
     w("")
 
-    for game, ships in games.items():
-        mod = "ELITE" if game == "elite" else "KLADOV"
-        for ship in ships:
-            ident_base = re.sub(r"[^A-Za-z0-9]", "_", ship["name"]).upper()
-            ident = f"{mod}_{ident_base}"
-            st = ship["stats"]
-            w(f"/// `{ship['name']}` ({game}, адрес {ship['addr']:#06x}).")
-            w(f"static SHIP_{ident}: Ship = Ship {{")
-            w(f"    name: {json.dumps(ship['name'])},")
-            w(f"    addr: {ship['addr']:#06x},")
-            w(f"    category: {ship['category']},")
-            w("    stats: Stats {")
-            w(f"        cargo: {st['cargo']}, collision: {st['collision']}, "
-              f"fire_chance: {st['fire_chance']},")
-            w(f"        max_speed: {st['max_speed']}, energy: {st['energy']}, "
-              f"cash: {st['cash']},")
-            w(f"        launch: {st['launch']}, size: {st['size']}, "
-              f"flags: {st['flags']},")
-            w(f"        factor: {st['factor']}, laser: {st['laser']}, "
-              f"rating: {st['rating']},")
-            w("    },")
-            w("    vertices: &[")
-            for x, y, z, lod, f1, f2 in ship["vertices"]:
-                w(f"        Vertex {{ x: {x}, y: {y}, z: {z}, lod: {lod:#x}, "
-                  f"faces: [{f1}, {f2}] }},")
-            w("    ],")
-            w("    edges: &[")
-            for lod, a, b, faces in ship["edges"]:
-                w(f"        Edge {{ lod: {lod:#x}, v: [{a}, {b}], "
-                  f"faces: {faces:#x} }},")
-            w("    ],")
-            w("    faces: &[")
-            for nx, ny, nz, flags in ship["faces"]:
-                w(f"        Face {{ nx: {nx}, ny: {ny}, nz: {nz}, "
-                  f"flags: {flags:#x} }},")
-            w("    ],")
-            w("};")
-            w("")
-        refs = ", ".join(
-            f"SHIP_{mod}_{re.sub(r'[^A-Za-z0-9]', '_', s['name']).upper()}"
-            for s in ships)
-        w(f"/// Модели версии `{GAMES[game]['bin']}` ({len(ships)} шт.).")
-        w(f"pub static {mod}_SHIPS: &[Ship] = &[{refs}];")
+    for ship in ships:
+        ident = re.sub(r"[^A-Za-z0-9]", "_", ship["name"]).upper()
+        st = ship["stats"]
+        w(f"/// `{ship['name']}` (адрес {ship['addr']:#06x}).")
+        w(f"static SHIP_{ident}: Ship = Ship {{")
+        w(f"    name: {json.dumps(ship['name'])},")
+        w(f"    addr: {ship['addr']:#06x},")
+        w(f"    category: {ship['category']},")
+        w("    stats: Stats {")
+        w(f"        cargo: {st['cargo']}, collision: {st['collision']}, "
+          f"fire_chance: {st['fire_chance']},")
+        w(f"        max_speed: {st['max_speed']}, energy: {st['energy']}, "
+          f"cash: {st['cash']},")
+        w(f"        launch: {st['launch']}, size: {st['size']}, "
+          f"flags: {st['flags']},")
+        w(f"        factor: {st['factor']}, laser: {st['laser']}, "
+          f"rating: {st['rating']},")
+        w("    },")
+        w("    vertices: &[")
+        for x, y, z, lod, f1, f2 in ship["vertices"]:
+            w(f"        Vertex {{ x: {x}, y: {y}, z: {z}, lod: {lod:#x}, "
+              f"faces: [{f1}, {f2}] }},")
+        w("    ],")
+        w("    edges: &[")
+        for lod, a, b, faces in ship["edges"]:
+            w(f"        Edge {{ lod: {lod:#x}, v: [{a}, {b}], "
+              f"faces: {faces:#x} }},")
+        w("    ],")
+        w("    faces: &[")
+        for nx, ny, nz, flags in ship["faces"]:
+            w(f"        Face {{ nx: {nx}, ny: {ny}, nz: {nz}, "
+              f"flags: {flags:#x} }},")
+        w("    ],")
+        w("};")
         w("")
-    w("/// Найти модель по внутреннему имени (`kladov` — какая версия в приоритете).")
-    w("pub fn find(name: &str, kladov: bool) -> Option<&'static Ship> {")
-    w("    let prefer = if kladov { KLADOV_SHIPS } else { ELITE_SHIPS };")
-    w("    let other = if kladov { ELITE_SHIPS } else { KLADOV_SHIPS };")
-    w("    prefer")
-    w("        .iter()")
-    w("        .chain(other.iter())")
-    w("        .find(|s| s.name == name)")
+
+    refs = ", ".join(
+        f"SHIP_{re.sub(r'[^A-Za-z0-9]', '_', s['name']).upper()}"
+        for s in ships)
+    w(f"/// Модели версии Кладова (`zx_bin/kladov.bin`, {len(ships)} шт.).")
+    w(f"pub static SHIPS: &[Ship] = &[{refs}];")
+    w("")
+    w("/// Найти модель по внутреннему имени.")
+    w("pub fn find(name: &str) -> Option<&'static Ship> {")
+    w("    SHIPS.iter().find(|s| s.name == name)")
     w("}")
     return "\n".join(out)
-
 
 def main():
     ap = argparse.ArgumentParser(description=__doc__.splitlines()[0])
@@ -594,8 +611,14 @@ def main():
         path.write_text(json.dumps(payload, indent=1, ensure_ascii=False))
         print(f"json -> {path}")
     if args.rust:
+        # Базой проекта считается версия Кладова; элитовская таблица нужна
+        # только как резерв геометрии и в Rust-модуль не попадает.
+        ships = games.get("kladov")
+        if ships is None:
+            raise Error("Rust-модуль генерируется только из версии Кладова "
+                        "(--game kladov)")
         path = pathlib.Path(args.rust)
-        path.write_text(to_rust(games) + "\n", encoding="utf-8")
+        path.write_text(to_rust(ships) + "\n", encoding="utf-8")
         print(f"rust -> {path}")
     return 0
 
