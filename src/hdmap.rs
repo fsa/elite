@@ -364,12 +364,14 @@ impl Map {
 
     /// Звезда, ближайшая к курсору (метрика игры).
     pub fn nearest_index(&self) -> Option<usize> {
-        galaxy::nearest(&self.planets, self.cursor_x, self.cursor_y_raw).map(|p| p.index)
+        galaxy::nearest(&self.planets, self.layout.metric, self.cursor_x, self.cursor_y_raw)
+            .map(|p| p.index)
     }
 
     /// Текущая звезда (система, в которой находится корабль).
     pub fn system_index(&self) -> Option<usize> {
-        galaxy::nearest(&self.planets, self.sys_x, self.sys_y_raw).map(|p| p.index)
+        galaxy::nearest(&self.planets, self.layout.metric, self.sys_x, self.sys_y_raw)
+            .map(|p| p.index)
     }
 
     /// Имя планеты по её номеру.
@@ -387,12 +389,24 @@ impl Map {
             .map(|i| (self.planets[i].x as u8, self.planets[i].y_raw as u8))
     }
 
-    /// Расстояние (св. годы) от текущей системы до планеты `index`.
-    pub fn distance_to(&self, index: usize) -> f32 {
-        match self.system_index() {
-            Some(sys) => galaxy::distance_ly(&self.planets[sys], &self.planets[index]),
-            None => 0.0,
-        }
+    /// Расстояние (св. годы) от текущей системы до курсора — ровно то число,
+    /// которое игра показывает на карте галактики (`CalcFuelForJump`:
+    /// `FuelToPlanet`, печатается как «6.4»).
+    ///
+    /// Расстояние считается от координат системы (`Pilot_CrdXSystem`/
+    /// `Pilot_CrdYSystem`), а не от координат ближайшей звезды, и по
+    /// модулю разности той версии игры, что запущена (см.
+    /// [`galaxy::Metric`]). У Кладова модуль разности на единицу меньше,
+    /// когда курсор левее системы, — из-за этого расстояние до звёзд
+    /// слева от курсора на 0.4 св. года меньше, чем в оригинале.
+    pub fn distance_to_cursor(&self) -> f32 {
+        galaxy::distance_to_cursor_ly(
+            self.layout.metric,
+            self.sys_x,
+            self.sys_y_raw,
+            self.cursor_x,
+            self.cursor_y_raw,
+        )
     }
 
     /// Поставить курсор по координатам окна (наведение мышью).
@@ -407,7 +421,9 @@ impl Map {
 
     /// Поставить курсор точно на ближайшую звезду (клик ЛКМ).
     pub fn snap_to_nearest(&mut self) {
-        if let Some(p) = galaxy::nearest(&self.planets, self.cursor_x, self.cursor_y_raw) {
+        if let Some(p) =
+            galaxy::nearest(&self.planets, self.layout.metric, self.cursor_x, self.cursor_y_raw)
+        {
             self.cursor_x = p.x;
             self.cursor_y_raw = p.y_raw;
         }
@@ -561,7 +577,7 @@ impl Map {
             let s = format!(
                 "SELECTED {:<8} {:>4.1} LY",
                 self.name_of(i),
-                self.distance_to(i)
+                self.distance_to_cursor()
             );
             f.draw_text(font, tx + 8 * ts as i32, ty, &s, NEAR_RING, ts);
         }
@@ -657,12 +673,24 @@ mod tests {
         assert_eq!(map.selected_coords(), Some((22, 217)));
     }
 
-    /// Расстояние до выбранной планеты: LAVE -> DISO = 3.6 св. года.
+    /// Расстояние до курсора считается так же, как в игре: LAVE -> DISO
+    /// = 3.2 св. года в версии Кладова (в оригинале Elite — 3.6), а
+    /// LAVE -> RIEDQUAD = 6.4 (в оригинале — 6.8). Разница — особенность
+    /// модуля разности у Кладова.
     #[test]
-    fn distance_to_selected_matches_game() {
-        let map = opened();
-        assert_eq!(map.distance_to(7), 0.0);
-        assert_eq!(map.distance_to(147), 3.6);
+    fn distance_to_cursor_matches_game() {
+        let mut map = opened();
+        // Курсор на текущей системе — расстояние ноль.
+        assert_eq!(map.distance_to_cursor(), 0.0);
+        // Курсор на DISO (№147).
+        map.cursor_x = 11;
+        map.cursor_y_raw = 174;
+        assert_eq!(map.distance_to_cursor(), 3.2);
+        // Курсор на RIEDQUAD (№46).
+        map.cursor_x = 3;
+        map.cursor_y_raw = 181;
+        assert_eq!(map.distance_to_cursor(), 6.4);
+        assert_eq!(map.nearest_index(), Some(46));
     }
 
     /// Поле 256x128 вписывается в окно с сохранением пропорций. Сверху и

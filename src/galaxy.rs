@@ -19,6 +19,11 @@
 //! Из-за деления пополам вертикаль занимает вдвое меньше строк, чем значений
 //! `y_raw`: на экране карта сжата по вертикали вдвое относительно горизонтали.
 //! Именно поэтому при показе галактики масштабы по осям разные (см. `hdmap`).
+//!
+//! Расстояния на карте считаются точно так же, как в игре, — вплоть до
+//! странностей: модуль разности у Кладова на единицу меньше (см.
+//! [`Metric`]), а квадратный корень игра считает своей рутиной
+//! [`game_sqrt`], и результат отличается от точного корня на единицу.
 
 /// Число звёзд в галактике.
 pub const COUNT: usize = 256;
@@ -54,12 +59,47 @@ impl Planet {
     }
 }
 
+/// Особенности расчёта расстояний в конкретной версии игры.
+///
+/// Модуль разности в игре считается отдельной рутиной, и в версии Кладова
+/// она отличается от оригинальной на единицу. Поэтому расстояния в двух
+/// версиях игры различаются — и нативная карта обязана повторять именно тот
+/// вариант, который считает запущенная игра.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Metric {
+    /// Оригинальный Elite: `loc_AD3D` (`cp b; jr nc; ld c,b; ld b,a; ld a,c;
+    /// sub b`) считает правильный модуль разности `|a - b|`.
+    Exact,
+    /// Версия Кладова: `ABS_A_sub_B` (`sub b; ret nc; cpl; ret`) при `a < b`
+    /// делает `cpl` от `a - b`, то есть возвращает `|a - b| - 1` — на
+    /// единицу меньше правильного. Ошибка заметна на глаз: расстояние до
+    /// звезды слева от курсора получается меньше на 0.4 св. года.
+    Kladov,
+}
+
+impl Metric {
+    /// Модуль разности как в игре: `|a - b|`, где `a` — уменьшаемое.
+    ///
+    /// В игре уменьшаемым всегда бывает координата курсора, а вычитаемым —
+    /// координата звезды (или текущей системы), поэтому направление важно:
+    /// у Кладова разность на единицу меньше, когда курсор левее (или выше)
+    /// другой точки.
+    pub fn abs_diff(self, a: i32, b: i32) -> i32 {
+        let d = a - b;
+        match self {
+            Metric::Exact => d.abs(),
+            Metric::Kladov if d < 0 => -d - 1,
+            Metric::Kladov => d,
+        }
+    }
+}
+
 /// Раскладка адресов галактики в памяти конкретной версии игры.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct GalaxyLayout {
     /// Семя галактики (`PilotGalaxyData0`), 6 байт.
     pub seed: usize,
-    /// Таблица диграфов имён (`TxtPairOfChr`/`byte_FDB3`), 64 байта.
+    /// Таблица диграфов имён (`TxtPairOfChr`/`byte_FDB3`), 64 байт.
     pub digraphs: usize,
     /// Номер текущей галактики (`PilotNumGalaxy`, 0..7).
     pub galaxy: usize,
@@ -68,6 +108,8 @@ pub struct GalaxyLayout {
     pub sys_y: usize,
     /// Топливо (`Pilot_Fuel`): задаёт радиус достижимости на карте.
     pub fuel: usize,
+    /// Особенности расчёта расстояний в этой версии игры.
+    pub metric: Metric,
 }
 
 /// Версия Кладова (`zx_bin/kladov.bin`).
@@ -78,6 +120,7 @@ pub const KLADOV_GALAXY: GalaxyLayout = GalaxyLayout {
     sys_x: 0xD099,
     sys_y: 0xD097,
     fuel: 0xD082,
+    metric: Metric::Kladov,
 };
 
 /// Оригинальная версия (`zx_bin/elite.bin`).
@@ -88,6 +131,7 @@ pub const ELITE_GALAXY: GalaxyLayout = GalaxyLayout {
     sys_x: 0xA85B,
     sys_y: 0xA859,
     fuel: 0xA844,
+    metric: Metric::Exact,
 };
 
 /// Шаг `ModifyPlanetData`.
@@ -195,38 +239,336 @@ fn hsl_to_rgb(h: f32, s: f32, l: f32) -> u32 {
     0xFF00_0000 | (ch(r) << 16) | (ch(g) << 8) | ch(b)
 }
 
-/// Квадрат расстояния от точки до звезды — та же метрика, что в игре
-/// (`CalcDistanceToCursor2`): `dx^2 + ((dy_raw / 2))^2`. Так как вертикаль
-/// карты сжата вдвое, «сырая» разница по вертикали тоже делится пополам.
-pub fn distance2(px: i32, py_raw: i32, p: &Planet) -> i32 {
-    let dx = px - p.x;
-    let dy = (py_raw - p.y_raw).abs() >> 1;
+/// Квадрат расстояния от курсора `(cx, cy_raw)` до звезды — та же метрика,
+/// что в игре (`CalcDistanceToCursor2`): `dx^2 + ((dy_raw / 2))^2`. Так как
+/// вертикаль карты сжата вдвое, «сырая» разница по вертикали тоже делится
+/// пополам. Разности считаются модулем разности версии игры (см.
+/// [`Metric::abs_diff`]), уменьшаемым всегда является курсор.
+pub fn distance2(metric: Metric, cx: i32, cy_raw: i32, p: &Planet) -> i32 {
+    let dx = metric.abs_diff(cx, p.x);
+    let dy = metric.abs_diff(cy_raw, p.y_raw) >> 1;
     dx * dx + dy * dy
 }
 
-/// Ближайшая к точке звезда (первая при равенстве расстояний).
-pub fn nearest<'a>(planets: &'a [Planet], px: i32, py_raw: i32) -> Option<&'a Planet> {
-    planets
-        .iter()
-        .min_by_key(|p| distance2(px, py_raw, p))
-}
-
-/// Гиперпрыжковое расстояние между двумя системами в десятых долях светового
-/// года — величина `FuelToPlanet` из игры (`CalcFuelForDistance`):
-/// `4 * floor(sqrt(dist2))`, где `dist2 = dx^2 + (dy/2)^2`.
-pub fn distance_tenths(a: &Planet, b: &Planet) -> i32 {
-    let d2 = distance2(a.x, a.y_raw, b);
-    let mut r = 0i32;
-    while (r + 1) * (r + 1) <= d2 {
-        r += 1;
+/// Ближайшая к курсору звезда — как ищет игра (`SearchPlanetNearCursor`).
+///
+/// Игра перебирает все 256 звёзд и оставляет ту, у которой квадрат
+/// расстояния до курсора минимален; при равенстве остаётся последняя
+/// (значение записывается в `MinDistance` без проверки на «меньше»). Звёзды,
+/// для которых сумма не помещается в 16 бит, игра пропускает.
+///
+/// У Кладова есть ещё одно правило (`CalcDistanceToCursor`): прежде чем
+/// считать расстояние, игра сверяет координаты звезды с координатами курсора
+/// и, если курсор стоит ровно на звезде, заканчивает поиск этой звездой.
+/// Поэтому звезда «под курсором» всегда выбирается, даже если рядом есть
+/// другая, столь же близкая.
+pub fn nearest(
+    planets: &[Planet],
+    metric: Metric,
+    cx: i32,
+    cy_raw: i32,
+) -> Option<&Planet> {
+    let mut best: Option<&Planet> = None;
+    let mut best_key = i32::MAX;
+    for p in planets {
+        // Курсор ровно на звезде — игра на этом заканчивает поиск.
+        if metric == Metric::Kladov && p.x == cx && p.y_raw == cy_raw {
+            return Some(p);
+        }
+        let d2 = distance2(metric, cx, cy_raw, p);
+        if d2 > 0xFFFF {
+            continue; // переполнение 16 бит — такую звезду игра пропускает
+        }
+        // У Кладова в `MinDistance` попадает значение с установленным битом 0
+        // (`set 0,l` в `CalcDistanceToCursor`), поэтому сравнение идёт по
+        // `d2 | 1`: две звезды с квадратами 100 и 101 для игры равны.
+        let key = match metric {
+            Metric::Kladov => d2 | 1,
+            Metric::Exact => d2,
+        };
+        if key <= best_key {
+            best_key = key;
+            best = Some(p);
+        }
     }
-    4 * r
+    best
 }
 
-/// Гиперпрыжковое расстояние между двумя системами в световых годах.
-/// Шаг — 0.4 св. года, как в игре.
-pub fn distance_ly(a: &Planet, b: &Planet) -> f32 {
-    distance_tenths(a, b) as f32 / 10.0
+/// Регистры Z80, которые меняет рутина извлечения корня.
+struct SqrtRegs {
+    a: u8,
+    b: u8,
+    c: u8,
+    h: u8,
+    l: u8,
+    /// Флаг переноса (`carry`).
+    carry: u8,
+}
+
+impl SqrtRegs {
+    /// `srl h`.
+    fn srl_h(&mut self) {
+        self.carry = self.h & 1;
+        self.h >>= 1;
+    }
+
+    /// `rr l` — циклический сдвиг вправо через флаг переноса.
+    fn rr_l(&mut self) {
+        let nc = self.l & 1;
+        self.l = (self.l >> 1) | (self.carry << 7);
+        self.carry = nc;
+    }
+
+    /// `rra`.
+    fn rra(&mut self) {
+        let nc = self.a & 1;
+        self.a = (self.a >> 1) | (self.carry << 7);
+        self.carry = nc;
+    }
+
+    /// `rr h`.
+    fn rr_h(&mut self) {
+        let nc = self.h & 1;
+        self.h = (self.h >> 1) | (self.carry << 7);
+        self.carry = nc;
+    }
+
+    /// `srl h; rr l` — сдвиг 16-битного `hl` вправо на бит.
+    fn shr16(&mut self) {
+        self.srl_h();
+        self.rr_l();
+    }
+
+    /// `rr h; rr l` — циклический сдвиг 16-битного `hl` вправо.
+    fn ror16(&mut self) {
+        self.rr_h();
+        self.rr_l();
+    }
+
+    /// `srl h; rr l; rra` — сдвиг 24-битного `hl:a` вправо на бит.
+    fn shr24(&mut self) {
+        self.shr16();
+        self.rra();
+    }
+
+    /// `add hl,bc`.
+    fn add_hl_bc(&mut self) {
+        let hl = ((self.h as u16) << 8) | self.l as u16;
+        let bc = ((self.b as u16) << 8) | self.c as u16;
+        let res = hl as u32 + bc as u32;
+        self.carry = if res > 0xFFFF { 1 } else { 0 };
+        self.h = (res >> 8) as u8;
+        self.l = res as u8;
+    }
+}
+
+/// Деление 24-битного числа на 16-битное — порт `Div_BC_HLAdivDE`
+/// (`0xE8D0` оригинала): делимое — `hl:a`, делитель — `de`,
+/// частное возвращается в `bc`.
+fn div24by16(dividend: u32, divisor: u16) -> u16 {
+    let mut h = (dividend >> 16) as u8;
+    let mut l = (dividend >> 8) as u8;
+    let mut a = dividend as u8;
+    // `ld bc,0FFFEh` — в `b` живёт метка конца деления.
+    let mut b: u8 = 0xFF;
+    let mut c: u8 = 0xFE;
+    loop {
+        // add a,a ; rl l ; rl h
+        let carry = a >> 7;
+        a <<= 1;
+        let nc = l >> 7;
+        l = (l << 1) | carry;
+        let carry = nc;
+        let nc = h >> 7;
+        h = (h << 1) | carry;
+        let carry = nc;
+        let hl = ((h as u16) << 8) | l as u16;
+        if carry != 0 {
+            // and a ; sbc hl,de
+            let res = hl.wrapping_sub(divisor).wrapping_sub(1);
+            h = (res >> 8) as u8;
+            l = res as u8;
+            // scf ; rl c ; rl b
+            let nc = c >> 7;
+            c = (c << 1) | 1;
+            let carry = nc;
+            let nc = b >> 7;
+            b = (b << 1) | carry;
+            let carry = nc;
+            if carry == 0 {
+                break;
+            }
+        } else if hl >= divisor {
+            // sbc hl,de ; scf ; rl c ; rl b
+            let res = hl - divisor;
+            h = (res >> 8) as u8;
+            l = res as u8;
+            let nc = c >> 7;
+            c = (c << 1) | 1;
+            let carry = nc;
+            let nc = b >> 7;
+            b = (b << 1) | carry;
+            let carry = nc;
+            if carry == 0 {
+                break;
+            }
+        } else {
+            // add hl,de ; sla c ; rl b
+            let nc = c >> 7;
+            c <<= 1;
+            let carry = nc;
+            let nc = b >> 7;
+            b = (b << 1) | carry;
+            let carry = nc;
+            if carry == 0 {
+                break;
+            }
+        }
+    }
+    ((b as u16) << 8) | c as u16
+}
+
+/// `loc_DC97` — деление и прибавление частного.
+fn sqrt4(r: &mut SqrtRegs, de: u16) {
+    let bc = div24by16(((r.h as u32) << 16) | ((r.l as u32) << 8) | r.a as u32, de);
+    r.b = (bc >> 8) as u8;
+    r.c = bc as u8;
+    // srl b ; rr c
+    let carry = r.b & 1;
+    r.b >>= 1;
+    let nc = r.c & 1;
+    r.c = (r.c >> 1) | (carry << 7);
+    r.carry = nc;
+    // xor a
+    r.a = 0;
+    r.carry = 0;
+    // pop hl — в `hl` попадает делитель
+    r.h = (de >> 8) as u8;
+    r.l = de as u8;
+    // add hl,bc
+    r.add_hl_bc();
+}
+
+/// `loc_DC8D` — один шаг итерации.
+fn sqrt5(r: &mut SqrtRegs, de: u16) {
+    // rr h ; rr l
+    r.ror16();
+    let old_hl = ((r.h as u16) << 8) | r.l as u16;
+    // ex de,hl
+    r.h = (de >> 8) as u8;
+    r.l = de as u8;
+    // srl h ; rr l ; rra
+    r.shr24();
+    // дальше `loc_DC97` с делителем из `de` (бывший `hl`)
+    sqrt4(r, old_hl);
+}
+
+/// `loc_DC7A` — основная часть рутины корня.
+fn sqrt2(r: &mut SqrtRegs) {
+    // xor a
+    r.a = 0;
+    r.carry = 0;
+    // push hl ; push hl
+    let x = ((r.h as u16) << 8) | r.l as u16;
+    let mut stack = [x, x];
+    let mut sp = 2usize;
+    // srl h ; rr l ; rra
+    r.shr24();
+    // ld de,8000h
+    sqrt4(r, 0x8000);
+    // pop de ; call Sqrt5
+    sp -= 1;
+    sqrt5(r, stack[sp]);
+    // pop de ; Sqrt5 (проходом дальше)
+    sp -= 1;
+    sqrt5(r, stack[sp]);
+}
+
+/// Квадратный корень игры (`Sqrt_H_HL`) — дословный перенос Z80-рутины
+/// (`0xDC53` оригинала, `0x9EF5` у Кладова).
+///
+/// Игра считает корень приближённо: результат отличается от точного
+/// `isqrt` на единицу (иногда на две), поэтому «правильный» корень
+/// не подходит — числа на карте должны совпадать с оригиналом до
+/// последней цифры. Возвращается старший байт результата (в игре — `h`).
+pub fn game_sqrt(n: u16) -> u8 {
+    let mut r = SqrtRegs {
+        a: 0,
+        b: 0,
+        c: 0,
+        h: (n >> 8) as u8,
+        l: n as u8,
+        carry: 0,
+    };
+    // ld a,h ; cp 10h
+    if r.h >= 0x10 {
+        // на верхнюю ветку рутины
+        sqrt2(&mut r);
+        return r.h;
+    }
+    if r.h == 0 {
+        // ld h,l ; ld l,a
+        r.h = r.l;
+        r.l = r.a;
+        sqrt2(&mut r);
+        // ld b,4 ; 4 x (srl h ; rr l)
+        for _ in 0..4 {
+            r.shr16();
+        }
+        return r.h;
+    }
+    // ld b,4 ; 4 x (add hl,hl)
+    for _ in 0..4 {
+        let hl = ((r.h as u16) << 8) | r.l as u16;
+        let res = hl << 1;
+        r.h = (res >> 8) as u8;
+        r.l = res as u8;
+    }
+    sqrt2(&mut r);
+    // 2 x (srl h ; rr l)
+    for _ in 0..2 {
+        r.shr16();
+    }
+    r.h
+}
+
+/// Топливо для прыжка (в десятых долях светового года) из квадрата
+/// расстояния — как в игре (`CalcFuelForDistance`): `4 * sqrt(d2)`, где
+/// корень считает рутина игры [`game_sqrt`]. Нулевое расстояние игра
+/// обрабатывает отдельно (корень не считается вовсе), а при переполнении
+/// 16 бит подставляет `0xFFFF`, откуда 1020.
+pub fn fuel_for_distance(d2: i32) -> i32 {
+    if d2 == 0 {
+        return 0;
+    }
+    let n = if d2 > 0xFFFF { 0xFFFFu16 } else { d2 as u16 };
+    4 * game_sqrt(n) as i32
+}
+
+/// Топливо для прыжка от текущей системы `(sys_x, sys_y_raw)` к курсору
+/// `(cx, cy_raw)` — ровно как считает игра (`CalcFuelForJump`).
+pub fn fuel_to_cursor(
+    metric: Metric,
+    sys_x: i32,
+    sys_y_raw: i32,
+    cx: i32,
+    cy_raw: i32,
+) -> i32 {
+    let dx = metric.abs_diff(cx, sys_x);
+    let dy = metric.abs_diff(cy_raw, sys_y_raw) >> 1;
+    fuel_for_distance(dx * dx + dy * dy)
+}
+
+/// Расстояние от текущей системы до курсора в световых годах — так его
+/// показывает игра на карте галактики (шаг — 0.4 св. года).
+pub fn distance_to_cursor_ly(
+    metric: Metric,
+    sys_x: i32,
+    sys_y_raw: i32,
+    cx: i32,
+    cy_raw: i32,
+) -> f32 {
+    fuel_to_cursor(metric, sys_x, sys_y_raw, cx, cy_raw) as f32 / 10.0
 }
 
 /// Радиус достижимости на карте галактики (в единицах поля `x`/строка) для
@@ -298,23 +640,86 @@ mod tests {
     fn nearest_uses_squeezed_vertical_metric() {
         let p = planets(SEED);
         // Точка ровно на звезде №7 — она и ближайшая.
-        assert_eq!(nearest(&p, 20, 173).unwrap().index, 7);
+        assert_eq!(nearest(&p, Metric::Kladov, 20, 173).unwrap().index, 7);
         // Сдвиг по «сырой» вертикали на 4 — это 2 экранные строки.
-        assert_eq!(distance2(20, 177, &p[7]), 4);
+        assert_eq!(distance2(Metric::Kladov, 20, 177, &p[7]), 4);
         // Горизонталь не делится: сдвиг на 4 даёт 16.
-        assert_eq!(distance2(24, 173, &p[7]), 16);
+        assert_eq!(distance2(Metric::Kladov, 24, 173, &p[7]), 16);
     }
 
-    /// Гиперпрыжковое расстояние в световых годах: LAVE (№7) -> DISO (№147)
-    /// равно 3.6 св. года, как в оригинале Elite.
+    /// Расстояние на карте галактики: LAVE (№7) -> DISO (№147). В версии
+    /// Кладова 3.2 св. года, в оригинале Elite — 3.6: модуль разности у
+    /// Кладова на единицу меньше, когда курсор левее системы.
     #[test]
     fn distance_in_light_years_matches_game() {
         let p = planets(SEED);
-        assert_eq!(p[147].x, 11);
-        assert_eq!(p[147].y_raw, 174);
-        assert_eq!(distance_tenths(&p[7], &p[147]), 36);
-        assert_eq!(distance_ly(&p[7], &p[147]), 3.6);
-        assert_eq!(distance_ly(&p[7], &p[7]), 0.0);
+        assert_eq!((p[147].x, p[147].y_raw), (11, 174));
+        assert_eq!(
+            fuel_to_cursor(Metric::Kladov, p[7].x, p[7].y_raw, p[147].x, p[147].y_raw),
+            32
+        );
+        assert_eq!(
+            distance_to_cursor_ly(
+                Metric::Kladov,
+                p[7].x,
+                p[7].y_raw,
+                p[147].x,
+                p[147].y_raw
+            ),
+            3.2
+        );
+        assert_eq!(
+            fuel_to_cursor(Metric::Exact, p[7].x, p[7].y_raw, p[147].x, p[147].y_raw),
+            36
+        );
+        assert_eq!(
+            distance_to_cursor_ly(
+                Metric::Exact,
+                p[7].x,
+                p[7].y_raw,
+                p[147].x,
+                p[147].y_raw
+            ),
+            3.6
+        );
+        // До самой системы — ноль.
+        assert_eq!(fuel_to_cursor(Metric::Kladov, p[7].x, p[7].y_raw, 20, 173), 0);
+    }
+
+    /// LAVE (№7) -> RIEDQUAD (№46): в версии Кладова 6.4 св. года, в
+    /// оригинале Elite — 6.8 (разница ровно в модуле разности).
+    #[test]
+    fn distance_to_riedquad_matches_game() {
+        let p = planets(SEED);
+        assert_eq!((p[46].x, p[46].y_raw), (3, 181));
+        assert_eq!(
+            fuel_to_cursor(Metric::Kladov, p[7].x, p[7].y_raw, p[46].x, p[46].y_raw),
+            64
+        );
+        assert_eq!(
+            distance_to_cursor_ly(
+                Metric::Kladov,
+                p[7].x,
+                p[7].y_raw,
+                p[46].x,
+                p[46].y_raw
+            ),
+            6.4
+        );
+        assert_eq!(
+            fuel_to_cursor(Metric::Exact, p[7].x, p[7].y_raw, p[46].x, p[46].y_raw),
+            68
+        );
+        assert_eq!(
+            distance_to_cursor_ly(
+                Metric::Exact,
+                p[7].x,
+                p[7].y_raw,
+                p[46].x,
+                p[46].y_raw
+            ),
+            6.8
+        );
     }
 
     /// Радиус достижимости: топливо 70 -> 17 единиц поля (как в карте I).
@@ -323,5 +728,32 @@ mod tests {
         assert_eq!(jump_radius(70), 17);
         assert_eq!(jump_radius(7), 1);
         assert_eq!(jump_radius(0), 0);
+    }
+
+    /// Корень игры считается приближённо: `Sqrt_H_HL` возвращает не точный
+    /// `isqrt`, а число, отличающееся на единицу (иногда на две). Опорные
+    /// значения сняты с настоящего кода игры (см. `probe`).
+    #[test]
+    fn game_sqrt_matches_game_values() {
+        assert_eq!(game_sqrt(0), 2);
+        assert_eq!(game_sqrt(1), 2);
+        assert_eq!(game_sqrt(64), 8);
+        assert_eq!(game_sqrt(100), 10);
+        assert_eq!(game_sqrt(256), 16);
+        assert_eq!(game_sqrt(7690), 88);
+        assert_eq!(game_sqrt(0xFFFF), 255);
+        // Точное значение для сравнения: 7690 -> 87.69 -> 88.
+        assert_eq!(game_sqrt(7690), 88);
+    }
+
+    /// Топливо для прыжка считается так же, как в игре: четыре корня.
+    #[test]
+    fn fuel_for_distance_matches_game() {
+        assert_eq!(fuel_for_distance(0), 0);
+        assert_eq!(fuel_for_distance(64), 32); // 3.2 св. года
+        assert_eq!(fuel_for_distance(272), 64); // 6.4 св. года
+        assert_eq!(fuel_for_distance(305), 68); // 6.8 св. года
+        // Переполнение 16 бит: игра подставляет 0xFFFF -> 1020.
+        assert_eq!(fuel_for_distance(0x10000), 1020);
     }
 }

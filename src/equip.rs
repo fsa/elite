@@ -364,7 +364,7 @@ impl Shop {
         let seed: [u8; 6] = mem[gl.seed..gl.seed + 6].try_into().unwrap();
         let planets = galaxy::planets(seed);
         let (sx, sy) = (mem[gl.sys_x] as i32, mem[gl.sys_y] as i32);
-        self.system = galaxy::nearest(&planets, sx, sy)
+        self.system = galaxy::nearest(&planets, gl.metric, sx, sy)
             .map(|p| galaxy::name(p.state, &mem[gl.digraphs..gl.digraphs + 64]))
             .unwrap_or_default();
         self.refresh(mem);

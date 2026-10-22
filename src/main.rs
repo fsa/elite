@@ -6,6 +6,8 @@ mod galaxy;
 mod hdmap;
 mod machine;
 mod native;
+#[cfg(test)]
+mod probe;
 mod shipdata;
 mod splash;
 mod z80;
