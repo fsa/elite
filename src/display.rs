@@ -106,7 +106,13 @@ impl Frame {
     }
 
     /// Пересечение запрошенного прямоугольника с границей отсечения и слоя.
-    fn clamped_rect(&self, x: i32, y: i32, w: usize, h: usize) -> Option<(usize, usize, usize, usize)> {
+    fn clamped_rect(
+        &self,
+        x: i32,
+        y: i32,
+        w: usize,
+        h: usize,
+    ) -> Option<(usize, usize, usize, usize)> {
         let mut x0 = x.max(0);
         let mut y0 = y.max(0);
         let mut x1 = (x.max(0) as usize + w).min(self.width) as i32;
@@ -280,7 +286,14 @@ impl Frame {
 
     /// Наложить слой на буфер `out` (ширина `out_w`, высота `out_h`) со
     /// смещением `(ox, oy)`: непрозрачные пиксели слоя заменяют подложку.
-    pub fn composite_onto(&self, out: &mut [u32], out_w: usize, out_h: usize, ox: usize, oy: usize) {
+    pub fn composite_onto(
+        &self,
+        out: &mut [u32],
+        out_w: usize,
+        out_h: usize,
+        ox: usize,
+        oy: usize,
+    ) {
         let dw = self.width.min(out_w.saturating_sub(ox));
         let dh = self.height.min(out_h.saturating_sub(oy));
         for y in 0..dh {
