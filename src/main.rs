@@ -712,10 +712,11 @@ fn run_window(machine: Spectrum, opts: &Options) {
 
 /// Оконное приложение на winit: окно, кадр и состояние клавиатуры.
 ///
-/// В игре верхние 128 строк ZX-кадра (вид из кабины) показываются целым
-/// множителем (см. [`cockpit::panel_geometry`]), а HD-слой
-/// [`Spectrum::hd`](machine::Spectrum) во всё окно рисует компактную панель
-/// и рамку вида. Отдельные нативные экраны занимают окно целиком.
+/// В игре показывается полный ZX-кадр 256x192 (вид из кабины и родная
+/// растровая панель оригинала) целым множителем по центру окна (см.
+/// [`display::layout`]), поверх — HD-слой [`Spectrum::hd`](machine::Spectrum).
+/// Нативный кокпит (`src/cockpit.rs`) — черновик, он рисуется только на
+/// заставке. Отдельные нативные экраны занимают окно целиком.
 ///
 /// Клавиши читаются как `physical_key` (позиция клавиши), поэтому активная
 /// раскладка (в частности русская) на управление не влияет.
@@ -1120,6 +1121,7 @@ impl<'a> App<'a> {
         // Слой очищается каждый кадр: нативные хуки рисуют в него заново
         // во время эмуляции, показ накладывает слой поверх ZX-кадра.
         let size = window.inner_size();
+        let layout = display::layout(size.width, size.height);
         if self.hdmap.active || self.shop.active || self.machine.intro_seen {
             // Отдельный нативный экран (карта/закупка/заставка): HD-слой во
             // всё окно, игра на паузе. Слой непрозрачный и покрывает окно
@@ -1141,11 +1143,11 @@ impl<'a> App<'a> {
                 self.machine.release_joystick();
             }
         } else {
-            // Игровой режим: HD-слой во всё окно, потому что нативная панель
-            // занимает его нижнюю часть, а рамка вида рисуется поверх кадра.
+            // Игровой режим: HD-слой в разрешении области показа; кокпит
+            // пока рисуется только на заставке (см. ветку интро выше).
             self.machine
                 .hd
-                .resize(size.width as usize, size.height as usize);
+                .resize(layout.w as usize, layout.h as usize);
             self.machine.hd.clear(display::TRANSPARENT);
             if self.menu {
                 // В меню игра не выполняется, клавиши не попадают в эмулятор.
@@ -1191,28 +1193,16 @@ impl<'a> App<'a> {
                 self.cockpit
                     .draw(&mut self.machine.hd, &self.machine.mem, &self.font, cl);
             }
-        } else {
-            // Игровой режим: компактная нативная панель внизу и рамка вокруг
-            // вида. Показания читаются из живой памяти Z80 после кадра.
-            let g = cockpit::panel_geometry(size.width, size.height);
-            let cl = cockpit_layout(self.opts);
-            self.cockpit
-                .draw(&mut self.machine.hd, &self.machine.mem, &self.font, cl);
-            self.cockpit
-                .draw_view_frame(&mut self.machine.hd, &g, &self.machine.mem, cl);
-            if self.menu {
-                // Меню паузы — поверх панели, шрифтом ПЗУ в полном разрешении.
-                draw_pause_menu(&mut self.machine.hd, &self.font, self.menu_sel, false);
-            }
+        } else if self.menu {
+            // Меню паузы — в HD-слой, чтобы текст был чётким в любом окне.
+            draw_pause_menu(&mut self.machine.hd, &self.font, self.menu_sel, false);
         }
-        self.present(&window);
+        self.present(&window, &layout);
     }
 
-    /// Показать кадр: в игре — только верхние 128 строк ZX-кадра (вид из
-    /// кабины) целым множителем, затем нативные панель и рамка из HD-слоя.
-    /// Отдельные нативные экраны (карта/закупка/заставка) показываются вместо
-    /// ZX-кадра и занимают всё окно.
-    fn present(&mut self, window: &Rc<Window>) {
+    /// Показать кадр: ZX-кадр 256x192 целым множителем `l.scale` по центру
+    /// окна (letterbox), поверх — непрозрачные пиксели HD-слоя.
+    fn present(&mut self, window: &Rc<Window>, l: &display::Layout) {
         let size = window.inner_size();
         let (w, h) = (size.width, size.height);
         if w == 0 || h == 0 {
@@ -1242,27 +1232,34 @@ impl<'a> App<'a> {
             let _ = out.present();
             return;
         }
-        // В игре показываем только вид из кабины (верхние 128 строк):
-        // нижние 64 строки ZX-кадра — старая панель, её заменяет нативная.
-        let g = cockpit::panel_geometry(w, h);
-        let scale = g.zx_scale.max(1) as usize;
-        let dx = g.zx_x.max(0) as usize;
-        let dy = g.zx_y.max(0) as usize;
-        let dw = (256 * scale).min(ow.saturating_sub(dx));
-        let dh = ((cockpit::VIEW_H as usize) * scale).min(oh.saturating_sub(dy));
-        for row in 0..dh {
-            let sy = row / scale;
-            let src_row = &src[sy * SRC_W..sy * SRC_W + SRC_W];
-            let dst_lo = (dy + row) * ow + dx;
-            let dst_row = &mut out[dst_lo..dst_lo + dw];
-            for (col, d) in dst_row.iter_mut().enumerate() {
-                *d = src_row[col / scale];
-            }
-        }
-        // HD-слой нативного рендера (панель и рамка вида) поверх кадра.
-        self.machine.hd.composite_onto(&mut out, ow, oh, 0, 0);
+        // Целочисленное масштабирование: каждый пиксель ZX — квадрат
+        // scale x scale, картинка строго без смаза.
+        blit_zx_frame(src, &mut out, ow, oh, l);
+        // HD-слой нативного рендера поверх масштабированного ZX-кадра.
+        self.machine
+            .hd
+            .composite_onto(&mut out, ow, oh, l.x as usize, l.y as usize);
         window.pre_present_notify();
         let _ = out.present();
+    }
+}
+
+/// Скопировать ZX-кадр (`src`, 256x192) в буфер окна целым множителем
+/// `l.scale` по центру области показа (letterbox).
+///
+/// Показывается кадр целиком: и вид из кабины (верхние 128 строк), и родная
+/// растровая панель оригинала (нижние 64 строки) — нативная панель из
+/// `src/cockpit.rs` в игре не рисуется.
+fn blit_zx_frame(src: &[u32], out: &mut [u32], out_w: usize, out_h: usize, l: &display::Layout) {
+    let (dw, dh) = ((l.w as usize).min(out_w), (l.h as usize).min(out_h));
+    for row in 0..dh {
+        let sy = row / l.scale;
+        let src_row = &src[sy * SRC_W..sy * SRC_W + SRC_W];
+        let dst_lo = (l.y as usize + row) * out_w + l.x as usize;
+        let dst_row = &mut out[dst_lo..dst_lo + dw];
+        for (col, d) in dst_row.iter_mut().enumerate() {
+            *d = src_row[col / l.scale];
+        }
     }
 }
 
@@ -1615,6 +1612,32 @@ mod intro_tests {
             save: None,
             fullscreen: false,
         }
+    }
+
+    /// В игре показывается полный ZX-кадр: нижние 64 строки (родная растровая
+    /// панель оригинала) не обрезаются — нативная панель `src/cockpit.rs` в
+    /// игре не рисуется, она осталась только на заставке.
+    #[test]
+    fn game_screen_shows_full_zx_frame() {
+        let (w, h) = (1024usize, 768usize);
+        let l = display::layout(w as u32, h as u32);
+        assert_eq!(l.scale, 4);
+        // Кадр: номер строки ZX записан в младший байт цвета.
+        let mut src = vec![0u32; SRC_W * SRC_H];
+        for y in 0..SRC_H {
+            for x in 0..SRC_W {
+                src[y * SRC_W + x] = 0xFF00_0000 | y as u32;
+            }
+        }
+        let mut out = vec![0u32; w * h];
+        blit_zx_frame(&src, &mut out, w, h, &l);
+        // Верхняя строка кадра — на месте.
+        assert_eq!(out[l.y as usize * w + l.x as usize] & 0xFF, 0);
+        // Нижняя строка ZX-кадра (191) тоже попала в окно: родная панель
+        // оригинала на месте, кадр не обрезан.
+        let last = l.y as usize + (SRC_H - 1) * l.scale;
+        assert!(last + l.scale <= h, "нижние строки кадра обрезаны");
+        assert_eq!(out[last * w + l.x as usize] & 0xFF, (SRC_H - 1) as u32);
     }
 
     /// F10 открывает отдельную нативную карту галактики: игра на паузе, ввод
