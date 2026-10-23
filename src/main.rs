@@ -2,10 +2,12 @@ mod audio;
 mod cockpit;
 mod display;
 mod equip;
+mod flight;
 mod galaxy;
 mod hdmap;
 mod machine;
 mod native;
+mod render3d;
 #[cfg(test)]
 mod dumptitle;
 #[cfg(test)]
@@ -127,7 +129,8 @@ fn parse_args() -> Options {
                 println!("  --native   включить нативные (Rust) замены подпрограмм");
                 println!("  --save FILE фиксированный файл командира вместо диалога");
                 println!("  --fullscreen запуск в полноэкранном режиме (borderless)");
-                println!("В игре: F10 — карта галактики (нативная), F4 — закупка");
+                println!("В игре: F1 — нативный полёт (Rust; назад — 1 или F1),");
+                println!("        F10 — карта галактики (нативная), F4 — закупка");
                 println!("        оборудования (нативная), Esc — меню паузы");
                 println!("        (продолжить/сохранить/загрузить/выход),");
                 println!("        F11 — полный экран.");
@@ -142,6 +145,7 @@ fn parse_args() -> Options {
                 println!();
                 println!("Управление:");
                 println!("  Esc        меню паузы (продолжить/сохранить/загрузить/выход)");
+                println!("  F1         нативный полёт (в игре; возврат — 1 или F1)");
                 println!("  F4         закупка оборудования (нативный экран)");
                 println!("  F11, Alt+Enter полный экран");
                 println!("  Ctrl+Q     выход из игры");
@@ -151,6 +155,10 @@ fn parse_args() -> Options {
                 println!("Карта галактики (F10): стрелки/NM/XS — курсор, Enter —");
                 println!("  ближайшая планета, +/- или колесо — масштаб, F1 — чит:");
                 println!("  телепорт на станцию выбранной планеты, Esc — закрыть.");
+                println!();
+                println!("Нативный полёт (F1): X/S или ↑/↓ — тангаж, N/M или ←/→ —");
+                println!("  крен, Q/E — рыскание, A/RightShift — тяга, Z — торможение,");
+                println!("  Space/RightCtrl — огонь. Esc — меню паузы, 1 или F1 — Z80.");
                 println!();
                 println!("Закупка оборудования (F4): клик/Enter — купить,");
                 println!("  1-9 (+вторая цифра) — номер товара, стрелки — выбор,");
@@ -388,6 +396,36 @@ fn cockpit_layout(opts: &Options) -> cockpit::CockpitLayout {
     } else {
         cockpit::ELITE_COCKPIT
     }
+}
+
+/// Имя и цвет текущей системы из живой памяти Z80 — начальные данные для
+/// нативного полёта. Если координаты не совпали ни с одной звездой (например,
+/// игра ещё на заставке), берётся первая планета галактики.
+fn current_system(mem: &[u8], kladov: bool) -> (String, u32) {
+    let layout = if kladov {
+        galaxy::KLADOV_GALAXY
+    } else {
+        galaxy::ELITE_GALAXY
+    };
+    let seed: [u8; 6] = mem
+        .get(layout.seed..layout.seed + 6)
+        .and_then(|s| s.try_into().ok())
+        .unwrap_or([0; 6]);
+    let planets = galaxy::planets(seed);
+    let x = mem.get(layout.sys_x).copied().unwrap_or(0) as i32;
+    let y = mem.get(layout.sys_y).copied().unwrap_or(0) as i32;
+    let planet = planets
+        .iter()
+        .find(|p| p.x == x && p.y_raw == y)
+        .unwrap_or(&planets[0]);
+    let digraphs = mem.get(layout.digraphs..layout.digraphs + 64).unwrap_or(&[]);
+    let name = galaxy::name(planet.state, digraphs);
+    let name = if name.trim().is_empty() {
+        "UNKNOWN".to_string()
+    } else {
+        name
+    };
+    (name, galaxy::color(planet.state))
 }
 
 /// Start the PipeWire audio output unless muted. Returns `None` (with a
@@ -738,6 +776,9 @@ struct App<'a> {
     hdmap: hdmap::Map,
     /// Нативный экран закупки оборудования (F4) — заменяет экран игры.
     shop: equip::Shop,
+    /// Нативный движок полёта (F1) — альтернатива Z80-полёту. Пока активен,
+    /// эмулятор стоит, а окно занимает [`flight::Flight`].
+    flight: flight::Flight,
     /// Нативная заставка (титульный экран): пока игра на интро, эмуляция не
     /// идёт, а окно занимает нативный рендер (`splash`).
     splash: splash::Splash,
@@ -789,6 +830,7 @@ impl<'a> App<'a> {
             menu: false,
             hdmap: hdmap::Map::new(),
             shop: equip::Shop::new(),
+            flight: flight::Flight::new(),
             splash: splash::Splash::new(),
             cockpit: cockpit::Cockpit::new(),
             menu_sel: 0,
@@ -824,7 +866,7 @@ impl<'a> App<'a> {
             return;
         }
         let attrs = Window::default_attributes()
-            .with_title("Elite — Esc: меню паузы, F10: карта, F4: закупка, F11: полный экран, Ctrl+Q: выход")
+            .with_title("Elite — F1: нативный полёт, Esc: меню, F10: карта, F4: закупка, F11: полный экран, Ctrl+Q: выход")
             .with_inner_size(LogicalSize::new(4.0 * SRC_W as f64, 4.0 * SRC_H as f64));
         let window = match event_loop.create_window(attrs) {
             Ok(w) => Rc::new(w),
@@ -873,7 +915,7 @@ impl<'a> App<'a> {
         if code == KeyCode::F10 && !repeat {
             if self.hdmap.active {
                 self.hdmap.close();
-            } else if !self.machine.intro_seen {
+            } else if !self.machine.intro_seen && !self.flight.active {
                 let layout = if self.opts.kladov {
                     galaxy::KLADOV_GALAXY
                 } else {
@@ -897,7 +939,7 @@ impl<'a> App<'a> {
         if code == KeyCode::F4 && !repeat {
             if self.shop.active {
                 self.shop.close();
-            } else if !self.machine.intro_seen {
+            } else if !self.machine.intro_seen && !self.flight.active {
                 let layout = if self.opts.kladov {
                     equip::KLADOV_SHOP
                 } else {
@@ -1002,6 +1044,41 @@ impl<'a> App<'a> {
             self.menu_key(code);
             return;
         }
+        // Нативный полёт: F1/1 возвращают Z80-версию, Esc открывает меню
+        // паузы (оно рисуется поверх нативного экрана, а полёт замирает).
+        if self.flight.active {
+            match code {
+                KeyCode::F1 | KeyCode::Digit1 => self.flight.close(),
+                KeyCode::Escape => {
+                    self.menu = true;
+                    self.menu_sel = 0;
+                }
+                _ => {}
+            }
+            return;
+        }
+        // F1 — нативный движок полёта. Доступен только в игре (не на
+        // заставке); повторный F1 или клавиша 1 возвращают Z80.
+        if code == KeyCode::F1 {
+            if !self.machine.intro_seen {
+                let layout = cockpit_layout(self.opts);
+                let mem = &self.machine.mem;
+                let val = |addr: u16| mem.get(addr as usize).copied().unwrap_or(0);
+                let (system, planet_color) = current_system(mem, self.opts.kladov);
+                self.flight.open(flight::FlightSeed {
+                    system: &system,
+                    speed: val(layout.speed),
+                    fuel: val(layout.fuel),
+                    shield: val(layout.shield_front),
+                    planet_color,
+                });
+                self.hdmap.close();
+                self.shop.close();
+                self.menu = false;
+                self.pending_key = None;
+            }
+            return;
+        }
         // На заставке своя нативная логика: запускает игру только SPACE,
         // стрелки влево/вправо переключают корабль (как в оригинальном
         // интро), остальные клавиши (кроме меню) игнорируются.
@@ -1047,11 +1124,15 @@ impl<'a> App<'a> {
                 1 => {
                     if !intro {
                         do_save(&mut self.machine, self.opts, &mut self.last_path);
+                        // Сохранение относится к Z80-игре; нативный полёт
+                        // закрываем, чтобы не продолжать его со старым миром.
+                        self.flight.close();
                         self.menu = false;
                     }
                 }
                 2 => {
                     do_load(&mut self.machine, self.opts, &mut self.last_path);
+                    self.flight.close();
                     self.menu = false;
                 }
                 _ => self.quit = true,
@@ -1076,7 +1157,7 @@ impl<'a> App<'a> {
     fn apply_input(&mut self) {
         self.machine.release_all_keys();
         self.machine.release_joystick();
-        if self.menu || self.hdmap.active || self.shop.active {
+        if self.menu || self.hdmap.active || self.shop.active || self.flight.active {
             return;
         }
         for (row, bits) in self.matrix.iter().enumerate() {
@@ -1126,13 +1207,27 @@ impl<'a> App<'a> {
         // во время эмуляции, показ накладывает слой поверх ZX-кадра.
         let size = window.inner_size();
         let layout = display::layout(size.width, size.height);
-        if self.hdmap.active || self.shop.active || self.machine.intro_seen {
-            // Отдельный нативный экран (карта/закупка/заставка): HD-слой во
+        if self.hdmap.active
+            || self.shop.active
+            || self.machine.intro_seen
+            || self.flight.active
+        {
+            // Отдельный нативный экран (карта/закупка/заставка/полёт): HD-слой во
             // всё окно, игра на паузе. Слой непрозрачный и покрывает окно
             // целиком, поэтому композитится в левый верхний угол (0, 0).
             self.machine.hd.resize(size.width as usize, size.height as usize);
             self.machine.hd.clear(display::TRANSPARENT);
-            if self.machine.intro_seen {
+            if self.flight.active {
+                // Нативный полёт: Z80 полностью стоит. В меню паузы полёт
+                // тоже замирает, чтобы клавиши меню не управляли кораблём.
+                self.machine.release_all_keys();
+                self.machine.release_joystick();
+                if !self.menu {
+                    let controls =
+                        flight::Controls::from_matrix(&self.matrix, &self.kempston);
+                    self.flight.tick(controls, 1.0 / 50.0);
+                }
+            } else if self.machine.intro_seen {
                 // Нативная заставка: вращающаяся тестовая фигура, ZX-кадр не
                 // показывается. Эмуляция продолжается, чтобы Z80 шёл по своему
                 // циклу (запуск игры делает `native::start_game`).
@@ -1177,7 +1272,14 @@ impl<'a> App<'a> {
         self.mouse_wheel_up = false;
         self.mouse_wheel_down = false;
         self.machine.render_rgba(&mut self.buf);
-        if self.hdmap.active {
+        if self.flight.active {
+            // Нативный полёт: звёзды, планета, солнце, станция и корабли —
+            // тем же каркасным рендером, что и заставка.
+            self.flight.draw(&mut self.machine.hd, &self.font);
+            if self.menu {
+                draw_pause_menu(&mut self.machine.hd, &self.font, self.menu_sel, false);
+            }
+        } else if self.hdmap.active {
             self.hdmap.draw(&mut self.machine.hd, &self.font);
         } else if self.shop.active {
             self.shop
@@ -1228,9 +1330,13 @@ impl<'a> App<'a> {
         let (ow, oh) = (w as usize, h as usize);
         // Фон окна — чёрные поля вокруг области 4:3.
         out.fill(0);
-        // Отдельный нативный экран (карта/закупка/заставка) показывается
-        // вместо ZX-кадра: слой непрозрачный и покрывает всё окно.
-        if self.hdmap.active || self.shop.active || self.machine.intro_seen {
+        // Отдельный нативный экран (карта/закупка/заставка/полёт)
+        // показывается вместо ZX-кадра: слой непрозрачный и покрывает всё окно.
+        if self.hdmap.active
+            || self.shop.active
+            || self.machine.intro_seen
+            || self.flight.active
+        {
             self.machine.hd.composite_onto(&mut out, ow, oh, 0, 0);
             window.pre_present_notify();
             let _ = out.present();
@@ -1704,6 +1810,53 @@ mod intro_tests {
         assert!(!app.shop.active, "F4 не закрыл экран закупки");
     }
 
+    /// F1 открывает нативный движок полёта: Z80 стоит, ввод не уходит в игру,
+    /// F10/F4 не открываются поверх полёта, а 1 или F1 возвращают Z80.
+    #[test]
+    fn f1_opens_and_closes_native_flight() {
+        let opts = test_options();
+        let mut app = App::new(boot(), &opts);
+        assert!(!app.flight.active);
+        app.key_event(KeyCode::F1, true, false);
+        assert!(app.flight.active, "F1 не открыл нативный полёт");
+        assert!(!app.hdmap.active && !app.shop.active);
+
+        // Ввод принадлежит нативному полёту, в эмулятор не попадает.
+        app.apply_input();
+        assert_eq!(app.machine.kempston, 0, "ввод не должен уходить в игру");
+
+        // Поверх полёта карта и закупка не открываются.
+        app.key_event(KeyCode::F10, true, false);
+        assert!(!app.hdmap.active, "F10 открыл карту поверх полёта");
+        app.key_event(KeyCode::F4, true, false);
+        assert!(!app.shop.active, "F4 открыл закупку поверх полёта");
+
+        // Esc — пауза, но движок остаётся выбранным; Esc снова — продолжить.
+        app.key_event(KeyCode::Escape, true, false);
+        assert!(app.menu && app.flight.active, "Esc не открыл меню полёта");
+        app.key_event(KeyCode::Escape, true, false);
+        assert!(!app.menu && app.flight.active, "Esc не вернул в полёт");
+
+        // Клавиша 1 — назад к Z80-версии.
+        app.key_event(KeyCode::Digit1, true, false);
+        assert!(!app.flight.active, "1 не закрыла нативный полёт");
+
+        // Повторное открытие и закрытие по F1.
+        app.key_event(KeyCode::F1, true, false);
+        assert!(app.flight.active);
+        app.key_event(KeyCode::F1, true, false);
+        assert!(!app.flight.active, "F1 не закрыл нативный полёт");
+    }
+
+    /// Имя текущей системы для нативного полёта берётся из памяти игры.
+    #[test]
+    fn current_system_reads_live_memory() {
+        let m = boot();
+        let (name, color) = current_system(&m.mem, false);
+        assert!(!name.is_empty(), "имя текущей системы пустое");
+        assert_eq!(color >> 24, 0xFF, "цвет планеты должен быть непрозрачным");
+    }
+
     /// Загрузка версии Кладова: снапшот сразу после запуска — на заставке.
     fn boot_kladov() -> Spectrum {
         let base = env!("CARGO_MANIFEST_DIR");
@@ -1759,6 +1912,11 @@ mod intro_tests {
         assert!(!app.hdmap.active, "F10 не должен открываться на заставке");
         app.key_event(KeyCode::F4, true, false);
         assert!(!app.shop.active, "F4 не должен открываться на заставке");
+        app.key_event(KeyCode::F1, true, false);
+        assert!(
+            !app.flight.active,
+            "F1 не должен открывать нативный полёт на заставке"
+        );
 
         // Кладова: аттракт-цикл `sub_728D` 0x739E..0x73FD, старт `GameMain`.
         let opts = kladov_options();
@@ -1780,6 +1938,11 @@ mod intro_tests {
         assert!(
             !app.shop.active,
             "F4 не должен открываться на заставке Кладова"
+        );
+        app.key_event(KeyCode::F1, true, false);
+        assert!(
+            !app.flight.active,
+            "F1 не должен открывать нативный полёт на заставке Кладова"
         );
     }
 
