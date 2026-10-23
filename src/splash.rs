@@ -296,33 +296,122 @@ impl Splash {
         // [`Splash::intro_screen_center`]). От вращения он не зависит, поэтому
         // корабль не «ёрзает» вслед за габаритом каждый кадр.
         let (bx, by) = self.intro_screen_center(ship, cen, INTRO_DIST);
-        let sx: Vec<(i32, i32)> = verts
-            .iter()
-            .map(|v| {
-                let w = rot.apply([
-                    v.x as f32 - cen[0],
-                    v.y as f32 - cen[1],
-                    v.z as f32 - cen[2],
-                ]);
-                let z = INTRO_DIST + w[2];
-                (
-                    cx + ((w[0] / z - bx) * k) as i32,
-                    cy - ((w[1] / z - by) * k) as i32,
-                )
-            })
-            .collect();
+        let pr = Proj {
+            cx: cx as f32,
+            cy: cy as f32,
+            k,
+            bx,
+            by,
+        };
+        // Проекция вершин и грани, которые могут закрывать линии.
+        let scr = self.project_ship(ship, cen, &pr);
+        let occl = self.occluders(ship, &scr);
+        // Рёбра-кандидаты — по тому же правилу, что в оригинале (видна хотя
+        // бы одна назначенная грань либо сентинел `0xF`), но каждая точка
+        // линии дополнительно проверяется на закрытие гранями.
         for e in ship.edges {
             let (a, b) = (e.v[0] as usize, e.v[1] as usize);
-            if a >= sx.len() || b >= sx.len() {
+            if a >= scr.len() || b >= scr.len() {
                 continue;
             }
             let f0 = (e.faces & 0x0F) as usize;
             let f1 = (e.faces >> 4) as usize;
             let vis = |f: usize| f == 0xF || face_vis.get(f).copied().unwrap_or(false);
             if vis(f0) || vis(f1) {
-                frame.line(sx[a].0, sx[a].1, sx[b].0, sx[b].1, SHIP_COLOR);
+                line_hidden(frame, &occl, &scr, scr[a], scr[b], SHIP_COLOR);
             }
         }
+    }
+
+    /// Экранная проекция вершин: `(x, y, 1/z)`.
+    fn project_ship(&self, ship: &Ship, cen: [f32; 3], pr: &Proj) -> Vec<(f32, f32, f32)> {
+        ship.vertices
+            .iter()
+            .map(|v| {
+                let w = self.rot.apply([
+                    v.x as f32 - cen[0],
+                    v.y as f32 - cen[1],
+                    v.z as f32 - cen[2],
+                ]);
+                let z = INTRO_DIST + w[2];
+                let (px, py) = pr.screen(w[0], w[1], z);
+                (px, py, 1.0 / z)
+            })
+            .collect()
+    }
+
+    /// Грани-окклюдеры: обращённые к камере грани с экранным контуром и
+    /// уравнением своей плоскости.
+    ///
+    /// В данных модели у грани есть только нормаль, а её контур собирается
+    /// из рёбер, у которых эта грань указана в полубайте. Сама нормаль грубее
+    /// геометрии, поэтому плоскость для глубины строится по вершинам грани
+    /// (см. [`fit_plane`]). Удаление невидимых линий идёт точной проверкой
+    /// «точка ребра против плоскости грани в этой же точке экрана»: у граней,
+    /// почти параллельных лучу зрения, глубина меняется на проценты за
+    /// пиксель, и буфер с грубой сеткой закрывал бы видимые линии.
+    fn occluders(&self, ship: &Ship, scr: &[(f32, f32, f32)]) -> Vec<Occluder> {
+        let vis = face_visibility(ship, &self.rot);
+        let mut face_edges: Vec<Vec<(usize, usize)>> = vec![Vec::new(); ship.faces.len()];
+        for e in ship.edges {
+            let (a, b) = (e.v[0] as usize, e.v[1] as usize);
+            if a >= scr.len() || b >= scr.len() {
+                continue;
+            }
+            for f in [e.faces & 0x0F, e.faces >> 4] {
+                if let Some(list) = face_edges.get_mut(f as usize) {
+                    list.push((a, b));
+                }
+            }
+        }
+        let mut out = Vec::new();
+        for (fi, _) in ship.faces.iter().enumerate() {
+            if !vis.get(fi).copied().unwrap_or(false) {
+                continue;
+            }
+            let edges = &face_edges[fi];
+            if edges.len() < 3 {
+                continue;
+            }
+            let mut vs: Vec<usize> = edges.iter().flat_map(|&(a, b)| [a, b]).collect();
+            vs.sort_unstable();
+            vs.dedup();
+            if vs.len() < 3 {
+                continue;
+            }
+            let pts: Vec<(f32, f32, f32)> = vs.iter().map(|&i| scr[i]).collect();
+            let Some((aa, bb, cc)) = fit_plane(&pts) else {
+                continue;
+            };
+            // Насколько точно плоскость совпала с вершинами. Точность важнее
+            // полноты: лучше оставить лишнюю линию, чем закрыть видимую.
+            let err = pts.iter().fold(0.0f32, |e, &(x, y, iz)| {
+                e.max((aa * x + bb * y + cc - iz).abs() / iz)
+            });
+            if err > MAX_PLANE_ERROR {
+                continue;
+            }
+            let (mut x0, mut y0, mut x1, mut y1) = (f32::MAX, f32::MAX, f32::MIN, f32::MIN);
+            for &(i, j) in edges {
+                for k in [i, j] {
+                    x0 = x0.min(scr[k].0);
+                    x1 = x1.max(scr[k].0);
+                    y0 = y0.min(scr[k].1);
+                    y1 = y1.max(scr[k].1);
+                }
+            }
+            out.push(Occluder {
+                edges: edges.clone(),
+                x0,
+                x1,
+                y0,
+                y1,
+                aa,
+                bb,
+                cc,
+            });
+        }
+        out
     }
 
     /// Запасная фигура (куб), если модель корабля не найдена в таблице.
@@ -352,6 +441,167 @@ impl Splash {
 impl Default for Splash {
     fn default() -> Self {
         Self::new()
+    }
+}
+
+/// Параметры экранной проекции заставки.
+///
+/// `px = cx + (X/Z - bx)*k`, `py = cy - (Y/Z - by)*k` — как печатает
+/// оригинал (`CalcPrnCrdVertex`), только с постоянным сдвигом композиции
+/// `(bx, by)` и масштабом `k`. Глубина — `Z` в координатах камеры.
+#[derive(Clone, Copy)]
+struct Proj {
+    cx: f32,
+    cy: f32,
+    k: f32,
+    bx: f32,
+    by: f32,
+}
+
+impl Proj {
+    /// Экранные координаты точки `(x, y)` на глубине `z`.
+    fn screen(&self, x: f32, y: f32, z: f32) -> (f32, f32) {
+        (
+            self.cx + (x / z - self.bx) * self.k,
+            self.cy - (y / z - self.by) * self.k,
+        )
+    }
+}
+
+/// Относительный допуск по глубине при удалении невидимых линий.
+///
+/// Плоскости граней восстановлены по нормалям из ROM; у части граней
+/// вершины отклоняются от своей плоскости на несколько единиц модели
+/// (это видно по [`MAX_FACE_DEVIATION`]), поэтому линия, лежащая **на**
+/// передней поверхности, не должна пропадать из-за одной лишь погрешности.
+/// Допуск 2 % глубины — это ≈ 10 единиц модели на дистанции интро, то есть
+/// заметно меньше перепада между ближней и дальней сторонами корпуса.
+const DEPTH_EPS: f32 = 0.02;
+
+/// Предельная относительная ошибка плоскости грани по её вершинам.
+///
+/// Нормали в данных грубее геометрии, а глубину грани мы берём из её
+/// плоскости. У граней, почти параллельных лучу зрения, малейший наклон
+/// нормали даёт проценты глубины; такие грани не учитываются при удалении
+/// невидимых линий — лучше оставить лишнюю линию, чем закрыть видимую.
+const MAX_PLANE_ERROR: f32 = 0.01;
+
+/// Плоскость `1/z = aa*x + bb*y + cc`, наименее уклоняющаяся от точек.
+///
+/// Строится по самим вершинам грани (наименьшие квадраты в экранных
+/// координатах): записанные в модели нормали грубее геометрии, а для
+/// удаления невидимых линий важна именно глубина. Координаты
+/// центрируются, чтобы нормальные уравнения были обусловлены.
+fn fit_plane(pts: &[(f32, f32, f32)]) -> Option<(f32, f32, f32)> {
+    if pts.len() < 3 {
+        return None;
+    }
+    let n = pts.len() as f32;
+    let (mut mx, mut my, mut mi) = (0.0f32, 0.0f32, 0.0f32);
+    for &(x, y, i) in pts {
+        mx += x;
+        my += y;
+        mi += i;
+    }
+    mx /= n;
+    my /= n;
+    mi /= n;
+    // Нормальные уравнения для `a*dx + b*dy + c = di`.
+    let (mut sxx, mut sxy, mut sx) = (0.0f32, 0.0f32, 0.0f32);
+    let (mut syy, mut sy) = (0.0f32, 0.0f32);
+    let (mut bx, mut by, mut bi) = (0.0f32, 0.0f32, 0.0f32);
+    for &(x, y, i) in pts {
+        let (dx, dy, di) = (x - mx, y - my, i - mi);
+        sxx += dx * dx;
+        sxy += dx * dy;
+        sx += dx;
+        syy += dy * dy;
+        sy += dy;
+        bx += dx * di;
+        by += dy * di;
+        bi += di;
+    }
+    // Определитель системы 3×3 и правило Крамера.
+    let det = sxx * (syy * n - sy * sy) - sxy * (sxy * n - sy * sx) + sx * (sxy * sy - syy * sx);
+    if det.abs() < 1e-9 {
+        return None;
+    }
+    let det_a = bx * (syy * n - sy * sy) - sxy * (by * n - sy * bi) + sx * (by * sy - syy * bi);
+    let det_b = sxx * (by * n - sy * bi) - bx * (sxy * n - sy * sx) + sx * (sxy * bi - by * sx);
+    let det_c = sxx * (syy * bi - by * sy) - sxy * (sxy * bi - by * sx) + bx * (sxy * sy - syy * sx);
+    let (a, b, c) = (det_a / det, det_b / det, det_c / det);
+    Some((a, b, mi + c - a * mx - b * my))
+}
+
+/// Грань, которая может закрывать линии: экранный контур и уравнение
+/// плоскости `1/z = aa*x + bb*y + cc`.
+struct Occluder {
+    /// Рёбра контура в индексах вершин модели (петель может быть несколько,
+    /// например вырезы двигателей).
+    edges: Vec<(usize, usize)>,
+    x0: f32,
+    x1: f32,
+    y0: f32,
+    y1: f32,
+    aa: f32,
+    bb: f32,
+    cc: f32,
+}
+
+impl Occluder {
+    /// Лежит ли точка экрана внутри контура грани (правило «чёт-нечёт»).
+    fn covers(&self, scr: &[(f32, f32, f32)], x: f32, y: f32) -> bool {
+        if x < self.x0 || x > self.x1 || y < self.y0 || y > self.y1 {
+            return false;
+        }
+        let mut inside = false;
+        for &(i, j) in &self.edges {
+            let (xi, yi, _) = scr[i];
+            let (xj, yj, _) = scr[j];
+            if (yi <= y) != (yj <= y) {
+                let xc = xi + (y - yi) / (yj - yi) * (xj - xi);
+                if x < xc {
+                    inside = !inside;
+                }
+            }
+        }
+        inside
+    }
+
+    /// Обратная глубина плоскости грани в точке экрана `(x, y)`.
+    fn plane_invz(&self, x: f32, y: f32) -> f32 {
+        self.aa * x + self.bb * y + self.cc
+    }
+}
+
+/// Отрезок с удалением невидимых участков.
+///
+/// Для каждой точки отрезка проверяется, не закрывает ли её какая-нибудь
+/// обращённая к камере грань: точка должна лежать внутри её экранного
+/// контура и быть глубже её плоскости. Глубина ребра и глубина грани
+/// берутся в одной и той же непрерывной точке, поэтому линия на границе
+/// своей же грани никогда не пропадает.
+fn line_hidden(
+    frame: &mut Frame,
+    occl: &[Occluder],
+    scr: &[(f32, f32, f32)],
+    a: (f32, f32, f32),
+    b: (f32, f32, f32),
+    color: u32,
+) {
+    let (dx, dy) = (b.0 - a.0, b.1 - a.1);
+    let n = dx.abs().max(dy.abs()).ceil().max(1.0) as i32;
+    for i in 0..=n {
+        let t = i as f32 / n as f32;
+        let x = a.0 + dx * t;
+        let y = a.1 + dy * t;
+        let invz = a.2 + (b.2 - a.2) * t;
+        let hidden = occl
+            .iter()
+            .any(|o| o.covers(scr, x, y) && o.plane_invz(x, y) > invz * (1.0 + DEPTH_EPS));
+        if !hidden {
+            frame.plot(x.round() as i32, y.round() as i32, color);
+        }
     }
 }
 
@@ -1157,6 +1407,155 @@ mod tests {
         }
     }
 
+
+
+    /// Центр габаритов модели — так же, как в [`Splash::draw_ship`].
+    fn centered(ship: &Ship) -> [f32; 3] {
+        let (mut mn, mut mx) = ([i32::MAX; 3], [i32::MIN; 3]);
+        for v in ship.vertices {
+            for (k, c) in [v.x, v.y, v.z].iter().enumerate() {
+                mn[k] = mn[k].min(*c as i32);
+                mx[k] = mx[k].max(*c as i32);
+            }
+        }
+        [
+            (mn[0] + mx[0]) as f32 / 2.0,
+            (mn[1] + mx[1]) as f32 / 2.0,
+            (mn[2] + mx[2]) as f32 / 2.0,
+        ]
+    }
+
+    /// Эталонный куб: выпуклый корпус. Здесь проверка видимости граней
+    /// может быть точной (нормали куба заданы ровно), поэтому известно
+    /// множество заведомо видимых рёбер. Удаление невидимых линий не должно
+    /// убирать с них ни одного пикселя.
+    ///
+    /// Регрессия на слишком агрессивное удаление: раньше на гранях, почти
+    /// параллельных лучу зрения (глубина меняется на проценты за пиксель),
+    /// видимые линии пропадали.
+    #[test]
+    fn convex_cube_keeps_visible_edges() {
+        let ship = cube_ship();
+        let cen = centered(ship);
+        for step in 0..24 {
+            let mut st = Splash::new();
+            for _ in 0..step * 5 {
+                st.tick();
+            }
+            // Вершины в координатах камеры и точная видимость граней:
+            // грань видна, если её нормаль смотрит на камеру.
+            let cam: Vec<[f32; 3]> = ship
+                .vertices
+                .iter()
+                .map(|v| {
+                    let w = st.rot.apply([
+                        v.x as f32 - cen[0],
+                        v.y as f32 - cen[1],
+                        v.z as f32 - cen[2],
+                    ]);
+                    [w[0], w[1], INTRO_DIST + w[2]]
+                })
+                .collect();
+            let vis: Vec<bool> = (0..ship.faces.len())
+                .map(|fi| {
+                    let f = &ship.faces[fi];
+                    let n = st.rot.apply([f.nx as f32, f.ny as f32, f.nz as f32]);
+                    let (mut c, mut cnt) = ([0.0f32; 3], 0.0f32);
+                    for e in ship.edges {
+                        if (e.faces & 0x0F) as usize == fi || (e.faces >> 4) as usize == fi {
+                            for i in [e.v[0] as usize, e.v[1] as usize] {
+                                for (j, cj) in c.iter_mut().enumerate() {
+                                    *cj += cam[i][j];
+                                }
+                                cnt += 1.0;
+                            }
+                        }
+                    }
+                    n[0] * c[0] + n[1] * c[1] + n[2] * c[2] < 0.0 && cnt > 0.0
+                })
+                .collect();
+            // Эталон: только заведомо видимые рёбра, без проверки глубины.
+            let k = st.ship_scale(ship, cen, INTRO_DIST, 240);
+            let (bx, by) = st.intro_screen_center(ship, cen, INTRO_DIST);
+            let pr = Proj {
+                cx: 300.0,
+                cy: 300.0,
+                k,
+                bx,
+                by,
+            };
+            let scr = st.project_ship(ship, cen, &pr);
+            let mut reference = Frame::new(600, 600);
+            for e in ship.edges {
+                let (a, b) = (e.v[0] as usize, e.v[1] as usize);
+                let seen = |f: usize| f == 0xF || vis.get(f).copied().unwrap_or(false);
+                if seen((e.faces & 0x0F) as usize) || seen((e.faces >> 4) as usize) {
+                    line_hidden(&mut reference, &[], &scr, scr[a], scr[b], SHIP_COLOR);
+                }
+            }
+            let mut f = Frame::new(600, 600);
+            st.draw_ship(&mut f, ship, 300, 300, 240);
+            let drawn: Vec<bool> = f.pixels().iter().map(|&p| p == SHIP_COLOR).collect();
+            let (mut total, mut lost) = (0, 0);
+            for (i, &p) in reference.pixels().iter().enumerate() {
+                if p == SHIP_COLOR {
+                    total += 1;
+                    if !drawn[i] {
+                        lost += 1;
+                    }
+                }
+            }
+            assert!(total > 0, "шаг {step}: куб не нарисован");
+            assert_eq!(
+                lost, 0,
+                "шаг {step}: удаление линий убрало {lost} из {total} пикселей видимых рёбер"
+            );
+        }
+    }
+
+    /// Куб как модель корабля для [`convex_cube_keeps_visible_edges`].
+    fn cube_ship() -> &'static Ship {
+        use crate::shipdata::{Edge, Face, Ship, Vertex};
+        static VERTS: [Vertex; 8] = [
+            Vertex { x: -50, y: -50, z: -50, lod: 0x1F, faces: [0, 0] },
+            Vertex { x: 50, y: -50, z: -50, lod: 0x1F, faces: [0, 0] },
+            Vertex { x: 50, y: 50, z: -50, lod: 0x1F, faces: [0, 0] },
+            Vertex { x: -50, y: 50, z: -50, lod: 0x1F, faces: [0, 0] },
+            Vertex { x: -50, y: -50, z: 50, lod: 0x1F, faces: [0, 0] },
+            Vertex { x: 50, y: -50, z: 50, lod: 0x1F, faces: [0, 0] },
+            Vertex { x: 50, y: 50, z: 50, lod: 0x1F, faces: [0, 0] },
+            Vertex { x: -50, y: 50, z: 50, lod: 0x1F, faces: [0, 0] },
+        ];
+        static FACES: [Face; 6] = [
+            Face { nx: 100, ny: 0, nz: 0, flags: 0x1F },
+            Face { nx: -100, ny: 0, nz: 0, flags: 0x1F },
+            Face { nx: 0, ny: 100, nz: 0, flags: 0x1F },
+            Face { nx: 0, ny: -100, nz: 0, flags: 0x1F },
+            Face { nx: 0, ny: 0, nz: 100, flags: 0x1F },
+            Face { nx: 0, ny: 0, nz: -100, flags: 0x1F },
+        ];
+        static EDGES: [Edge; 12] = [
+            Edge { lod: 0x1F, v: [0, 1], faces: 5 | (3 << 4) },
+            Edge { lod: 0x1F, v: [1, 2], faces: 5 | (0 << 4) },
+            Edge { lod: 0x1F, v: [2, 3], faces: 5 | (2 << 4) },
+            Edge { lod: 0x1F, v: [3, 0], faces: 5 | (1 << 4) },
+            Edge { lod: 0x1F, v: [4, 5], faces: 4 | (3 << 4) },
+            Edge { lod: 0x1F, v: [5, 6], faces: 4 | (0 << 4) },
+            Edge { lod: 0x1F, v: [6, 7], faces: 4 | (2 << 4) },
+            Edge { lod: 0x1F, v: [7, 4], faces: 4 | (1 << 4) },
+            Edge { lod: 0x1F, v: [0, 4], faces: 3 | (1 << 4) },
+            Edge { lod: 0x1F, v: [1, 5], faces: 3 | (0 << 4) },
+            Edge { lod: 0x1F, v: [2, 6], faces: 2 | (0 << 4) },
+            Edge { lod: 0x1F, v: [3, 7], faces: 2 | (1 << 4) },
+        ];
+        static SHIP: Ship = Ship {
+            name: "cube", addr: 0, category: 0,
+            vertices: &VERTS, edges: &EDGES, faces: &FACES,
+            stats: unsafe { std::mem::zeroed() },
+        };
+        &SHIP
+    }
+
     /// Дамп кадров анимации заставки (`ELITE_DUMP_SPLASH_FRAMES=prefix` →
     /// `prefix_<номер>.ppm`, шаг 12 тиков = один шаг оригинала).
     ///
@@ -1200,4 +1599,3 @@ mod tests {
         }
     }
 }
-
