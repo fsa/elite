@@ -148,7 +148,7 @@ impl Splash {
     pub fn draw_in(&self, frame: &mut Frame, font: &[u8], area_h: i32) {
         const BG: u32 = 0xFF00_0000; // чёрный фон (непрозрачный)
         const FG: u32 = 0xFFD7_D7D7; // белый — заголовок
-        const HINT: u32 = 0xFFFF_FF00; // жёлтый — приглашение
+        const HINT: u32 = 0xFFD7_D7D7; // белый — приглашение
         let area_h = area_h.clamp(1, frame.height as i32);
         // Фон области (снизу может быть своя панель — её не трогаем).
         frame.fill_rect(0, 0, frame.width, area_h as usize, BG);
@@ -160,12 +160,10 @@ impl Splash {
         let title = "---- E L I T E ----";
         let title_y = 4 * s;
         frame.draw_text(font, ox + 40 * s, title_y, title, FG, s as usize);
-        // Нижняя строка — приглашение нажать SPACE (мигает с периодом ~1 c).
-        let hint = "PRESS SPACE";
+        // Нижняя строка — приглашение нажать SPACE.
+        let hint = "Press Space, Commander";
         let hint_y = area_h - 12 * s;
-        if (self.tick / 25) % 2 == 0 {
-            frame.draw_text(font, ox + 8 * s, hint_y, hint, HINT, s as usize);
-        }
+        frame.draw_text(font, ox + 28 * s, hint_y, hint, HINT, s as usize);
         // Вращающийся корабль (или запасная фигура, если модель не найдена) —
         // по центру свободной между надписями полосы, крупнее прежнего.
         let top = title_y + 8 * s;
