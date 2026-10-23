@@ -7,6 +7,8 @@ mod hdmap;
 mod machine;
 mod native;
 #[cfg(test)]
+mod dumptitle;
+#[cfg(test)]
 mod probe;
 mod shipdata;
 mod splash;
@@ -1904,11 +1906,14 @@ mod intro_tests {
         st.draw(&mut hd, font);
         // Фон полностью непрозрачный.
         assert_eq!(hd.pixels()[0], 0xFF00_0000, "фон заставки не непрозрачный");
-        // Заголовок «ELITE» (белый) и подсказка меню (серый) нарисованы.
+        // Заголовок «---- E L I T E ----» (белый) и приглашение «PRESS SPACE»
+        // (жёлтое) нарисованы; лишних надписей на заставке нет.
         let white = hd.pixels().iter().filter(|&&p| p == 0xFFD7_D7D7).count();
+        let yellow = hd.pixels().iter().filter(|&&p| p == 0xFFFF_FF00).count();
         let grey = hd.pixels().iter().filter(|&&p| p == 0xFF90_9090).count();
         assert!(white > 1000, "заголовок заставки не нарисован: {white}");
-        assert!(grey > 1000, "подсказка меню не нарисована: {grey}");
+        assert!(yellow > 100, "приглашение не нарисовано: {yellow}");
+        assert_eq!(grey, 0, "на заставке остались лишние надписи: {grey}");
         if let Ok(path) = env::var("ELITE_DUMP_SPLASH") {
             write_ppm(&path, hd.pixels(), 256 * 5, 192 * 5);
         }
