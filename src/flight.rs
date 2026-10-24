@@ -312,8 +312,8 @@ impl Flight {
         let dt = dt.clamp(0.0, 0.1);
 
         // Ориентация: повороты вокруг локальных осей камеры.
-        let pitch = (c.pitch_up as i32 - c.pitch_down as i32) as f32;
-        let roll = (c.roll_left as i32 - c.roll_right as i32) as f32;
+        let pitch = (c.pitch_down as i32 - c.pitch_up as i32) as f32;
+        let roll = (c.roll_right as i32 - c.roll_left as i32) as f32;
         if pitch != 0.0 {
             self.rot = Rotation::axis_angle([1.0, 0.0, 0.0], pitch * ROT_SPEED * dt)
                 .mul(&self.rot);
