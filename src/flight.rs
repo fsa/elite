@@ -339,13 +339,16 @@ impl Flight {
                 .mul(&self.rot);
         }
 
-        // Тяга. Без топлива ускорения нет, но инерция сохраняется.
+        // Тяга. В оригинальной игре корабль всегда движется вперёд,
+        // минимальная скорость не равна нулю.
         let throttle = (c.throttle_up as i32 - c.throttle_down as i32) as f32;
         if throttle > 0.0 && self.fuel > 0.0 {
             self.speed = (self.speed + ACCEL * dt).min(1.0);
             self.fuel = (self.fuel - 0.020 * dt).max(0.0);
         } else if throttle < 0.0 {
-            self.speed = (self.speed - DECEL * dt).max(0.0);
+            self.speed = (self.speed - DECEL * dt).max(0.12);
+        } else {
+            self.speed = self.speed.max(0.12);
         }
 
         // Лазер: выстрел, попадание и остывание.
