@@ -14,7 +14,7 @@
 //!
 //! Что уже есть в модели:
 //!
-//! * звёздное небо (неподвижные далёкие точки, вращаются вместе с камерой);
+//! * звёздное поле: точки летят навстречу, и чем выше скорость, тем быстрее;
 //! * непрозрачная планета с фазой освещения от солнца;
 //! * солнце с ореолом;
 //! * станция и несколько кораблей с собственным вращением;
@@ -79,8 +79,6 @@ pub struct Controls {
     pub pitch_down: bool,
     pub roll_left: bool,
     pub roll_right: bool,
-    pub yaw_left: bool,
-    pub yaw_right: bool,
     pub throttle_up: bool,
     pub throttle_down: bool,
     pub fire: bool,
@@ -90,21 +88,22 @@ impl Controls {
     /// Собрать управление из ZX-матрицы и Kempston.
     ///
     /// Клавиши взяты по физическим позициям (раскладка не важна):
-    /// `X`/`S` или стрелки вверх/вниз — тангаж, `N`/`M` или стрелки
-    /// влево/вправо — крен, `Q`/`E` — рыскание, `A`/`Z` — тяга,
-    /// `Space`/`RightCtrl` — огонь.
+    /// `S`/`X` или стрелки вверх/вниз — тангаж, `N`/`M` или стрелки
+    /// влево/вправо — крен, `Space` — увеличить скорость, `RightShift` —
+    /// уменьшить, `A`/`RightCtrl` — огонь.
     pub fn from_matrix(matrix: &[[bool; 5]; 8], kempston: &[bool; 5]) -> Self {
         let key = |row: usize, bit: usize| matrix[row][bit];
         Controls {
-            pitch_up: key(0, 2) || kempston[3],   // X / Up
-            pitch_down: key(1, 1) || kempston[2], // S / Down
-            roll_left: key(7, 3) || kempston[1],  // N / Left
-            roll_right: key(7, 2) || kempston[0], // M / Right
-            yaw_left: key(2, 0),                  // Q
-            yaw_right: key(2, 2),                 // E
-            throttle_up: key(1, 0) || key(7, 1),  // A / RightShift
-            throttle_down: key(0, 1),             // Z
-            fire: key(7, 0) || kempston[4],       // Space / RightCtrl
+            // Оригинал: ControlKeyMove 3=S Up, 2=X Down, 1=M Right, 0=N Left
+            pitch_up: key(1, 1) || kempston[3],    // S / Up
+            pitch_down: key(0, 2) || kempston[2],  // X / Down
+            roll_left: key(7, 3) || kempston[1],   // N / Left
+            roll_right: key(7, 2) || kempston[0],  // M / Right
+            // Оригинал: Space увеличить скорость, Symbol Shift (RightShift) уменьшить
+            throttle_up: key(7, 0),                // Space
+            throttle_down: key(7, 1),              // Symbol Shift
+            // Оригинал: ControlKey3, бит 0 — A (Fire Laser)
+            fire: key(1, 0) || kempston[4],        // A / RightCtrl
         }
     }
 }
@@ -139,9 +138,10 @@ struct Body {
     fire_timer: f32,
 }
 
-/// Далёкая звезда: направление на небесной сфере и яркость.
+/// Звезда в космическом пространстве.
 struct Star {
-    dir: [f32; 3],
+    /// Положение относительно камеры/мира в упрощённой модели.
+    pos: [f32; 3],
     mag: u8,
 }
 
@@ -314,13 +314,8 @@ impl Flight {
         // Ориентация: повороты вокруг локальных осей камеры.
         let pitch = (c.pitch_up as i32 - c.pitch_down as i32) as f32;
         let roll = (c.roll_left as i32 - c.roll_right as i32) as f32;
-        let yaw = (c.yaw_left as i32 - c.yaw_right as i32) as f32;
         if pitch != 0.0 {
             self.rot = Rotation::axis_angle([1.0, 0.0, 0.0], pitch * ROT_SPEED * dt)
-                .mul(&self.rot);
-        }
-        if yaw != 0.0 {
-            self.rot = Rotation::axis_angle([0.0, 1.0, 0.0], yaw * ROT_SPEED * dt)
                 .mul(&self.rot);
         }
         if roll != 0.0 {
@@ -353,6 +348,7 @@ impl Flight {
         for i in 0..3 {
             self.pos[i] += forward[i] * self.speed * MAX_SPEED * dt;
         }
+        self.advance_stars(forward, dt);
 
         // Собственное вращение и простая тактика противников.
         for b in &mut self.bodies {
@@ -457,7 +453,7 @@ impl Flight {
     }
 
     /// Нарисовать полёт на весь кадр.
-    pub fn draw(&self, frame: &mut Frame, font: &[u8]) {
+    pub fn draw(&mut self, frame: &mut Frame, font: &[u8]) {
         let w = frame.width as i32;
         let h = frame.height as i32;
         frame.fill_rect(0, 0, frame.width, frame.height, BG);
@@ -539,12 +535,54 @@ impl Flight {
         frame.draw_text(font, ox + 8 * s, h - 12 * s, hint, HINT, s as usize);
     }
 
+    /// Сдвинуть звёздное поле назад относительно корабля.
+    ///
+    /// Звёзды хранятся в координатах, связанных с кораблём. При полёте они
+    /// смещаются в направлении, противоположном движению, поэтому чем выше
+    /// скорость, тем быстрее они проносятся мимо. Ушедшие за камеру звёзды
+    /// рождаются заново впереди — поле остаётся бесконечным.
+    fn advance_stars(&mut self, forward: [f32; 3], dt: f32) {
+        let step = self.speed * MAX_SPEED * dt;
+        if step.abs() < 1e-9 {
+            return;
+        }
+        // Базис для разброса новых звёзд вокруг направления полёта.
+        let up = if forward[1].abs() < 0.9 {
+            [0.0, 1.0, 0.0]
+        } else {
+            [1.0, 0.0, 0.0]
+        };
+        let right = normalize(cross(up, forward));
+        let top = cross(forward, right);
+        let mut rng = self.rng;
+        for star in &mut self.stars {
+            for (i, p) in star.pos.iter_mut().enumerate() {
+                *p -= forward[i] * step;
+            }
+            let v = self.rot.apply(star.pos);
+            if v[2] > NEAR {
+                continue;
+            }
+            // Новая звезда впереди, в конусе вокруг курса.
+            let dist = 1200.0 + (next(&mut rng) as f32 / u32::MAX as f32) * 4800.0;
+            let around = next(&mut rng) as f32 / u32::MAX as f32 * std::f32::consts::TAU;
+            let spread = (next(&mut rng) as f32 / u32::MAX as f32).sqrt() * 0.55;
+            let (sa, ca) = around.sin_cos();
+            for i in 0..3 {
+                star.pos[i] = forward[i] * dist
+                    + (right[i] * ca + top[i] * sa) * spread * dist;
+            }
+            star.mag = (next(&mut rng) >> 24) as u8;
+        }
+        self.rng = rng;
+    }
+
     fn draw_stars(&self, frame: &mut Frame, screen: &Screen) {
-        // Небо вращается вместе с камерой: звёзды считаются бесконечно
-        // далёкими, поэтому положение корабля на них не влияет.
+        let forward = self.rot.transpose().apply([0.0, 0.0, 1.0]);
+        let speed = self.speed * MAX_SPEED;
         for star in &self.stars {
-            let v = self.rot.apply(star.dir);
-            if v[2] <= 0.06 {
+            let v = self.rot.apply(star.pos);
+            if v[2] <= NEAR {
                 continue;
             }
             let x = screen.cx + v[0] / v[2] * screen.k;
@@ -558,6 +596,22 @@ impl Flight {
                 | ((bright * 225.0) as u32) << 8
                 | (bright * 255.0) as u32;
             let (xi, yi) = (x.round() as i32, y.round() as i32);
+            // Небольшой след от движения: на большой скорости звёзды
+            // вытягиваются вдоль курса, как при движении камеры.
+            if speed > 150.0 && star.mag > 160 {
+                let age = 0.035;
+                let tail = [
+                    star.pos[0] + forward[0] * speed * age,
+                    star.pos[1] + forward[1] * speed * age,
+                    star.pos[2] + forward[2] * speed * age,
+                ];
+                let tv = self.rot.apply(tail);
+                if tv[2] > NEAR {
+                    let tx = screen.cx + tv[0] / tv[2] * screen.k;
+                    let ty = screen.cy - tv[1] / tv[2] * screen.k;
+                    frame.line(tx.round() as i32, ty.round() as i32, xi, yi, c & 0x80FF_FFFF);
+                }
+            }
             frame.plot(xi, yi, c);
             if star.mag > 210 {
                 frame.plot(xi + 1, yi, c);
@@ -786,19 +840,39 @@ fn darken(c: u32, k: f32) -> u32 {
     lighten(c, k)
 }
 
-/// Детерминированное звёздное небо: направления равномерно по сфере.
+/// Детерминированное звёздное поле: звёзды вокруг корабля, движущиеся назад при полёте.
 fn make_stars(rng: &mut u32, count: usize) -> Vec<Star> {
     let mut out = Vec::with_capacity(count);
     for _ in 0..count {
         let a = next(rng) as f32 / u32::MAX as f32 * std::f32::consts::TAU;
         let z = next(rng) as f32 / u32::MAX as f32 * 2.0 - 1.0;
         let r = (1.0 - z * z).sqrt();
+        let d = 1200.0 + (next(rng) as f32 / u32::MAX as f32) * 4800.0;
         out.push(Star {
-            dir: [r * a.cos(), r * a.sin(), z],
+            pos: [r * a.cos() * d, r * a.sin() * d, z * d],
             mag: (next(rng) >> 24) as u8,
         });
     }
     out
+}
+
+/// Векторное произведение.
+fn cross(a: [f32; 3], b: [f32; 3]) -> [f32; 3] {
+    [
+        a[1] * b[2] - a[2] * b[1],
+        a[2] * b[0] - a[0] * b[2],
+        a[0] * b[1] - a[1] * b[0],
+    ]
+}
+
+/// Нормировать вектор (нулевой остаётся нулевым).
+fn normalize(v: [f32; 3]) -> [f32; 3] {
+    let len = (v[0] * v[0] + v[1] * v[1] + v[2] * v[2]).sqrt();
+    if len < 1e-6 {
+        [0.0; 3]
+    } else {
+        [v[0] / len, v[1] / len, v[2] / len]
+    }
 }
 
 /// Шаг xorshift32 для генератора звёзд.
@@ -837,13 +911,18 @@ mod tests {
 
     #[test]
     fn controls_follow_original_keys_and_arrows() {
-        let (m, k) = keys(&[(0, 2), (1, 1), (7, 3), (7, 2), (2, 0), (2, 2), (1, 0), (0, 1), (7, 0)]);
+        // Оригинал: S — вверх, X — вниз, N/M — крен, Space/Shift — скорость,
+        // A — огонь (ControlKeyMove и ControlKey3).
+        let (m, k) = keys(&[(1, 1), (0, 2), (7, 3), (7, 2), (7, 0), (7, 1), (1, 0)]);
         let c = Controls::from_matrix(&m, &k);
         assert!(c.pitch_up && c.pitch_down);
         assert!(c.roll_left && c.roll_right);
-        assert!(c.yaw_left && c.yaw_right);
         assert!(c.throttle_up && c.throttle_down);
         assert!(c.fire);
+        // Q/E в оригинале — не рыскание (Escape Pod / ECM), полёт их не трогает.
+        let (m, _) = keys(&[(2, 0), (2, 2)]);
+        let c = Controls::from_matrix(&m, &[false; 5]);
+        assert_eq!(c, Controls::default());
         // Kempston: вверх/вниз/влево/вправо/огонь.
         let c = Controls::from_matrix(&[[false; 5]; 8], &[true, true, true, true, true]);
         assert!(c.roll_right && c.roll_left && c.pitch_down && c.pitch_up && c.fire);
@@ -871,8 +950,23 @@ mod tests {
     }
 
     #[test]
+    fn stars_move_faster_with_speed() {
+        let mut fast = open();
+        fast.speed = 1.0;
+        if let Some(s) = fast.stars.first_mut() {
+            s.pos = [0.0, 0.0, 2000.0];
+        }
+        let start = fast.stars[0].pos;
+        fast.tick(Controls::default(), 0.1);
+        let moved = fast.stars[0].pos;
+        let step = (0..3).map(|i| (moved[i] - start[i]).abs()).sum::<f32>();
+        assert!(step > 1.0, "на полной скорости звёзды не движутся");
+        assert!(moved[2] < start[2], "звёзды должны двигаться навстречу камере");
+    }
+
+    #[test]
     fn flight_screen_is_opaque_and_styled_like_splash() {
-        let f = open();
+        let mut f = open();
         let font = vec![0xFFu8; 0x300];
         let mut frame = Frame::new(1280, 960);
         f.draw(&mut frame, &font);
