@@ -156,6 +156,9 @@ pub struct Flight {
     pos: [f32; 3],
     /// Текущая скорость `0..1` от [`MAX_SPEED`].
     speed: f32,
+    /// Угловые скорости с инерцией (радиан/с).
+    ang_pitch: f32,
+    ang_roll: f32,
     shield: f32,
     fuel: f32,
     laser_heat: f32,
@@ -181,6 +184,8 @@ impl Flight {
             rot: Rotation::identity(),
             pos: [0.0; 3],
             speed: 0.22,
+            ang_pitch: 0.0,
+            ang_roll: 0.0,
             shield: 1.0,
             fuel: 1.0,
             laser_heat: 0.0,
@@ -239,6 +244,8 @@ impl Flight {
     fn reset_scene(&mut self) {
         self.rot = Rotation::identity();
         self.pos = [0.0; 3];
+        self.ang_pitch = 0.0;
+        self.ang_roll = 0.0;
         self.stars = make_stars(&mut self.rng, 280);
         self.bodies.clear();
 
@@ -311,15 +318,24 @@ impl Flight {
         self.tick += 1;
         let dt = dt.clamp(0.0, 0.1);
 
-        // Ориентация: повороты вокруг локальных осей камеры.
-        let pitch = (c.pitch_down as i32 - c.pitch_up as i32) as f32;
-        let roll = (c.roll_right as i32 - c.roll_left as i32) as f32;
-        if pitch != 0.0 {
-            self.rot = Rotation::axis_angle([1.0, 0.0, 0.0], pitch * ROT_SPEED * dt)
+        // Ориентация с инерцией: набираем угловую скорость при нажатии,
+        // затем затухаем (как в оригинальном Elite).
+        let pitch_in = (c.pitch_down as i32 - c.pitch_up as i32) as f32;
+        let roll_in = (c.roll_right as i32 - c.roll_left as i32) as f32;
+        let accel = ROT_SPEED * 3.2;
+        let damp = 1.0 - (4.5 * dt).min(0.9);
+        self.ang_pitch += pitch_in * accel * dt;
+        self.ang_roll += roll_in * accel * dt;
+        self.ang_pitch *= damp;
+        self.ang_roll *= damp;
+        self.ang_pitch = self.ang_pitch.clamp(-ROT_SPEED * 1.4, ROT_SPEED * 1.4);
+        self.ang_roll = self.ang_roll.clamp(-ROT_SPEED * 1.4, ROT_SPEED * 1.4);
+        if self.ang_pitch.abs() > 1e-4 {
+            self.rot = Rotation::axis_angle([1.0, 0.0, 0.0], self.ang_pitch * dt)
                 .mul(&self.rot);
         }
-        if roll != 0.0 {
-            self.rot = Rotation::axis_angle([0.0, 0.0, 1.0], roll * ROT_SPEED * dt)
+        if self.ang_roll.abs() > 1e-4 {
+            self.rot = Rotation::axis_angle([0.0, 0.0, 1.0], self.ang_roll * dt)
                 .mul(&self.rot);
         }
 
