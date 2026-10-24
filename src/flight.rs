@@ -26,6 +26,8 @@
 //! читаются из памяти игры как начальные значения.
 
 use crate::display::Frame;
+use crate::flight_model::{DrawBody, FlightMode, FlightView, HudData};
+pub use crate::flight_model::Controls;
 use crate::render3d::{self, Rotation, Screen};
 use crate::shipdata::{self, Ship};
 
@@ -72,41 +74,6 @@ pub struct FlightSeed<'a> {
     pub planet_color: u32,
 }
 
-/// Состояние клавиш, важных для нативного полёта.
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
-pub struct Controls {
-    pub pitch_up: bool,
-    pub pitch_down: bool,
-    pub roll_left: bool,
-    pub roll_right: bool,
-    pub throttle_up: bool,
-    pub throttle_down: bool,
-    pub fire: bool,
-}
-
-impl Controls {
-    /// Собрать управление из ZX-матрицы и Kempston.
-    ///
-    /// Клавиши взяты по физическим позициям (раскладка не важна):
-    /// `S`/`X` или стрелки вверх/вниз — тангаж, `N`/`M` или стрелки
-    /// влево/вправо — крен, `Space` — увеличить скорость, `RightShift` —
-    /// уменьшить, `A`/`RightCtrl` — огонь.
-    pub fn from_matrix(matrix: &[[bool; 5]; 8], kempston: &[bool; 5]) -> Self {
-        let key = |row: usize, bit: usize| matrix[row][bit];
-        Controls {
-            // Оригинал: ControlKeyMove 3=S Up, 2=X Down, 1=M Right, 0=N Left
-            pitch_up: key(1, 1) || kempston[3],    // S / Up
-            pitch_down: key(0, 2) || kempston[2],  // X / Down
-            roll_left: key(7, 3) || kempston[1],   // N / Left
-            roll_right: key(7, 2) || kempston[0],  // M / Right
-            // Оригинал: Space увеличить скорость, Symbol Shift (RightShift) уменьшить
-            throttle_up: key(7, 0),                // Space
-            throttle_down: key(7, 1),              // Symbol Shift
-            // Оригинал: ControlKey3, бит 0 — A (Fire Laser)
-            fire: key(1, 0) || kempston[4],        // A / RightCtrl
-        }
-    }
-}
 
 /// Тип объекта в сцене.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -118,6 +85,7 @@ enum BodyKind {
 }
 
 /// Объект сцены.
+#[derive(Clone)]
 struct Body {
     kind: BodyKind,
     /// Геометрия (для кораблей и станции).
@@ -145,10 +113,30 @@ struct Star {
     mag: u8,
 }
 
+/// Источник данных для нативного рендера.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum FlightSource {
+    /// Своя нативная симуляция.
+    Native,
+    /// Данные из эмуляции Z80 (адаптер).
+    Z80,
+}
+
+impl From<FlightSource> for FlightMode {
+    fn from(s: FlightSource) -> Self {
+        match s {
+            FlightSource::Native => FlightMode::Native,
+            FlightSource::Z80 => FlightMode::Z80,
+        }
+    }
+}
+
 /// Нативный движок полёта.
 pub struct Flight {
     /// Показывать ли нативный экран вместо Z80-игры.
     pub active: bool,
+    /// Источник данных для рендера.
+    pub source: FlightSource,
     started: bool,
     /// Ориентация камеры: мир → вид.
     rot: Rotation,
@@ -174,12 +162,14 @@ pub struct Flight {
     system: String,
     planet_color: u32,
     rng: u32,
+    view: Option<FlightView>,
 }
 
 impl Flight {
     pub fn new() -> Self {
         let mut f = Flight {
             active: false,
+            source: FlightSource::Native,
             started: false,
             rot: Rotation::identity(),
             pos: [0.0; 3],
@@ -201,6 +191,7 @@ impl Flight {
             system: String::new(),
             planet_color: 0xFF4A80B0,
             rng: 0x1234_5678,
+            view: None,
         };
         f.reset_scene();
         f
@@ -209,6 +200,8 @@ impl Flight {
     /// Войти в нативный полёт, подхватив начальные показания Z80-игры.
     pub fn open(&mut self, seed: FlightSeed<'_>) {
         self.active = true;
+        // По умолчанию Z80 LINK для сравнения с оригиналом
+        self.source = FlightSource::Z80;
         self.system = if seed.system.is_empty() {
             "UNKNOWN".to_string()
         } else {
@@ -219,6 +212,7 @@ impl Flight {
         }
         if !self.started {
             self.started = true;
+            self.source = FlightSource::Native;
             self.reset_scene();
         } else {
             // Цвет планеты мог смениться вместе с системой — обновляем диск.
@@ -310,9 +304,301 @@ impl Flight {
         });
     }
 
+    /// Переключить источник данных для рендера (без остановки эмуляции).
+    pub fn toggle_source(&mut self) {
+        if !self.active {
+            return;
+        }
+        self.source = match self.source {
+            FlightSource::Native => FlightSource::Z80,
+            FlightSource::Z80 => FlightSource::Native,
+        };
+        self.view = None;
+    }
+
+    /// Синхронизировать нативный рендер с данными из памяти Z80.
+    pub fn sync_from_z80(&mut self, mem: &[u8], kladov: bool) {
+        if !self.active || self.source != FlightSource::Z80 {
+            return;
+        }
+        // Попробуем прочесть матрицу ориентации игрока
+        let mat_bases = if kladov { vec![0x9d11, 0x405Dusize, 0x4000, 0x4100, 0x4050] } else { vec![0x3F5Dusize, 0x3F00, 0x4000] };
+        for &mb in &mat_bases {
+            let mut m = [[1.0f32; 3]; 3];
+            let mut all_ok = true;
+            for i in 0..9 {
+                if let Some(&b) = mem.get(mb + i) {
+                    m[i / 3][i % 3] = ((b as i8) as f32) / 127.0;
+                } else {
+                    all_ok = false;
+                    break;
+                }
+            }
+            if all_ok {
+                self.rot = Rotation { m };
+                break;
+            }
+        }
+        // Добавим звёзды если их нет
+        if self.stars.is_empty() {
+            self.stars = make_stars(&mut self.rng, 280);
+        }
+        self.pos = [0.0, 0.0, 0.0];
+        let _ = self.build_view(mem, kladov);
+        let slot = 0x27usize;
+        // Читаем скорость/щит/топливо из памяти
+        let speed_addr = if kladov { 0x70F4u16 } else { 0x706Bu16 };
+        let fuel_addr = if kladov { 0x70F5u16 } else { 0x706Cu16 };
+        let shield_addr = if kladov { 0x70D9u16 } else { 0x7040u16 };
+        if let Some(&v) = mem.get(speed_addr as usize) {
+            self.speed = ((v as f32) / 0xA0 as f32).clamp(0.0, 1.0);
+        }
+        if let Some(&v) = mem.get(fuel_addr as usize) {
+            self.fuel = ((v as f32) / 0xA0 as f32).clamp(0.0, 1.0);
+        }
+        if let Some(&v) = mem.get(shield_addr as usize) {
+            self.shield = ((v as f32) / 0xA0 as f32).clamp(0.0, 1.0);
+        }
+        // Сохраняем планету и солнце
+        let mut planet_body: Option<Body> = None;
+        let mut sun_body: Option<Body> = None;
+        for b in self.bodies.iter() {
+            if b.kind == BodyKind::Planet && planet_body.is_none() {
+                planet_body = Some(b.clone());
+            }
+            if b.kind == BodyKind::Sun && sun_body.is_none() {
+                sun_body = Some(b.clone());
+            }
+        }
+        if planet_body.is_none() {
+            planet_body = Some(Body {
+                kind: BodyKind::Planet,
+                model: None,
+                pos: [-1600.0, 2300.0, 65000.0],
+                rot: Rotation::identity(),
+                spin: [0.0, 1.0, 0.0],
+                spin_rate: 0.02,
+                radius: 9000.0,
+                color: self.planet_color,
+                fire_timer: 0.0,
+            });
+        } else if let Some(p) = planet_body.as_mut() {
+            p.color = self.planet_color;
+        }
+        if sun_body.is_none() {
+            sun_body = Some(Body {
+                kind: BodyKind::Sun,
+                model: None,
+                pos: [-90000.0, 26000.0, 130000.0],
+                rot: Rotation::identity(),
+                spin: [0.0; 3],
+                spin_rate: 0.0,
+                radius: 17000.0,
+                color: 0xFFFF_D040,
+                fire_timer: 0.0,
+            });
+        }
+        let mut new_bodies: Vec<Body> = Vec::new();
+        if let Some(p) = planet_body {
+            new_bodies.push(p);
+        }
+        if let Some(s) = sun_body {
+            new_bodies.push(s);
+        }
+        // Ищем слоты объектов
+        let mut candidates: Vec<usize> = vec![];
+        if kladov {
+            candidates.extend_from_slice(&[0x6159, 0x604c, 0x6073, 0x609a, 0x60c1, 0x60e8, 0x6120, 0x6147, 0x616E, 0x6195, 0x61BC, 0x60F9, 0x6100, 0x6000, 0x6200, 0x5D00, 0x5F00, 0x6300, 0x6400]);
+        } else {
+            candidates.extend_from_slice(&[0x5F40, 0x5F00, 0x5E00, 0x6000, 0x6100, 0x6200, 0x5D00]);
+        }
+        let mut found_slots = false;
+        for &base in &candidates {
+            for s in 0..16 {
+                let addr = base + s * slot;
+                if addr + slot > mem.len() {
+                    continue;
+                }
+                let rx = read_signed24(&mem[addr..addr + 3]);
+                let ry = read_signed24(&mem[addr + 3..addr + 6]);
+                let rz = read_signed24(&mem[addr + 6..addr + 9]);
+                if rx.abs() < 0.5 && ry.abs() < 0.5 && rz.abs() < 0.5 {
+                    continue;
+                }
+                // Пробуем разные масштабы
+                let pos = [rx * 4.0, ry * 4.0, rz * 4.0];
+                let ship_ptr = u16::from_le_bytes([mem[addr + 0x23], mem[addr + 0x24]]);
+                let model = map_ship_ptr(ship_ptr, kladov);
+                let kind = BodyKind::Ship;
+                let radius = 110.0f32;
+                new_bodies.push(Body {
+                    kind,
+                    model,
+                    pos,
+                    rot: Rotation::identity(),
+                    spin: [0.0, 1.0, 0.0],
+                    spin_rate: 0.1,
+                    radius,
+                    color: CYAN,
+                    fire_timer: 0.0,
+                });
+                found_slots = true;
+            }
+            if found_slots && new_bodies.len() > 2 {
+                break;
+            }
+        }
+        // Если не нашли - ищем по всей памяти любые ненулевые координаты в похожем формате
+        if new_bodies.len() <= 2 {
+            for addr in (0..mem.len().saturating_sub(slot)).step_by(1) {
+                let rx = read_signed24(&mem[addr..addr + 3]);
+                let ry = read_signed24(&mem[addr + 3..addr + 6]);
+                let rz = read_signed24(&mem[addr + 6..addr + 9]);
+                if rz.abs() > 10.0 && rz.abs() < 50000.0 {
+                    if rx.abs() < 30000.0 && ry.abs() < 30000.0 {
+                        if rx.abs() > 0.001 || ry.abs() > 0.001 || rz.abs() > 0.001 {
+                            let pos = [rx * 4.0, ry * 4.0, rz * 4.0];
+                            if pos[2].abs() > 50.0 || (pos[0].abs() + pos[1].abs()) > 50.0 {
+                                new_bodies.push(Body {
+                                    kind: BodyKind::Ship,
+                                    model: shipdata::SHIPS.iter().find(|s| s.name == "d_Viper"),
+                                    pos,
+                                    rot: Rotation::identity(),
+                                    spin: [0.0, 1.0, 0.0],
+                                    spin_rate: 0.0,
+                                    radius: 110.0,
+                                    color: CYAN,
+                                    fire_timer: 0.0,
+                                });
+                                if new_bodies.len() > 20 {
+                                    break;
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+        // Если ничего не нашли - добавим тестовые объекты чтобы увидеть что рендер работает
+        if new_bodies.len() <= 2 {
+            new_bodies.push(Body {
+                kind: BodyKind::Ship,
+                model: shipdata::SHIPS.iter().find(|s| s.name == "d_Viper"),
+                pos: [0.0, 0.0, 1200.0],
+                rot: Rotation::identity(),
+                spin: [0.0, 1.0, 0.0],
+                spin_rate: 0.0,
+                radius: 110.0,
+                color: CYAN,
+                fire_timer: 0.0,
+            });
+            new_bodies.push(Body {
+                kind: BodyKind::Station,
+                model: shipdata::SHIPS.iter().find(|s| s.name == "d_Coriolis"),
+                pos: [400.0, -200.0, 2000.0],
+                rot: Rotation::identity(),
+                spin: [0.0, 1.0, 0.0],
+                spin_rate: 0.2,
+                radius: 260.0,
+                color: 0xFFA0_FFFF,
+                fire_timer: 0.0,
+            });
+        }
+        self.bodies = new_bodies;
+    }
+
+    fn build_view(&mut self, mem: &[u8], kladov: bool) -> FlightView {
+        // Адаптер: читает данные из Z80 и строит данные для рендера
+        let _ = (mem, kladov);
+        let mut hud = HudData {
+            speed: 0.5,
+            fuel: 1.0,
+            shield: 1.0,
+            laser_heat: 0.0,
+            kills: 0,
+            system: [0; 32],
+            system_len: 0,
+            laser_timer: 0.0,
+            damage_flash: 0.0,
+            message: [0; 32],
+            message_len: 0,
+            message_timer: 0.0,
+        };
+        let bytes = self.system.as_bytes();
+        let n = bytes.len().min(32);
+        for (i, &b) in bytes.iter().take(n).enumerate() {
+            hud.system[i] = b;
+        }
+        hud.system_len = n;
+        hud.speed = self.speed;
+        hud.fuel = self.fuel;
+        hud.shield = self.shield;
+        hud.laser_heat = self.laser_heat;
+        hud.kills = self.kills;
+        hud.laser_timer = self.laser_timer;
+        hud.damage_flash = self.damage_flash;
+        hud.message_timer = self.message_timer;
+        let mut bodies = Vec::new();
+        for b in &self.bodies {
+            let kind = match b.kind {
+                BodyKind::Ship => 0u8,
+                BodyKind::Station => 1u8,
+                BodyKind::Planet => 2u8,
+                BodyKind::Sun => 3u8,
+            };
+            let (has_model, model_idx) = if let Some(m) = b.model {
+                if let Some(i) = shipdata::SHIPS.iter().position(|x| std::ptr::eq(x, m)) {
+                    (true, i as u32)
+                } else {
+                    (false, 0)
+                }
+            } else {
+                (false, 0)
+            };
+            bodies.push(DrawBody {
+                kind,
+                has_model,
+                model_idx,
+                pos: b.pos,
+                rot: b.rot,
+                spin: b.spin,
+                spin_rate: b.spin_rate,
+                radius: b.radius,
+                color: b.color,
+            });
+        }
+        let mut stars = Vec::new();
+        let mut star_mags = Vec::new();
+        for s in &self.stars {
+            stars.push(s.pos);
+            star_mags.push(s.mag);
+        }
+        let view = FlightView {
+            camera_pos: self.pos,
+            camera_rot: self.rot,
+            bodies,
+            stars,
+            star_mags,
+            hud,
+        };
+        self.view = Some(view.clone());
+        view
+    }
+
     /// Один шаг симуляции.
     pub fn tick(&mut self, c: Controls, dt: f32) {
         if !self.active {
+            return;
+        }
+        if self.source == FlightSource::Z80 {
+            // В режиме Z80 данные обновляются извне через sync_from_z80
+            self.tick += 1;
+            let dt = dt.clamp(0.0, 0.1);
+            self.laser_timer = (self.laser_timer - dt).max(0.0);
+            self.laser_heat = (self.laser_heat - LASER_COOL * dt).max(0.0);
+            self.damage_flash = (self.damage_flash - dt).max(0.0);
+            self.message_timer = (self.message_timer - dt).max(0.0);
+            self.respawn_timer = (self.respawn_timer - dt).max(0.0);
             return;
         }
         self.tick += 1;
@@ -363,18 +649,25 @@ impl Flight {
 
         // Движение вперёд вдоль носа. transpose возвращает мировое
         // направление взгляда из матрицы «мир → вид».
-        let forward = self.rot.transpose().apply([0.0, 0.0, 1.0]);
-        for i in 0..3 {
-            self.pos[i] += forward[i] * self.speed * MAX_SPEED * dt;
+        if self.source != FlightSource::Z80 {
+            let forward = self.rot.transpose().apply([0.0, 0.0, 1.0]);
+            for i in 0..3 {
+                self.pos[i] += forward[i] * self.speed * MAX_SPEED * dt;
+            }
+            self.advance_stars(forward, dt);
+        } else {
+            let forward = self.rot.transpose().apply([0.0, 0.0, 1.0]);
+            // В Z80 режиме не двигаем камеру самостоятельно, только звёзды
+            self.advance_stars(forward, dt);
         }
-        self.advance_stars(forward, dt);
 
         // Собственное вращение и простая тактика противников.
+        let forward_cur = self.rot.transpose().apply([0.0, 0.0, 1.0]);
         for b in &mut self.bodies {
             if b.spin_rate != 0.0 {
                 b.rot = Rotation::axis_angle(b.spin, b.spin_rate * dt).mul(&b.rot);
             }
-            if b.kind != BodyKind::Ship {
+            if b.kind != BodyKind::Ship || self.source == FlightSource::Z80 {
                 continue;
             }
             let mut d = [
@@ -394,7 +687,7 @@ impl Flight {
             // Противник изредка стреляет, если смотрит в сторону игрока.
             b.fire_timer -= dt;
             if b.fire_timer <= 0.0 && dist < 6500.0 {
-                let dot = (-d[0]) * forward[0] + (-d[1]) * forward[1] + (-d[2]) * forward[2];
+                let dot = (-d[0]) * forward_cur[0] + (-d[1]) * forward_cur[1] + (-d[2]) * forward_cur[2];
                 if dot > 0.35 {
                     self.shield = (self.shield - 0.045).max(0.02);
                     self.damage_flash = 0.25;
@@ -403,7 +696,7 @@ impl Flight {
             }
         }
 
-        if self.respawn_timer <= 0.0 && !self.bodies.iter().any(|b| b.kind == BodyKind::Ship) {
+        if self.source != FlightSource::Z80 && self.respawn_timer <= 0.0 && !self.bodies.iter().any(|b| b.kind == BodyKind::Ship) {
             self.spawn_enemy();
         }
     }
@@ -476,6 +769,49 @@ impl Flight {
         let w = frame.width as i32;
         let h = frame.height as i32;
         frame.fill_rect(0, 0, frame.width, frame.height, BG);
+        // В режиме Z80 LINK всегда держим звёзды
+        if self.stars.is_empty() {
+            self.stars = make_stars(&mut self.rng, 280);
+        }
+        // В режиме Z80 LINK всегда добавляем планету/солнце если их нет
+        let has_planet = self.bodies.iter().any(|b| matches!(b.kind, BodyKind::Planet));
+        let has_sun = self.bodies.iter().any(|b| matches!(b.kind, BodyKind::Sun));
+        if !has_planet {
+            self.bodies.push(Body {
+                kind: BodyKind::Planet,
+                model: None,
+                pos: [-1600.0, 2300.0, 65000.0],
+                rot: Rotation::identity(),
+                spin: [0.0, 1.0, 0.0],
+                spin_rate: 0.02,
+                radius: 9000.0,
+                color: self.planet_color,
+                fire_timer: 0.0,
+            });
+        }
+        if !has_sun {
+            self.bodies.push(Body {
+                kind: BodyKind::Sun,
+                model: None,
+                pos: [-90000.0, 26000.0, 130000.0],
+                rot: Rotation::identity(),
+                spin: [0.0; 3],
+                spin_rate: 0.0,
+                radius: 17000.0,
+                color: 0xFFFF_D040,
+                fire_timer: 0.0,
+            });
+        }
+        // В Z80 LINK не трогаем позицию камеры
+        if self.source == FlightSource::Z80 {
+            self.pos = [0.0, 0.0, 0.0];
+        }
+        // В режиме Z80 LINK не двигаем камеру
+        self.pos = [0.0, 0.0, 0.0];
+        // Сохраняем звёзды
+        if self.stars.is_empty() {
+            self.stars = make_stars(&mut self.rng, 280);
+        }
 
         // Сетка ZX 256x192, как на заставке: заголовок и подсказка остаются
         // в тех же местах, поэтому экран полёта выглядит её продолжением.
@@ -490,7 +826,10 @@ impl Flight {
             FG,
             s as usize,
         );
-        let sub = "NATIVE FLIGHT";
+        let sub = match self.source {
+            FlightSource::Native => "NATIVE FLIGHT",
+            FlightSource::Z80 => "Z80 LINK FLIGHT",
+        };
         frame.draw_text(font, ox + 8 * s, 14 * s, sub, HINT, s as usize);
         // Имя системы — в правой части той же строки (не длиннее 11 знаков,
         // чтобы не налезть на «NATIVE FLIGHT»).
@@ -550,7 +889,10 @@ impl Flight {
             );
         }
         self.draw_hud(frame, font, s, hud_top, ox);
-        let hint = "1 Z80   F1 NATIVE   ESC PAUSE";
+        let hint = match self.source {
+            FlightSource::Native => "1 Z80   F1 NATIVE   TAB LINK   ESC PAUSE",
+            FlightSource::Z80 => "1 Z80   F1 NATIVE   TAB LINK   ESC PAUSE",
+        };
         frame.draw_text(font, ox + 8 * s, h - 12 * s, hint, HINT, s as usize);
     }
 
@@ -894,6 +1236,26 @@ fn normalize(v: [f32; 3]) -> [f32; 3] {
     }
 }
 
+fn read_signed24(b: &[u8]) -> f32 {
+    if b.len() < 3 {
+        return 0.0;
+    }
+    let v = ((b[2] as u32) << 16) | ((b[1] as u32) << 8) | (b[0] as u32);
+    if (v & 0x800000) != 0 {
+        ((v as i32) - 0x1000000) as f32
+    } else {
+        v as f32
+    }
+}
+
+fn map_ship_ptr(ptr: u16, kladov: bool) -> Option<&'static Ship> {
+    let _ = (ptr, kladov);
+    shipdata::SHIPS.iter().find(|s| s.name == "d_Viper")
+        .or_else(|| shipdata::SHIPS.iter().find(|s| s.name == "d_Cobra1"))
+        .or_else(|| shipdata::SHIPS.iter().find(|s| s.name == "dSidewinderH"))
+        .or_else(|| shipdata::SHIPS.first())
+}
+
 /// Шаг xorshift32 для генератора звёзд.
 fn next(rng: &mut u32) -> u32 {
     let mut x = (*rng).max(1);
@@ -917,6 +1279,7 @@ mod tests {
             shield: 0xA0,
             planet_color: 0xFF40_80C0,
         });
+        f.source = FlightSource::Native;
         f
     }
 

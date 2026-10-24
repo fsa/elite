@@ -12,6 +12,7 @@ mod render3d;
 mod dumptitle;
 #[cfg(test)]
 mod probe;
+mod flight_model;
 mod shipdata;
 mod splash;
 mod z80;
@@ -1044,11 +1045,14 @@ impl<'a> App<'a> {
             self.menu_key(code);
             return;
         }
-        // Нативный полёт: F1/1 возвращают Z80-версию, Esc открывает меню
+        // Нативный полёт: F1/1 возвращают Z80-версию, Tab переключает источник (Native/Z80), Esc открывает меню
         // паузы (оно рисуется поверх нативного экрана, а полёт замирает).
         if self.flight.active {
             match code {
                 KeyCode::F1 | KeyCode::Digit1 => self.flight.close(),
+                KeyCode::Tab => {
+                    self.flight.toggle_source();
+                }
                 KeyCode::Escape => {
                     self.menu = true;
                     self.menu_sel = 0;
@@ -1218,14 +1222,25 @@ impl<'a> App<'a> {
             self.machine.hd.resize(size.width as usize, size.height as usize);
             self.machine.hd.clear(display::TRANSPARENT);
             if self.flight.active {
-                // Нативный полёт: Z80 полностью стоит. В меню паузы полёт
-                // тоже замирает, чтобы клавиши меню не управляли кораблём.
-                self.machine.release_all_keys();
-                self.machine.release_joystick();
-                if !self.menu {
-                    let controls =
-                        flight::Controls::from_matrix(&self.matrix, &self.kempston);
-                    self.flight.tick(controls, 1.0 / 50.0);
+                // Нативный полёт. В режиме Z80-linked эмулятор продолжает работать
+                // для сравнения, в режиме Native эмулятор стоит.
+                if matches!(self.flight.source, flight::FlightSource::Z80) {
+                    if !self.menu {
+                        self.apply_input();
+                        self.machine.run_frame();
+                        self.flight.sync_from_z80(&self.machine.mem, self.opts.kladov);
+                    } else {
+                        self.machine.release_all_keys();
+                        self.machine.release_joystick();
+                    }
+                } else {
+                    self.machine.release_all_keys();
+                    self.machine.release_joystick();
+                    if !self.menu {
+                        let controls =
+                            flight::Controls::from_matrix(&self.matrix, &self.kempston);
+                        self.flight.tick(controls, 1.0 / 50.0);
+                    }
                 }
             } else if self.machine.intro_seen {
                 // Нативная заставка: вращающаяся тестовая фигура, ZX-кадр не
