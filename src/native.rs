@@ -20,14 +20,7 @@ use crate::machine::{Hook, Spectrum, ROM_SIZE};
 use crate::z80::{Bus, Z80, ZF, CF, HF, PF, SF, XF, YF};
 
 /// Установить все нативные замены (хуки) на машину.
-///
-/// Адреса регистровых помощников соответствуют версии Кладова; для
-/// оригинальной версии (`--elite`) хук по этим адресам был бы установлен на
-/// чужой код, поэтому сейчас ставим их только если `kladov == true`.
-pub fn install(m: &mut Spectrum, kladov: bool) {
-    if !kladov {
-        return;
-    }
+pub fn install(m: &mut Spectrum, _kladov: bool) {
     install_hook(m, 0x5DFB, font_base_hook, 120);
     install_hook(m, 0xEB3E, eb3e_hook, 32);
     install_hook(m, 0xD3CE, d3ce_hook, 46);
@@ -223,7 +216,7 @@ pub const KLADOV_SAVE: SaveLayout = SaveLayout {
 };
 
 /// Раскладка оригинальной версии (`zx_bin/elite.bin`).
-pub const ELITE_SAVE: SaveLayout = SaveLayout {
+pub const _ELITE_SAVE: SaveLayout = SaveLayout {
     menu_save_load: 0xD2E4,
     menu_save_load_callsite: 0x72B5,
     save_cocpit: Some(0x8F40),
@@ -352,7 +345,7 @@ fn start_game_kladov_hook(cpu: &mut Z80, m: &mut Spectrum) -> u64 {
 
 /// Хук старта для оригинальной версии.
 fn start_game_elite_hook(cpu: &mut Z80, m: &mut Spectrum) -> u64 {
-    start_game_gate(cpu, m, ELITE_SAVE)
+    start_game_gate(cpu, m, _ELITE_SAVE)
 }
 
 /// Запустить игру с нативной заставки (клавиша `SPACE`).
@@ -429,7 +422,7 @@ fn teleport_kladov_hook(cpu: &mut Z80, m: &mut Spectrum) -> u64 {
 
 /// Хук телепортации для оригинальной версии.
 fn teleport_elite_hook(cpu: &mut Z80, m: &mut Spectrum) -> u64 {
-    teleport(cpu, m, ELITE_SAVE)
+    teleport(cpu, m, _ELITE_SAVE)
 }
 
 /// Нативная замена ветки «в полёте» перед вызовом `MenuSaveLoad`: переводит
@@ -481,7 +474,7 @@ fn load_gate_kladov_hook(cpu: &mut Z80, m: &mut Spectrum) -> u64 {
 
 /// Ветка «в полёте» для оригинальной версии (`0x72A9`).
 fn load_gate_elite_hook(cpu: &mut Z80, m: &mut Spectrum) -> u64 {
-    load_gate(cpu, m, ELITE_SAVE)
+    load_gate(cpu, m, _ELITE_SAVE)
 }
 
 /// Включить перехват игрового сохранения: при вызове `MenuSaveLoad` игра
@@ -547,7 +540,7 @@ fn menu_save_load_kladov_hook(cpu: &mut Z80, m: &mut Spectrum) -> u64 {
 
 /// Нативная замена `MenuSaveLoad` в оригинальной версии (`0xD2E4`).
 fn menu_save_load_elite_hook(cpu: &mut Z80, m: &mut Spectrum) -> u64 {
-    menu_save_load(cpu, m, ELITE_SAVE)
+    menu_save_load(cpu, m, _ELITE_SAVE)
 }
 
 /// Точное число тактов Z80, которое рутина `sub_5DFB` занимает для кода `a`
@@ -4107,7 +4100,7 @@ mod tests {
         let dir = format!("{base}/tmp");
         std::fs::create_dir_all(&dir).unwrap();
 
-        for layout in [KLADOV_SAVE, ELITE_SAVE] {
+        for layout in [KLADOV_SAVE, _ELITE_SAVE] {
             let path = format!("{dir}/commander_roundtrip_{:04X}.zxelite", layout.pilot_name);
             let mut m = kladov();
             let a = layout.pilot_name as usize;
@@ -4161,7 +4154,7 @@ mod tests {
     /// делает родная рутина через `ResetPressedKeys`. Проверяем обе версии.
     #[test]
     fn menu_save_load_hook_sets_request() {
-        for layout in [KLADOV_SAVE, ELITE_SAVE] {
+        for layout in [KLADOV_SAVE, _ELITE_SAVE] {
             let mut m = kladov();
             install_save(&mut m, layout);
             assert!(
@@ -4226,7 +4219,7 @@ mod tests {
         );
 
         let mut elite = boot_elite();
-        install_save(&mut elite, ELITE_SAVE);
+        install_save(&mut elite, _ELITE_SAVE);
         let requests = count_save_requests(&mut elite);
         assert_eq!(
             requests, 1,
@@ -4257,7 +4250,7 @@ mod tests {
 
         for (layout, ind_danger, mut m) in [
             (KLADOV_SAVE, 0x7104u16, boot_kladov()),
-            (ELITE_SAVE, 0x7062u16, boot_elite()),
+            (_ELITE_SAVE, 0x7062u16, boot_elite()),
         ] {
             install_save(&mut m, layout);
 
@@ -4313,7 +4306,7 @@ mod tests {
     fn start_game_from_intro_proceeds() {
         for (layout, ind_danger, mut m) in [
             (KLADOV_SAVE, 0x7104u16, boot_kladov()),
-            (ELITE_SAVE, 0x7062u16, boot_elite()),
+            (_ELITE_SAVE, 0x7062u16, boot_elite()),
         ] {
             install_save(&mut m, layout);
             // Даём игре дойти до заставки.
@@ -4372,7 +4365,7 @@ mod tests {
 
         for (layout, ind_danger, mut m) in [
             (KLADOV_SAVE, 0x7104u16, boot_kladov()),
-            (ELITE_SAVE, 0x7062u16, boot_elite()),
+            (_ELITE_SAVE, 0x7062u16, boot_elite()),
         ] {
             install_save(&mut m, layout);
             // Полёт, в котором сохраняем сейв, затем загрузка и перезапуск.
@@ -4433,7 +4426,7 @@ mod tests {
         // `RestorePilotFromMemory` (копия `0xA910`→`0xA816`).
         for (layout, live, ind_danger, mut m) in [
             (KLADOV_SAVE, 0xD054usize, 0x7104u16, boot_kladov()),
-            (ELITE_SAVE, 0xA816usize, 0x7062u16, boot_elite()),
+            (_ELITE_SAVE, 0xA816usize, 0x7062u16, boot_elite()),
         ] {
             assert_eq!(
                 layout.pilot_name as usize, live,
@@ -4520,8 +4513,7 @@ mod tests {
     /// (имя) — пересобраны под неё. Проверяем обе версии.
     #[test]
     fn teleport_docks_at_selected_system() {
-        // Буфер сгенерированного имени планеты (`TempName`): Кладова 0xDEDB,
-        // оригинала 0xAC2E.
+        // Буфер сгенерированного имени планеты (`TempName`): Кладова 0xDEDB
         for (layout, gal, temp_name, ind_danger, mut m) in [
             (
                 KLADOV_SAVE,
@@ -4529,13 +4521,6 @@ mod tests {
                 0xDEDBusize,
                 0x7104u16,
                 boot_kladov(),
-            ),
-            (
-                ELITE_SAVE,
-                crate::galaxy::ELITE_GALAXY,
-                0xAC2Eusize,
-                0x7062u16,
-                boot_elite(),
             ),
         ] {
             // Стартовая последовательность: подаём SPACE импульсами, пока игра

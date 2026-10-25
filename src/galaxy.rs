@@ -67,30 +67,14 @@ impl Planet {
 /// вариант, который считает запущенная игра.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Metric {
-    /// Оригинальный Elite: `loc_AD3D` (`cp b; jr nc; ld c,b; ld b,a; ld a,c;
-    /// sub b`) считает правильный модуль разности `|a - b|`.
-    Exact,
-    /// Версия Кладова: `ABS_A_sub_B` (`sub b; ret nc; cpl; ret`) при `a < b`
-    /// делает `cpl` от `a - b`, то есть возвращает `|a - b| - 1` — на
-    /// единицу меньше правильного. Ошибка заметна на глаз: расстояние до
-    /// звезды слева от курсора получается меньше на 0.4 св. года.
     Kladov,
 }
 
 impl Metric {
     /// Модуль разности как в игре: `|a - b|`, где `a` — уменьшаемое.
-    ///
-    /// В игре уменьшаемым всегда бывает координата курсора, а вычитаемым —
-    /// координата звезды (или текущей системы), поэтому направление важно:
-    /// у Кладова разность на единицу меньше, когда курсор левее (или выше)
-    /// другой точки.
     pub fn abs_diff(self, a: i32, b: i32) -> i32 {
         let d = a - b;
-        match self {
-            Metric::Exact => d.abs(),
-            Metric::Kladov if d < 0 => -d - 1,
-            Metric::Kladov => d,
-        }
+        if d < 0 { -d - 1 } else { d }
     }
 }
 
@@ -123,16 +107,7 @@ pub const KLADOV_GALAXY: GalaxyLayout = GalaxyLayout {
     metric: Metric::Kladov,
 };
 
-/// Оригинальная версия (`zx_bin/elite.bin`).
-pub const ELITE_GALAXY: GalaxyLayout = GalaxyLayout {
-    seed: 0xA852,
-    digraphs: 0xFBC3,
-    galaxy: 0xA827,
-    sys_x: 0xA85B,
-    sys_y: 0xA859,
-    fuel: 0xA844,
-    metric: Metric::Exact,
-};
+
 
 /// Шаг `ModifyPlanetData`.
 fn twist(s: [u8; 6]) -> [u8; 6] {
@@ -251,17 +226,6 @@ pub fn distance2(metric: Metric, cx: i32, cy_raw: i32, p: &Planet) -> i32 {
 }
 
 /// Ближайшая к курсору звезда — как ищет игра (`SearchPlanetNearCursor`).
-///
-/// Игра перебирает все 256 звёзд и оставляет ту, у которой квадрат
-/// расстояния до курсора минимален; при равенстве остаётся последняя
-/// (значение записывается в `MinDistance` без проверки на «меньше»). Звёзды,
-/// для которых сумма не помещается в 16 бит, игра пропускает.
-///
-/// У Кладова есть ещё одно правило (`CalcDistanceToCursor`): прежде чем
-/// считать расстояние, игра сверяет координаты звезды с координатами курсора
-/// и, если курсор стоит ровно на звезде, заканчивает поиск этой звездой.
-/// Поэтому звезда «под курсором» всегда выбирается, даже если рядом есть
-/// другая, столь же близкая.
 pub fn nearest(
     planets: &[Planet],
     metric: Metric,
@@ -272,20 +236,14 @@ pub fn nearest(
     let mut best_key = i32::MAX;
     for p in planets {
         // Курсор ровно на звезде — игра на этом заканчивает поиск.
-        if metric == Metric::Kladov && p.x == cx && p.y_raw == cy_raw {
+        if p.x == cx && p.y_raw == cy_raw {
             return Some(p);
         }
         let d2 = distance2(metric, cx, cy_raw, p);
         if d2 > 0xFFFF {
             continue; // переполнение 16 бит — такую звезду игра пропускает
         }
-        // У Кладова в `MinDistance` попадает значение с установленным битом 0
-        // (`set 0,l` в `CalcDistanceToCursor`), поэтому сравнение идёт по
-        // `d2 | 1`: две звезды с квадратами 100 и 101 для игры равны.
-        let key = match metric {
-            Metric::Kladov => d2 | 1,
-            Metric::Exact => d2,
-        };
+        let key = d2 | 1;
         if key <= best_key {
             best_key = key;
             best = Some(p);
@@ -668,20 +626,6 @@ mod tests {
             ),
             3.2
         );
-        assert_eq!(
-            fuel_to_cursor(Metric::Exact, p[7].x, p[7].y_raw, p[147].x, p[147].y_raw),
-            36
-        );
-        assert_eq!(
-            distance_to_cursor_ly(
-                Metric::Exact,
-                p[7].x,
-                p[7].y_raw,
-                p[147].x,
-                p[147].y_raw
-            ),
-            3.6
-        );
         // До самой системы — ноль.
         assert_eq!(fuel_to_cursor(Metric::Kladov, p[7].x, p[7].y_raw, 20, 173), 0);
     }
@@ -705,20 +649,6 @@ mod tests {
                 p[46].y_raw
             ),
             6.4
-        );
-        assert_eq!(
-            fuel_to_cursor(Metric::Exact, p[7].x, p[7].y_raw, p[46].x, p[46].y_raw),
-            68
-        );
-        assert_eq!(
-            distance_to_cursor_ly(
-                Metric::Exact,
-                p[7].x,
-                p[7].y_raw,
-                p[46].x,
-                p[46].y_raw
-            ),
-            6.8
         );
     }
 

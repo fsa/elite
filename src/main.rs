@@ -74,8 +74,6 @@ struct Options {
     audio: bool,
     /// Сохранить сведённый звук в WAV-файл.
     wav: Option<String>,
-    /// Базовая версия проекта — Кладова. `--elite` переключает на оригинал.
-    kladov: bool,
     /// Включить нативные (Rust) замены подпрограмм игры вместо Z80.
     native: bool,
     /// Фиксированный путь сохранения командира. `None` — спрашивать через
@@ -96,7 +94,6 @@ fn parse_args() -> Options {
         mute: false,
         audio: false,
         wav: None,
-        kladov: true,
         native: false,
         save: None,
         fullscreen: false,
@@ -104,8 +101,6 @@ fn parse_args() -> Options {
     let mut args = env::args().skip(1);
     while let Some(a) = args.next() {
         match a.as_str() {
-            "--kladov" => opts.kladov = true,
-            "--elite" => opts.kladov = false,
             "--rom" => opts.rom = args.next(),
             "--frames" => opts.frames = args.next().and_then(|s| s.parse().ok()).unwrap_or(600),
             "--dump" => {
@@ -121,7 +116,7 @@ fn parse_args() -> Options {
             "--fullscreen" => opts.fullscreen = true,
             "-h" | "--help" => {
                 println!(
-                    "usage: elite [game.bin] [--elite] [--rom rom.bin] [--headless] [--frames N] [--dump out.ppm] [--mute] [--audio] [--wav out.wav] [--native] [--save FILE] [--fullscreen]"
+                    "usage: elite [game.bin] [--rom rom.bin] [--headless] [--frames N] [--dump out.ppm] [--mute] [--audio] [--wav out.wav] [--native] [--save FILE] [--fullscreen]"
                 );
                 println!("  по умолчанию запускается версия Кладова (zx_bin/kladov.bin)");
                 println!("  --mute     отключить вывод звука через PipeWire");
@@ -170,11 +165,7 @@ fn parse_args() -> Options {
         }
     }
     if opts.game.is_empty() {
-        opts.game = if opts.kladov {
-            "zx_bin/kladov.bin".to_string()
-        } else {
-            "zx_bin/elite.bin".to_string()
-        };
+        opts.game = "zx_bin/kladov.bin".to_string();
     }
     if opts.rom.is_none() {
         for cand in [
@@ -216,11 +207,7 @@ fn main() {
         Ok(d) => d,
         Err(e) => {
             eprintln!("cannot read game image {:?}: {}", opts.game, e);
-            if opts.kladov {
-                eprintln!("hint: run python3 tools/make_kladov_image.py to build the Kladov RAM image");
-            } else if opts.game == "elite.bin" {
-                eprintln!("hint: run ./build.sh to assemble elite.bin from elite.asm");
-            }
+            eprintln!("hint: run python3 tools/make_kladov_image.py to build the Kladov RAM image");
             exit(1);
         }
     };
@@ -233,61 +220,37 @@ fn main() {
     });
 
     let mut machine = Spectrum::new(rom.as_deref());
-    if opts.kladov {
-        // Версия Кладова: полный 48K-образ (0x4000..0xFFFF) загружается как есть.
-        // Игра настраивает IM2 сама (I=0xFD, обработчик 0xFEFE), таблица векторов
-        // и рабочие данные уже находятся в образе. Образ снят с работающей игры
-        // (см. tools/make_kladov_image.py), поэтому стартуем не с холодной заставки,
-        // а возобновляем выполнение с сохранённого прерванного кадра.
-        machine.load(KLADOV_LOAD_ADDR, &game);
-        machine.cpu.a = KLADOV_STATE_A;
-        machine.cpu.f = KLADOV_STATE_F;
-        machine.cpu.b = (KLADOV_STATE_BC >> 8) as u8;
-        machine.cpu.c = (KLADOV_STATE_BC & 0xFF) as u8;
-        machine.cpu.d = (KLADOV_STATE_DE >> 8) as u8;
-        machine.cpu.e = (KLADOV_STATE_DE & 0xFF) as u8;
-        machine.cpu.h = (KLADOV_STATE_HL >> 8) as u8;
-        machine.cpu.l = (KLADOV_STATE_HL & 0xFF) as u8;
-        machine.cpu.ix = KLADOV_STATE_IX;
-        machine.cpu.iy = KLADOV_STATE_IY;
-        machine.cpu.sp = KLADOV_STATE_SP;
-        machine.cpu.pc = KLADOV_STATE_PC;
-        machine.cpu.i = KLADOV_I;
-        machine.cpu.r = KLADOV_STATE_R;
-        machine.cpu.im = 2;
-        machine.cpu.iff1 = true;
-        machine.cpu.iff2 = true;
-    } else {
-        machine.load(GAME_LOAD_ADDR, &game);
-        install_im2_table(&mut machine);
-        machine.cpu.pc = GAME_ENTRY;
-        machine.cpu.sp = GAME_SP;
-
-        // Выбор устройства управления. Игра определяет его эвристически при
-        // старте, опрашивая порт Kempston (0x1F). По умолчанию включаем Kempston,
-        // чтобы курсорные клавиши работали как джойстик: подменяем `in a,(c)`
-        // (ED 78) на `ld a,2` (3E 02) в BeginGame, из-за чего выбирается
-        // Kempston. `ELITE_CTRL=keyboard` возвращает штатное поведение игры.
-        let ctrl = env::var("ELITE_CTRL").unwrap_or_default();
-        if ctrl != "keyboard" {
-            machine.mem[0x71F8] = 0x3E;
-            machine.mem[0x71F9] = 0x02;
-        }
-    }
+    // Версия Кладова: полный 48K-образ (0x4000..0xFFFF) загружается как есть.
+    machine.load(KLADOV_LOAD_ADDR, &game);
+    machine.cpu.a = KLADOV_STATE_A;
+    machine.cpu.f = KLADOV_STATE_F;
+    machine.cpu.b = (KLADOV_STATE_BC >> 8) as u8;
+    machine.cpu.c = (KLADOV_STATE_BC & 0xFF) as u8;
+    machine.cpu.d = (KLADOV_STATE_DE >> 8) as u8;
+    machine.cpu.e = (KLADOV_STATE_DE & 0xFF) as u8;
+    machine.cpu.h = (KLADOV_STATE_HL >> 8) as u8;
+    machine.cpu.l = (KLADOV_STATE_HL & 0xFF) as u8;
+    machine.cpu.ix = KLADOV_STATE_IX;
+    machine.cpu.iy = KLADOV_STATE_IY;
+    machine.cpu.sp = KLADOV_STATE_SP;
+    machine.cpu.pc = KLADOV_STATE_PC;
+    machine.cpu.i = KLADOV_I;
+    machine.cpu.r = KLADOV_STATE_R;
+    machine.cpu.im = 2;
+    machine.cpu.iff1 = true;
+    machine.cpu.iff2 = true;
 
     if opts.native || env::var("ELITE_NATIVE").is_ok() {
-        native::install(&mut machine, opts.kladov);
+        native::install(&mut machine, true);
     }
 
     // Отслеживание заставки: на ней нативные экраны не открываются.
-    let (intro, game_start) = scene_markers(opts.kladov);
+    let (intro, game_start) = scene_markers(true);
     machine.intro_range = intro;
     machine.game_marker = game_start;
 
-    // Нативный сейв/лоад командира: перехват `MenuSaveLoad` выставляет флаг,
-    // а главный цикл показывает диалог выбора файла (`.zxelite`). Раскладка
-    // адресов зависит от версии игры.
-    native::install_save(&mut machine, save_layout(&opts));
+    // Нативный сейв/лоад командира
+    native::install_save(&mut machine, save_layout_kladov());
 
     if let Ok(w) = env::var("ELITE_WATCH") {
         if let Some((a, b)) = w.split_once('-') {
@@ -360,12 +323,8 @@ fn main() {
 }
 
 /// Раскладка адресов сейва/лоада выбранной версии игры.
-fn save_layout(opts: &Options) -> native::SaveLayout {
-    if opts.kladov {
-        native::KLADOV_SAVE
-    } else {
-        native::ELITE_SAVE
-    }
+fn save_layout_kladov() -> native::SaveLayout {
+    native::KLADOV_SAVE
 }
 
 /// Маркеры «заставки» и старта игры для выбранной версии. Пока игра
@@ -382,32 +341,20 @@ fn save_layout(opts: &Options) -> native::SaveLayout {
 ///   `GameMain` = `0x7471`.
 /// * Оригинал — `BeginGame` (`loc_71A2`..`loc_721F`), старт игры `GameMain`
 ///   = `0x7287`.
-fn scene_markers(kladov: bool) -> (Option<(u16, u16)>, Option<u16>) {
-    if kladov {
-        (Some((0x739E, 0x73FD)), Some(0x7471))
-    } else {
-        (Some((0x71A2, 0x721F)), Some(0x7287))
-    }
+fn scene_markers(_kladov: bool) -> (Option<(u16, u16)>, Option<u16>) {
+    (Some((0x739E, 0x73FD)), Some(0x7471))
 }
 
 /// Адреса переменных панели кокпита для выбранной версии игры.
-fn cockpit_layout(opts: &Options) -> cockpit::CockpitLayout {
-    if opts.kladov {
-        cockpit::KLADOV_COCKPIT
-    } else {
-        cockpit::ELITE_COCKPIT
-    }
+fn cockpit_layout(_opts: &Options) -> cockpit::CockpitLayout {
+    cockpit::KLADOV_COCKPIT
 }
 
 /// Имя и цвет текущей системы из живой памяти Z80 — начальные данные для
 /// нативного полёта. Если координаты не совпали ни с одной звездой (например,
 /// игра ещё на заставке), берётся первая планета галактики.
-fn current_system(mem: &[u8], kladov: bool) -> (String, u32) {
-    let layout = if kladov {
-        galaxy::KLADOV_GALAXY
-    } else {
-        galaxy::ELITE_GALAXY
-    };
+fn current_system(mem: &[u8], _kladov: bool) -> (String, u32) {
+    let layout = galaxy::KLADOV_GALAXY;
     let seed: [u8; 6] = mem
         .get(layout.seed..layout.seed + 6)
         .and_then(|s| s.try_into().ok())
@@ -555,7 +502,7 @@ fn run_headless(machine: &mut Spectrum, opts: &Options) {
                 .save
                 .clone()
                 .unwrap_or_else(default_save_name);
-            match native::commander_save(&mut *machine, &path, save_layout(opts)) {
+            match native::commander_save(&mut *machine, &path, save_layout_kladov()) {
                 Ok(()) => println!("Сохранено в {}", path),
                 Err(e) => eprintln!("Ошибка сохранения: {e}"),
             }
@@ -683,7 +630,7 @@ fn do_save(machine: &mut Spectrum, opts: &Options, last: &mut String) {
     let Some(path) = choose_save_path(opts, last) else {
         return;
     };
-    match native::commander_save(machine, &path.to_string_lossy(), save_layout(opts)) {
+    match native::commander_save(machine, &path.to_string_lossy(), save_layout_kladov()) {
         Ok(()) => {
             println!("Сохранено в {}", path.display());
             *last = path.to_string_lossy().into_owned();
@@ -714,15 +661,12 @@ fn do_load(machine: &mut Spectrum, opts: &Options, last: &mut String) {
     let Some(path) = choose_load_path(opts, last) else {
         return;
     };
-    match native::commander_load(machine, &path.to_string_lossy(), save_layout(opts)) {
+    match native::commander_load(machine, &path.to_string_lossy(), save_layout_kladov()) {
         Ok(()) => {
             println!("Загружено из {}", path.display());
             *last = path.to_string_lossy().into_owned();
             // Прервать текущий процесс и запустить игру с новыми данными:
-            // после стартовой последовательности корабль пристыкован на
-            // станции системы из сейва. Перезапуск делает сама игра (родной
-            // путь через `MenuSaveLoad`), см. `native::request_load`.
-            native::request_load(machine, save_layout(opts));
+            native::request_load(machine, save_layout_kladov());
         }
         Err(e) => eprintln!("Ошибка загрузки: {e}"),
     }
@@ -910,20 +854,12 @@ impl<'a> App<'a> {
         if !pressed {
             return;
         }
-        // F10 — отдельная нативная карта галактики. Пока это самостоятельный
-        // просмотрщик: он не связан с игровыми картами (клавиши I/O) и не
-        // трогает состояние командира.
+        // F10 — отдельная нативная карта галактики.
         if code == KeyCode::F10 && !repeat {
             if self.hdmap.active {
                 self.hdmap.close();
             } else if !self.machine.intro_seen && !self.flight.active {
-                let layout = if self.opts.kladov {
-                    galaxy::KLADOV_GALAXY
-                } else {
-                    galaxy::ELITE_GALAXY
-                };
-                self.hdmap.open(&self.machine.mem, layout);
-                // Размер окна — чтобы зум/наведение работали до первого кадра.
+                self.hdmap.open(&self.machine.mem, galaxy::KLADOV_GALAXY);
                 if let Some(w) = &self.window {
                     let size = w.inner_size();
                     self.hdmap.resize(size.width, size.height);
@@ -934,20 +870,12 @@ impl<'a> App<'a> {
             }
             return;
         }
-        // F4 — нативный экран закупки оборудования (EQUIP SHIP). Отдельный
-        // полноэкранный экран: игра на паузе, данные читаются и пишутся прямо
-        // в живой блок командира (покупки настоящие).
+        // F4 — нативный экран закупки оборудования.
         if code == KeyCode::F4 && !repeat {
             if self.shop.active {
                 self.shop.close();
             } else if !self.machine.intro_seen && !self.flight.active {
-                let layout = if self.opts.kladov {
-                    equip::KLADOV_SHOP
-                } else {
-                    equip::ELITE_SHOP
-                };
-                self.shop.open(&self.machine.mem, layout);
-                // Размер окна — чтобы попадание мышью работало до первого кадра.
+                self.shop.open(&self.machine.mem, equip::KLADOV_SHOP);
                 if let Some(w) = &self.window {
                     let size = w.inner_size();
                     self.shop.resize(size.width, size.height);
@@ -977,8 +905,7 @@ impl<'a> App<'a> {
                 // закрываем карту — игра перерисует экран станции.
                 KeyCode::F1 if !repeat => {
                     if let Some((x, y)) = self.hdmap.selected_coords() {
-                        let layout = save_layout(&self.opts);
-                        native::request_teleport(&mut self.machine, layout, x, y);
+                        native::request_teleport(&mut self.machine, save_layout_kladov(), x, y);
                         self.hdmap.close();
                     }
                 }
@@ -1068,7 +995,7 @@ impl<'a> App<'a> {
                 let layout = cockpit_layout(self.opts);
                 let mem = &self.machine.mem;
                 let val = |addr: u16| mem.get(addr as usize).copied().unwrap_or(0);
-                let (system, planet_color) = current_system(mem, self.opts.kladov);
+                let (system, planet_color) = current_system(mem, true);
                 self.flight.open(flight::FlightSeed {
                     system: &system,
                     speed: val(layout.speed),
@@ -1088,8 +1015,7 @@ impl<'a> App<'a> {
         // интро), остальные клавиши (кроме меню) игнорируются.
         if self.machine.intro_seen {
             if code == KeyCode::Space {
-                let layout = save_layout(self.opts);
-                native::start_game(&mut self.machine, layout);
+                native::start_game(&mut self.machine, save_layout_kladov());
             } else if code == KeyCode::ArrowLeft {
                 self.splash.cycle_ship(-1);
             } else if code == KeyCode::ArrowRight {
@@ -1179,25 +1105,21 @@ impl<'a> App<'a> {
         for (bit, &down) in self.kempston.iter().enumerate() {
             self.machine.set_kempston(bit as u8, down);
         }
-        // В версии Кладова опрос порта Kempston в игре убран: направления она
-        // читает только с клавиатуры (N/M/X/S), а огонь — по клавише A.
         // Дублируем джойстик на те же клавиши, чтобы стрелки и RightCtrl работали.
-        if self.opts.kladov {
-            if self.kempston[0] {
-                self.machine.set_key(7, 2, true); // вправо
-            }
-            if self.kempston[1] {
-                self.machine.set_key(7, 3, true); // влево
-            }
-            if self.kempston[2] {
-                self.machine.set_key(0, 2, true); // вниз
-            }
-            if self.kempston[3] {
-                self.machine.set_key(1, 1, true); // вверх
-            }
-            if self.kempston[4] {
-                self.machine.set_key(1, 0, true); // огонь
-            }
+        if self.kempston[0] {
+            self.machine.set_key(7, 2, true); // вправо
+        }
+        if self.kempston[1] {
+            self.machine.set_key(7, 3, true); // влево
+        }
+        if self.kempston[2] {
+            self.machine.set_key(0, 2, true); // вниз
+        }
+        if self.kempston[3] {
+            self.machine.set_key(1, 1, true); // вверх
+        }
+        if self.kempston[4] {
+            self.machine.set_key(1, 0, true); // огонь
         }
     }
 
@@ -1228,7 +1150,7 @@ impl<'a> App<'a> {
                     if !self.menu {
                         self.apply_input();
                         self.machine.run_frame();
-                        self.flight.sync_from_z80(&self.machine.mem, self.opts.kladov);
+                        self.flight.sync_from_z80(&self.machine.mem, true);
                     } else {
                         self.machine.release_all_keys();
                         self.machine.release_joystick();
@@ -1623,15 +1545,27 @@ mod intro_tests {
     fn boot() -> Spectrum {
         let base = env!("CARGO_MANIFEST_DIR");
         let rom = fs::read(format!("{base}/zx_bin/48.rom")).expect("zx_bin/48.rom");
-        let game = fs::read(format!("{base}/zx_bin/elite.bin")).expect("zx_bin/elite.bin");
+        let game = fs::read(format!("{base}/zx_bin/kladov.bin")).expect("zx_bin/kladov.bin");
         let mut m = Spectrum::new(Some(&rom));
-        m.load(GAME_LOAD_ADDR, &game);
-        install_im2_table(&mut m);
-        m.cpu.pc = GAME_ENTRY;
-        m.cpu.sp = 0x6000;
-        // В `main` перехват `MenuSaveLoad` ставится всегда — повторяем, иначе
-        // проверки сохранения/загрузки из меню паузы в тестах не сработают.
-        native::install_save(&mut m, native::ELITE_SAVE);
+        m.load(KLADOV_LOAD_ADDR, &game);
+        m.cpu.a = KLADOV_STATE_A;
+        m.cpu.f = KLADOV_STATE_F;
+        m.cpu.b = (KLADOV_STATE_BC >> 8) as u8;
+        m.cpu.c = (KLADOV_STATE_BC & 0xFF) as u8;
+        m.cpu.d = (KLADOV_STATE_DE >> 8) as u8;
+        m.cpu.e = (KLADOV_STATE_DE & 0xFF) as u8;
+        m.cpu.h = (KLADOV_STATE_HL >> 8) as u8;
+        m.cpu.l = (KLADOV_STATE_HL & 0xFF) as u8;
+        m.cpu.ix = KLADOV_STATE_IX;
+        m.cpu.iy = KLADOV_STATE_IY;
+        m.cpu.sp = KLADOV_STATE_SP;
+        m.cpu.pc = KLADOV_STATE_PC;
+        m.cpu.i = KLADOV_I;
+        m.cpu.r = KLADOV_STATE_R;
+        m.cpu.im = 2;
+        m.cpu.iff1 = true;
+        m.cpu.iff2 = true;
+        native::install_save(&mut m, native::KLADOV_SAVE);
         m
     }
 
@@ -1640,9 +1574,9 @@ mod intro_tests {
     /// code at 0xBAF7, after which the message printer recursed and leaked SP.
     #[test]
     fn intro_runs_without_corruption_or_leak() {
-        let mut m = boot();
+        let mut m = boot_kladov();
         assert_eq!(m.mem[0xBAF7], 0x38, "precondition: dispatcher intact");
-        m.counts.push((0x71A2, 0)); // intro loop
+        m.counts.push((0x739E, 0)); // intro loop
         for _ in 0..60 {
             m.run_frame();
         }
@@ -1652,7 +1586,7 @@ mod intro_tests {
         assert!(m.cpu.sp >= 0x5F00, "stack leaked: sp=0x{:04X}", m.cpu.sp);
         assert!(
             m.counts[0].1 > 0,
-            "intro loop at 0x71A2 was never reached"
+            "intro loop at 0x739E was never reached"
         );
     }
 
@@ -1732,7 +1666,6 @@ mod intro_tests {
             mute: true,
             audio: false,
             wav: None,
-            kladov: false,
             native: false,
             save: None,
             fullscreen: false,
@@ -1776,8 +1709,8 @@ mod intro_tests {
         assert!(app.hdmap.active, "F10 не открыл карту");
         assert_eq!(app.hdmap.planet_count(), galaxy::COUNT);
         // Курсор карты стартует на текущей системе (из памяти игры).
-        let sys_x = app.machine.mem[galaxy::ELITE_GALAXY.sys_x] as i32;
-        let sys_y = app.machine.mem[galaxy::ELITE_GALAXY.sys_y] as i32;
+        let sys_x = app.machine.mem[galaxy::KLADOV_GALAXY.sys_x] as i32;
+        let sys_y = app.machine.mem[galaxy::KLADOV_GALAXY.sys_y] as i32;
         assert_eq!(app.hdmap.cursor(), (sys_x, sys_y));
         // Стрелка двигает курсор карты, а не корабль.
         app.key_event(KeyCode::ArrowRight, true, false);
@@ -1805,8 +1738,8 @@ mod intro_tests {
         app.key_event(KeyCode::F4, true, false);
         assert!(app.shop.active, "F4 не открыл экран закупки");
         assert!(!app.hdmap.active, "карта галактики не должна открыться");
-        // Экран снят данные живого командира (раскладка Elite: `--elite`).
-        let p = equip::ELITE_SHOP.pilot as usize;
+        // Экран снят данные живого командира.
+        let p = equip::KLADOV_SHOP.pilot as usize;
         let cash = u16::from_le_bytes([app.machine.mem[p + 18], app.machine.mem[p + 19]]) as u32 * 10000
             + u16::from_le_bytes([app.machine.mem[p + 20], app.machine.mem[p + 21]]) as u32;
         assert_eq!(app.shop.cash_tenths(), cash, "деньги не из памяти игры");
@@ -1902,38 +1835,13 @@ mod intro_tests {
     }
 
     fn kladov_options() -> Options {
-        Options {
-            kladov: true,
-            ..test_options()
-        }
+        test_options()
     }
 
     /// На заставке нативные экраны не открываются: F10/F4 игнорируются, пока
-    /// игра проигрывает интро (обе версии).
+    /// игра проигрывает интро.
     #[test]
     fn native_screens_blocked_on_intro() {
-        // Оригинал: интро-цикл `BeginGame` 0x71A2..0x721F, старт `GameMain`.
-        let opts = test_options();
-        let mut m = boot();
-        let (intro, game) = scene_markers(false);
-        m.intro_range = intro;
-        m.game_marker = game;
-        for _ in 0..600 {
-            m.run_frame();
-        }
-        assert!(m.intro_seen, "интро оригинала не распознано");
-        let mut app = App::new(m, &opts);
-        app.key_event(KeyCode::F10, true, false);
-        assert!(!app.hdmap.active, "F10 не должен открываться на заставке");
-        app.key_event(KeyCode::F4, true, false);
-        assert!(!app.shop.active, "F4 не должен открываться на заставке");
-        app.key_event(KeyCode::F1, true, false);
-        assert!(
-            !app.flight.active,
-            "F1 не должен открывать нативный полёт на заставке"
-        );
-
-        // Кладова: аттракт-цикл `sub_728D` 0x739E..0x73FD, старт `GameMain`.
         let opts = kladov_options();
         let mut m = boot_kladov();
         let (intro, game) = scene_markers(true);
@@ -2060,7 +1968,7 @@ mod intro_tests {
         assert!(!app.menu, "Esc должен закрывать меню");
         // SPACE запускает игру: хук переводит Z80 на ветку переинициализации,
         // она зовёт `InitGame`, печатает станцию и уходит в `GameMain`.
-        native::start_game(&mut app.machine, save_layout(&opts));
+        native::start_game(&mut app.machine, save_layout_kladov());
         let mut cleared = false;
         for _ in 0..5000 {
             app.machine.run_frame();
@@ -2108,7 +2016,7 @@ mod intro_tests {
         let g = cockpit::panel_geometry(w as u32, h as u32);
         // Заставка в верхней области, панель — внизу (как в игровом цикле).
         splash::Splash::new().draw_in(&mut hd, font, g.panel_y.max(1));
-        cockpit::Cockpit::new().draw(&mut hd, &m.mem, font, cockpit::ELITE_COCKPIT);
+        cockpit::Cockpit::new().draw(&mut hd, &m.mem, font, cockpit::KLADOV_COCKPIT);
         // Панель непрозрачна.
         for y in g.panel_y..h as i32 {
             for x in 0..w {
@@ -2135,11 +2043,11 @@ mod intro_tests {
         std::fs::create_dir_all(format!("{base}/tmp")).unwrap();
         std::fs::write(&opts.save.as_ref().unwrap(), vec![0u8; 0x68]).unwrap();
 
-        let mut m = boot();
-        let (intro, game) = scene_markers(false);
+        let mut m = boot_kladov();
+        let (intro, game) = scene_markers(true);
         m.intro_range = intro;
         m.game_marker = game;
-        for _ in 0..600 {
+        for _ in 0..120 {
             m.run_frame();
         }
         let mut app = App::new(m, &opts);
@@ -2194,8 +2102,7 @@ mod intro_tests {
     /// заставки уводит Z80 на ветку переинициализации и снимает `intro_seen`.
     #[test]
     fn kladov_intro_accepts_space() {
-        let mut opts = test_options();
-        opts.kladov = true;
+        let opts = test_options();
         let mut m = boot_kladov();
         let (intro, gs) = scene_markers(true);
         m.intro_range = intro;

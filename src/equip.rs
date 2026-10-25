@@ -188,14 +188,14 @@ pub const KLADOV_SHOP: ShopLayout = ShopLayout {
 };
 
 /// Раскладка оригинальной версии (`zx_bin/elite.bin`).
-pub const ELITE_SHOP: ShopLayout = ShopLayout {
+pub const _ELITE_SHOP: ShopLayout = ShopLayout {
     pilot: 0xA816,
     prices: 0x9236,
     in_danger: 0x7062,
     fuel_derived: 0x704A,
     hide_fuel_on_mission: true,
     dec_flags: false,
-    galaxy: galaxy::ELITE_GALAXY,
+    galaxy: galaxy::KLADOV_GALAXY,
 };
 
 // ————— Цвета HD-слоя (непрозрачные, `0xFFRRGGBB`) —————
@@ -1342,27 +1342,27 @@ mod tests {
         // Переносим данные в раскладку оригинала.
         let (kp, ep) = (
             KLADOV_SHOP.pilot as usize,
-            ELITE_SHOP.pilot as usize,
+            _ELITE_SHOP.pilot as usize,
         );
         let commander = mem[kp..kp + 104].to_vec();
         mem[ep..ep + 104].copy_from_slice(&commander);
         let (kpr, epr) = (
             KLADOV_SHOP.prices as usize,
-            ELITE_SHOP.prices as usize,
+            _ELITE_SHOP.prices as usize,
         );
         let prices = mem[kpr..kpr + 42].to_vec();
         mem[epr..epr + 42].copy_from_slice(&prices);
-        let gl = ELITE_SHOP.galaxy;
+        let gl = _ELITE_SHOP.galaxy;
         mem[gl.seed..gl.seed + 6].copy_from_slice(&[0x4A, 0x5A, 0x48, 0x02, 0x53, 0xB7]);
         mem[gl.sys_y] = 173;
         mem[gl.sys_x] = 20;
         mem[gl.digraphs..gl.digraphs + 64]
             .copy_from_slice(b"ALLEXEGEZACEBISOUSESARMAINDIREA?ERATENBERALAVETIEDORQUANTEISRION");
-        mem[ELITE_SHOP.in_danger as usize] = 0;
+        mem[_ELITE_SHOP.in_danger as usize] = 0;
         // Выдана 1-я миссия — строка FUEL должна скрыться.
         mem[ep + OFF_MISSION1] = 1;
         let mut shop = Shop::new();
-        shop.open(&mem, ELITE_SHOP);
+        shop.open(&mem, _ELITE_SHOP);
         shop.win_w = 1280;
         shop.win_h = 720;
         assert_eq!(shop.rows.first(), Some(&2), "FUEL должен быть скрыт");
@@ -1378,10 +1378,10 @@ mod tests {
         // Покупка пишет 0xFF (а не dec) и списывает правильную цену.
         mem[ep + 45 + 11] = 0;
         shop.refresh(&mem);
-        let before = cash_at(&mem, ELITE_SHOP.pilot);
+        let before = cash_at(&mem, _ELITE_SHOP.pilot);
         shop.buy_number(&mut mem, 11);
         assert_eq!(mem[ep + 45 + 11], 0xFF);
-        assert_eq!(cash_at(&mem, ELITE_SHOP.pilot), before - 15000);
+        assert_eq!(cash_at(&mem, _ELITE_SHOP.pilot), before - 15000);
     }
 
     /// Слой рисуется непрозрачно: есть шапка, строки, панель и помощь.

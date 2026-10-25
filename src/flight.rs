@@ -317,12 +317,12 @@ impl Flight {
     }
 
     /// Синхронизировать нативный рендер с данными из памяти Z80.
-    pub fn sync_from_z80(&mut self, mem: &[u8], kladov: bool) {
+    pub fn sync_from_z80(&mut self, mem: &[u8], _kladov: bool) {
         if !self.active || self.source != FlightSource::Z80 {
             return;
         }
         // Попробуем прочесть матрицу ориентации игрока
-        let mat_bases = if kladov { vec![0x9d11, 0x405Dusize, 0x4000, 0x4100, 0x4050] } else { vec![0x3F5Dusize, 0x3F00, 0x4000] };
+        let mat_bases = vec![0x9d11, 0x405Dusize, 0x4000, 0x4100, 0x4050];
         for &mb in &mat_bases {
             let mut m = [[1.0f32; 3]; 3];
             let mut all_ok = true;
@@ -344,12 +344,12 @@ impl Flight {
             self.stars = make_stars(&mut self.rng, 280);
         }
         self.pos = [0.0, 0.0, 0.0];
-        let _ = self.build_view(mem, kladov);
+        let _ = self.build_view(mem, true);
         let slot = 0x27usize;
         // Читаем скорость/щит/топливо из памяти
-        let speed_addr = if kladov { 0x70F4u16 } else { 0x706Bu16 };
-        let fuel_addr = if kladov { 0x70F5u16 } else { 0x706Cu16 };
-        let shield_addr = if kladov { 0x70D9u16 } else { 0x7040u16 };
+        let speed_addr = 0x70F4u16;
+        let fuel_addr = 0x70F5u16;
+        let shield_addr = 0x70D9u16;
         if let Some(&v) = mem.get(speed_addr as usize) {
             self.speed = ((v as f32) / 0xA0 as f32).clamp(0.0, 1.0);
         }
@@ -407,11 +407,7 @@ impl Flight {
         }
         // Ищем слоты объектов
         let mut candidates: Vec<usize> = vec![];
-        if kladov {
-            candidates.extend_from_slice(&[0x6159, 0x604c, 0x6073, 0x609a, 0x60c1, 0x60e8, 0x6120, 0x6147, 0x616E, 0x6195, 0x61BC, 0x60F9, 0x6100, 0x6000, 0x6200, 0x5D00, 0x5F00, 0x6300, 0x6400]);
-        } else {
-            candidates.extend_from_slice(&[0x5F40, 0x5F00, 0x5E00, 0x6000, 0x6100, 0x6200, 0x5D00]);
-        }
+        candidates.extend_from_slice(&[0x6159, 0x604c, 0x6073, 0x609a, 0x60c1, 0x60e8, 0x6120, 0x6147, 0x616E, 0x6195, 0x61BC, 0x60F9, 0x6100, 0x6000, 0x6200, 0x5D00, 0x5F00, 0x6300, 0x6400]);
         let mut found_slots = false;
         for &base in &candidates {
             for s in 0..16 {
@@ -428,7 +424,7 @@ impl Flight {
                 // Пробуем разные масштабы
                 let pos = [rx * 4.0, ry * 4.0, rz * 4.0];
                 let ship_ptr = u16::from_le_bytes([mem[addr + 0x23], mem[addr + 0x24]]);
-                let model = map_ship_ptr(ship_ptr, kladov);
+                let model = map_ship_ptr(ship_ptr, true);
                 let kind = BodyKind::Ship;
                 let radius = 110.0f32;
                 new_bodies.push(Body {
@@ -1248,8 +1244,8 @@ fn read_signed24(b: &[u8]) -> f32 {
     }
 }
 
-fn map_ship_ptr(ptr: u16, kladov: bool) -> Option<&'static Ship> {
-    let _ = (ptr, kladov);
+fn map_ship_ptr(ptr: u16, _kladov: bool) -> Option<&'static Ship> {
+    let _ = ptr;
     shipdata::SHIPS.iter().find(|s| s.name == "d_Viper")
         .or_else(|| shipdata::SHIPS.iter().find(|s| s.name == "d_Cobra1"))
         .or_else(|| shipdata::SHIPS.iter().find(|s| s.name == "dSidewinderH"))
