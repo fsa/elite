@@ -1,0 +1,4 @@
+digraph kladov {
+  rankdir=LR;
+  node [shape=box];
+}

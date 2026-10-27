@@ -1,0 +1,462 @@
+# Карта памяти (переменные) kladov.asm
+
+## галактика/планеты
+
+-  5297: `SunRadiusNova` - SunRadiusNova:	db 0			; DATA XREF: sub_728D+18Bw
+- 24961: `planetFireams` - planetFireams:	db 0			; DATA XREF: SetVars4War+Fw
+- 24963: `planetMinerals` - planetMinerals:	db 3Dh			; DATA XREF: SetVars4War+22w
+- 28275: `PlanetData` - PlanetData:	dw 0AD38h		; DATA XREF: sub_D8DD+4o
+- 28277: `PlanetData1` - PlanetData1:	dw 149Ch		; DATA XREF: RAM:6ED8r
+- 28279: `PlanetData2` - PlanetData2:	dw 151Dh		; DATA XREF: GenerateInfoPlanet+77w
+- 28281: `DataOfPlanet` - DataOfPlanet:	dw 0AAh			; DATA XREF: sub_D857+3o
+- 28283: `DataOfPlanet1` - DataOfPlanet1:	dw 0ECB8h		; DATA XREF: ModifyPlanetData+3r
+- 28285: `DataOfPlanet2` - DataOfPlanet2:	db 53h			; DATA XREF: sub_E03Dr
+- 28288: `DataOfPlanetSv` - DataOfPlanetSv:	db 38h,	0ADh, 9Ch, 14h,	1Dh, 15h ; DATA	XREF: SavePlanetData+3o
+- 28298: `PlanetPresent` - PlanetPresent:	db 4Ch			; DATA XREF: InitGame+2Co sub_D86A+3o	...
+- 28307: `PlanetName` - PlanetName:	db 4Ch			; DATA XREF: InitGame+29o sub_D872+3o	...
+- 28320: `PlanetGovernment` - PlanetGovernment:db 3			; DATA XREF: sub_DCE9+20r
+- 28322: `PlanetTechLevel` - PlanetTechLevel:db 4			; DATA XREF: sub_DCE9+1Ar
+- 28324: `PlanetPopulation` - PlanetPopulation:db 19h			; DATA XREF: GenerateInfoPlanet+54w
+- 28326: `PlanetGrossProduct` - PlanetGrossProduct:dw 1B58h		; DATA XREF: GenerateInfoPlanet+71w
+
+## игрок/состояние
+
+-  4256: `Fuel` - Fuel:		db 0			; DATA XREF: SetPilotFuel+13w
+-  4323: `FuelScoopsOn` - FuelScoopsOn:	db 0			; DATA XREF: sub_728D+185w
+- 24857: `PilotName` - PilotName:	.ascii 'JAMESON   ',0   ; DATA XREF: InitGame+6o sub_D822+Co ...
+- 24858: `PilotLegalStatus` - PilotLegalStatus:db 0			; DATA XREF: ReCalcCrdObj_coriolis+24r
+- 24860: `PilotRating0` - PilotRating0:	db 0			; DATA XREF: DirectObject+6r
+- 24862: `PilotRating1` - PilotRating1:	db 0			; DATA XREF: sub_D60B+6r
+- 24863: `PilotRating2` - PilotRating2:	db 0			; DATA XREF: sub_5E78:loc_5E9Cr
+- 24870: `PilotNumGalaxy` - PilotNumGalaxy:	db 0			; DATA XREF: ReCalcCrdObj_coriolis+19r
+- 24872: `PilotCash2low` - PilotCash2low:	db 0			; DATA XREF: sub_D32Dr
+- 24874: `PilotCash2hi` - PilotCash2hi:	db 0			; DATA XREF: sub_5FA1+6r
+- 24876: `PilotCash1` - PilotCash1:	dw 3E8h			; DATA XREF: sub_D32D+3r IncCASHr ...
+- 24877: `PilotRnd` - PilotRnd:	db 0			; DATA XREF: sub_9B83+9r
+- 24879: `PilotCargo` - PilotCargo:	db 0			; DATA XREF: sub_E6D6+8o
+- 24882: `cargoSlaves` - cargoSlaves:	db 0			; DATA XREF: CallFunctionObj_1:SetRndShipr
+- 24885: `cargoNarc` - cargoNarc:	db 0			; DATA XREF: CallFunctionObj_1+354r
+- 24889: `cargoFireams` - cargoFireams:	db 0			; DATA XREF: CallFunctionObj_1+35Ar
+- 24891: `cargoMinerals` - cargoMinerals:	db 0			; DATA XREF: InitSpeedAngle+7o
+- 24895: `cargoGemStones` - cargoGemStones:	db 0			; DATA XREF: sub_E87E+46w
+- 24897: `PilotFreeCargo` - PilotFreeCargo:	db 14h			; DATA XREF: RAM:80CDw
+- 24899: `PilotFrontLaser` - PilotFrontLaser:db 1			; DATA XREF: RAM:72E9r	RAM:72F1w ...
+- 24901: `PilotLeftLaser` - PilotLeftLaser:	db 0			; DATA XREF: RAM:72EEr	RAM:72F6w
+- 24903: `PilotMission1` - PilotMission1:	db 0			; DATA XREF: sub_5E78+9r
+- 24905: `Pilot_Fuel` - Pilot_Fuel:	db 46h			; DATA XREF: sub_9B83o	sub_D822+1Er ...
+- 24906: `PilotMissiles` - PilotMissiles:	db 3			; DATA XREF: sub_5EC5+3o
+- 24908: `PilotLargeCargo` - PilotLargeCargo:db 0			; DATA XREF: RAM:SetMaxTonnager
+- 24910: `PilotECMSystem` - PilotECMSystem:	db 0			; DATA XREF: LaunchDocking+3Eo
+- 24912: `PilotAlienComputer` - PilotAlienComputer:db 0			; DATA XREF: sub_5EC5+28r sub_8AA3+7o	...
+- 24914: `PilotMineralLife` - PilotMineralLife:db 0			; DATA XREF: sub_6FFB+5w sub_7370r ...
+- 24917: `PilotFuelScoops` - PilotFuelScoops:db 0			; DATA XREF: CollisionWithObj+4Fr
+- 24919: `PilotEscapePod` - PilotEscapePod:	db 0			; DATA XREF: sub_9946+3Br
+- 24921: `PilotEnergyBomb` - PilotEnergyBomb:db 0			; DATA XREF: UseEnergyBomb+6o
+- 24923: `PilotDocComputer` - PilotDocComputer:db 0			; DATA XREF: GoDocking+1Er
+- 24924: `PilotGyperdrive` - PilotGyperdrive:db 0			; DATA XREF: sub_5D70o	GoJump+1Er
+- 24928: `PilotTargonWar` - PilotTargonWar:	db 0			; DATA XREF: sub_5E78r	sub_5E78+18r ...
+- 24934: `PilotGalaxyData0` - PilotGalaxyData0:db 4Ah			; DATA XREF: sub_79F9+22o sub_D857o ...
+- 24940: `PilotPlanetData` - PilotPlanetData:db 38h			; DATA XREF: sub_DCE9+7o
+- 24942: `Pilot_CrdYSystem` - Pilot_CrdYSystem:db 0ADh		; DATA XREF: sub_5FD5+10o sub_5FD5+33r ...
+- 24944: `Pilot_CrdXSystem` - Pilot_CrdXSystem:db 14h			; DATA XREF: sub_5FD5:loc_6005r
+- 24948: `PilotPlanetTechLvl` - PilotPlanetTechLvl:db 5			; DATA XREF: RAM:6EF0r	sub_D8CE+6r ...
+- 24949: `PilotPlanetGov` - PilotPlanetGov:	db 3			; DATA XREF: CallFunctionObj_1+3CCr
+- 24951: `PilotPlanetProduct` - PilotPlanetProduct:db 11h		; DATA XREF: sub_9B83+1Do
+- 24969: `PilotMission3` - PilotMission3:	db 0			; DATA XREF: ReCalcCrdObj_coriolis+1Er
+- 24973: `PilotExtWeapon` - PilotExtWeapon:	db 0			; DATA XREF: sub_5EC5+Dr
+- 24983: `PilotDataOfSun` - PilotDataOfSun:	db 0F0h, 52h, 5, 33h, 98h, 7, 0B6h, 0FAh, 8Bh
+- 24986: `PilotMission1_1` - PilotMission1_1:db 0			; DATA XREF: sub_726C+7w sub_728D+182w ...
+- 24987: `Pilot_CrdXTarget` - Pilot_CrdXTarget:db 14h			; DATA XREF: sub_5FD5+37w InitGame+11w ...
+- 24988: `Pilot_CrdYTarget` - Pilot_CrdYTarget:db 0ADh		; DATA XREF: CalcDistanceToCursor+1o
+- 24998: `CashBonus` - CashBonus:	db 0Ch			; DATA XREF: IncBattleRating2+1Co
+- 25000: `CargoFound` - CargoFound:	db 0Bh			; DATA XREF: ReCalcCrdObj_coriolis+73w
+- 25002: `RatingRightOn` - RatingRightOn:	db 6
+- 25009: `NoFuel` - NoFuel:		db 0Ah			; DATA XREF: SetFuelZero+5o
+- 27419: `LastBonusCash` - LastBonusCash:	dw 0AFh			; DATA XREF: IncBattleRating2+15w
+- 28316: `FuelToPlanet` - FuelToPlanet:	dw 0			; DATA XREF: GoJump+30r
+
+## координаты/векторы
+
+-   844: `byte_6049` - byte_6049:	db 0			; DATA XREF: sub_DD60+1Ao
+-   845: `byte_604A` - byte_604A:	db 0			; DATA XREF: sub_5FD5+65o sub_DD60+62r
+-   850: `byte_604F` - byte_604F:	db 0C0h			; DATA XREF: sub_DD60+10o sub_DD60+4Cr
+-   851: `byte_6050` - byte_6050:	db 80h			; DATA XREF: sub_DD60+79r
+-   852: `byte_6051` - byte_6051:	db 0			; DATA XREF: sub_DD60+40o
+-   853: `byte_6052` - byte_6052:	db 0			; DATA XREF: sub_DD60+5Ao
+-   857: `byte_6056` - byte_6056:	db 7Fh			; DATA XREF: sub_DD60+73o
+-   861: `byte_605A` - byte_605A:	db 0B3h			; DATA XREF: sub_DD60+52w
+-   865: `byte_605E` - byte_605E:	db 0B8h			; DATA XREF: sub_DD60:loc_DDD0o
+-   869: `byte_6062` - byte_6062:	db 0			; DATA XREF: sub_DD60+57o
+-   872: `byte_6065` - byte_6065:	db 80h			; DATA XREF: sub_728Do
+-   877: `byte_6069` - byte_6069:	db 0			; DATA XREF: GoDocking+2Do
+-   879: `byte_606A` - byte_606A:	db 0			; DATA XREF: sub_7A9E+Br sub_7A9E+68r	...
+-   882: `byte_606E` - byte_606E:	db 0Ch			; DATA XREF: sub_DCE9+114o
+-  3719: `eX4` - eX4:		db 98h
+-  4112: `byte_7060` - byte_7060:	db 0			; DATA XREF: sub_9B83:loc_9B9Dw
+-  4235: `byte_70DC` - byte_70DC:	db 5Eh			; DATA XREF: ProgressMissionWaro
+-  4244: `HighAngleLR` - HighAngleLR:	db 0			; DATA XREF: CalcAngSpeed4Prn+4w
+-  4246: `HighAngleDU` - HighAngleDU:	db 0			; DATA XREF: CalcAngSpeed4Prn+1Bw
+-  4266: `byte_70F4` - byte_70F4:	db 41h			; DATA XREF: CalcAngSpeed4Prn+3Bw
+-  4272: `byte_70FA` - byte_70FA:	db 0A0h			; DATA XREF: Use_Y_Cloacking+1Fr
+-  4276: `byte_70FE` - byte_70FE:	db 15h			; DATA XREF: CalcAngSpeed4Prn:loc_7151w
+-  4278: `byte_7100` - byte_7100:	db 15h			; DATA XREF: CalcAngSpeed4Prn:loc_7168w
+-  4286: `byte_7106` - byte_7106:	db 4Ah			; DATA XREF: sub_DCE9+3Bo
+-  4287: `SunCrd` - SunCrd:		db 0F0h			; DATA XREF: ReCalcCrdObj_coriolis+46o
+-  4290: `SunCrdXhi` - SunCrdXhi:	db 5			; DATA XREF: sub_5FD5+5Bo
+-  4296: `SunCrdZhi` - SunCrdZhi:	db 8Bh			; DATA XREF: LaunchDocking+A0r
+-  4298: `PlanetCrd` - PlanetCrd:	db 0			; DATA XREF: PrnSunPlanet:loc_75ADo
+-  4301: `PlanetCrdX_hi` - PlanetCrdX_hi:	db 0			; DATA XREF: sub_DD60+17r sub_DD60+5Fo
+-  4306: `PlanetCrdZ_med` - PlanetCrdZ_med:	db 0BFh			; DATA XREF: sub_DD60+49o
+-  4307: `PlanetCrdZ_hi` - PlanetCrdZ_hi:	db 0			; DATA XREF: sub_5FD5+6r RAM:DD5Dw ...
+-  4325: `PlayerGameOver` - PlayerGameOver:	db 0			; DATA XREF: RAM:7512r	RAM:7572w ...
+-  4326: `TypeOfPrint` - TypeOfPrint:	db 0			; DATA XREF: RAM:751Dw	PrnSunPlanet+1w ...
+-  4349: `nBeepFX` - nBeepFX:	db 0			; DATA XREF: UseEnergyBomb+12o
+-  4557: `byte_7221` - byte_7221:	db 2			; DATA XREF: Use_Y_Cloackingo
+-  4701: `byte_72A2` - byte_72A2:	db 3			; DATA XREF: sub_728D:loc_73F7w
+-  4706: `ScanKeyInPause` - ScanKeyInPause:				; CODE XREF: sub_728D+1F0p
+-  5287: `CircleCrdXlow` - CircleCrdXlow:	db 0			; DATA XREF: PrnSunPlanet+7o
+-  5289: `CircleCrdXmed` - CircleCrdXmed:	db 0			; DATA XREF: RAM:75FEr	RAM:76A9r ...
+-  5290: `CircleCrdXhi` - CircleCrdXhi:	db 0			; DATA XREF: RAM:76C7r	RAM:76D1w ...
+-  5291: `CircleCrdYlow` - CircleCrdYlow:	db 0			; DATA XREF: RAM:7627r	RAM:7701r
+-  5292: `CircleCrdYmed` - CircleCrdYmed:	db 0			; DATA XREF: RAM:7620r	RAM:76FAr
+-  5293: `CircleCrdYhi` - CircleCrdYhi:	db 0
+-  5294: `CircleCrdZlow` - CircleCrdZlow:	db 0CAh			; DATA XREF: RAM:7601r	RAM:7623r ...
+-  5295: `CircleCrdZmed` - CircleCrdZmed:	db 0BFh			; DATA XREF: RAM:75FAr	RAM:761Cr ...
+-  5296: `CircleCrdZhi` - CircleCrdZhi:	db 0			; DATA XREF: RAM:75EDr	RAM:75F7w ...
+-  6239: `byte_7A39` - byte_7A39:	db 3Ah			; DATA XREF: sub_78B1+Co sub_78B1+66o
+-  7846: `J_Drive_Ready2` - J_Drive_Ready2:	db 0			; DATA XREF: Use_J_Drive+13r
+-  7848: `J_Drive_Ready3` - J_Drive_Ready3:	db 1			; DATA XREF: PrintCompass+4Fw
+-  8650: `byte_8523` - byte_8523:	db 0			; DATA XREF: UpdateAllIndicators+27w
+-  8888: `CircleCrdY` - CircleCrdY:	dw 0			; DATA XREF: RAM:763Bw	RAM:7715w ...
+-  8896: `byte_8622` - byte_8622:	db 0B1h			; DATA XREF: PrnCircle_Clip+11Bw
+-  8902: `byte_8627` - byte_8627:	db 40h			; DATA XREF: sub_89EF+2w sub_89EF+22r	...
+-  8906: `byte_862A` - byte_862A:	db 20h			; DATA XREF: sub_8E77+4r
+-  9889: `fsSunCrdXl` - fsSunCrdXl:	db 0D1h			; DATA XREF: CalcCrdSunPlanet_2+3o
+-  9899: `fsSunCrdZh` - fsSunCrdZh:	db 0			; DATA XREF: sub_5FD5+1Er
+-  9900: `fsPlCrdXl` - fsPlCrdXl:	db 0BAh			; DATA XREF: CalcCrdSunPlanet_2+10o
+-  9908: `fsPlCrdZh` - fsPlCrdZh:	db 80h			; DATA XREF: sub_5FD5+13r
+- 10849: `byte_8E8D` - byte_8E8D:	db 60h,	60h		; DATA XREF: RAM:8E58o
+- 10865: `byte_8EAD` - byte_8EAD:	db 40h,	40h		; DATA XREF: RAM:loc_8E74o
+- 12062: `byte_93D0` - byte_93D0:	db 8			; DATA XREF: sub_9296+33w sub_9296+5Dr ...
+- 12063: `byte_93D1` - byte_93D1:	db 1			; DATA XREF: sub_9296+60w
+- 12065: `byte_93D2` - byte_93D2:	db 0			; DATA XREF: sub_9296+25w sub_9296+8Br ...
+- 12281: `byte_9522` - byte_9522:	db 0			; DATA XREF: sub_9548:loc_9551r
+- 12644: `byte_96BF` - byte_96BF:	db 2			; DATA XREF: sub_9579+18w sub_9579+9Br
+- 13192: `byte_992B` - byte_992B:	db 21h			; DATA XREF: CopyLocator2Scr+Do
+- 13865: `byte_9C1B` - byte_9C1B:	db 0			; DATA XREF: sub_9946+16w
+- 13996: `J_Drive_Ready4` - J_Drive_Ready4:	db 1			; DATA XREF: Use_J_Drive:loc_7EFBr
+- 13998: `EnergyBombUsed` - EnergyBombUsed:	db 0			; DATA XREF: UseEnergyBomb+Fw
+- 14004: `PlayerPirate` - PlayerPirate:	db 0			; DATA XREF: Use_Y_Cloacking+2Ew
+- 14569: `AngleLR4Calc` - AngleLR4Calc:	dw 8C94h		; DATA XREF: ReCalcCrdObj+29w
+- 15134: `deltaCrdX` - deltaCrdX:	dw 0CB6Bh		; DATA XREF: DirectObject+52w
+- 15136: `deltaCrdY` - deltaCrdY:	dw 0CAE2h		; DATA XREF: DirectObject+58w
+- 15138: `deltaCrdZ` - deltaCrdZ:	dw 0C601h		; DATA XREF: DirectObject+5Ew
+- 15140: `LenVector` - LenVector:	dw 1585h		; DATA XREF: MoveObject+11w
+- 16331: `BufferCrdY` - BufferCrdY:	db  0Dh			; DATA XREF: RAM:EC5Bo	sub_EDC5+3o
+- 16463: `byte_A98E` - byte_A98E:	db 1			; DATA XREF: TestVergesVisible:loc_AA27r
+- 16469: `MatrixRotate` - MatrixRotate:	db  7Eh	; ~		; DATA XREF: MakeTablPrnCrdVertex+11o
+- 16510: `VertexCrdX` - VertexCrdX:	dw 10h			; DATA XREF: MakeTablPrnCrdVertex+1B9w
+- 16512: `VertexCrdY` - VertexCrdY:	dw 67h			; DATA XREF: MakeTablPrnCrdVertex+1BFw
+- 16514: `VertexCrdZ` - VertexCrdZ:	dw 1CFh			; DATA XREF: MakeTablPrnCrdVertex:loc_AB9Fw
+- 16516: `CrdXProjection` - CrdXProjection:	db 8			; DATA XREF: sub_7E02+76r
+- 16518: `CrdYProjection` - CrdYProjection:	db 39h			; DATA XREF: PrnObjIfVisible+53w
+- 16520: `CrdXYsign` - CrdXYsign:	db 1			; DATA XREF: sub_7E02+61r
+- 16522: `VertexSignCrdX` - VertexSignCrdX:	db 0			; DATA XREF: MakeTablPrnCrdVertex+338w
+- 16524: `VertexSignCrdY` - VertexSignCrdY:	db 80h			; DATA XREF: MakeTablPrnCrdVertex+357w
+- 16526: `VertexSignCrdZ` - VertexSignCrdZ:	db 0			; DATA XREF: MakeTablPrnCrdVertex+376w
+- 16586: `CrdNVertex` - CrdNVertex:	db 15h			; DATA XREF: PrintObject_2:loc_6F80w
+- 17122: `VertexCrdXlow` - VertexCrdXlow:	db 0			; DATA XREF: MakeTablPrnCrdVertex+1DAw
+- 17124: `VertexCrdYlow` - VertexCrdYlow:	db 0			; DATA XREF: MakeTablPrnCrdVertex+1DDw
+- 17126: `VertexCrdZlow` - VertexCrdZlow:	db 0FFh			; DATA XREF: MakeTablPrnCrdVertex+1E0w
+- 17386: `byte_AE3C` - byte_AE3C:	db 6, 7, 8, 0Bh, 0Ch, 0Dh, 11h,	0Eh, 14h, 0Fh, 12h, 13h
+- 18846: `byte_B454` - byte_B454:	db 8Ah			; DATA XREF: sub_7A9E+39r sub_7C60+3o	...
+- 18847: `byte_B455` - byte_B455:	db 1			; DATA XREF: AttackTargetObj+2Ar
+- 18851: `byte_B457` - byte_B457:	db 0, 0, 0, 0, 0, 0, 0,	0, 0, 0	; DATA XREF: sub_7C60+11o
+- 18857: `byte_B461` - byte_B461:	db 0, 0, 0, 0, 0, 0, 0,	0, 0, 0	; DATA XREF: sub_7C13+2Fo
+- 18865: `byte_B4A7` - byte_B4A7:	db 0			; DATA XREF: sub_9391+3o
+- 18917: `byte_B4D6` - byte_B4D6:	db 0			; DATA XREF: FireLaser+114w
+- 18919: `byte_B4D7` - byte_B4D7:	db 0			; DATA XREF: FireLaserr FireLaser+5w ...
+- 19572: `byte_B866` - byte_B866:	db 0			; DATA XREF: RotateSKOobjr
+- 20350: `IY_dFactor` - IY_dFactor:	db 0			; DATA XREF: CalcVisibleVerges+1Aw
+- 20352: `AddNormalCrdX` - AddNormalCrdX:	dw 8003h		; DATA XREF: CalcVisibleVerges+4Dw
+- 20354: `AddNormalCrdY` - AddNormalCrdY:	dw 8034h		; DATA XREF: CalcVisibleVerges+56w
+- 20355: `AddNormalCrdZ` - AddNormalCrdZ:	dw 0EDh			; DATA XREF: CalcVisibleVerges+5Fw
+- 20356: `NormalCrdX` - NormalCrdX:	db 83h			; DATA XREF: CalcVisibleVerges+4Aw
+- 20358: `NormalCrdY` - NormalCrdY:	db 0B4h			; DATA XREF: CalcVisibleVerges+53w
+- 20359: `NormalCrdZ` - NormalCrdZ:	db 93h			; DATA XREF: CalcVisibleVerges+5Cw
+- 20896: `byte_C106` - byte_C106:	db 0			; DATA XREF: GoJump:loc_DC04o
+- 22682: `byte_C800` - byte_C800:	db 0			; CODE XREF: MenuSaveLoad2+7p
+- 24825: `CrdXPrnSymbol` - CrdXPrnSymbol:	dw 200h			; DATA XREF: sub_7430:loc_7438w
+- 24851: `PrnCrdXCursor` - PrnCrdXCursor:	db 6Dh			; DATA XREF: RAM:8E2Br
+- 24853: `PrnCrdYCursor` - PrnCrdYCursor:	db 7Eh			; DATA XREF: RAM:8E3Dr
+- 24922: `byte_D08B` - byte_D08B:	db 0			; DATA XREF: EnergyRecoveryr
+- 24925: `byte_D08E` - byte_D08E:	db 0			; DATA XREF: sub_5FA1+11r
+- 24936: `byte_D092` - byte_D092:	db 48h			; DATA XREF: RAM:DF11o
+- 24938: `byte_D094` - byte_D094:	db 53h			; DATA XREF: RAM:DF17o
+- 24952: `planetTextiles` - planetTextiles:	db 12h			; DATA XREF: SetVars4War+Cw
+- 25007: `byte_D0CE` - byte_D0CE:	db 0			; DATA XREF: RAM:D325w
+- 25011: `FlgPrnSym1` - FlgPrnSym1:	db 0			; DATA XREF: sub_D499+9r sub_D499+2Ar	...
+- 25012: `byte_D0D2` - byte_D0D2:	db 1			; DATA XREF: sub_D499+1Aw
+- 25014: `byte_D0D3` - byte_D0D3:	db 0			; DATA XREF: sub_D499+10r sub_D499+17w ...
+- 25015: `byte_D0D4` - byte_D0D4:	db 0			; DATA XREF: sub_D499:loc_D4D8r
+- 25780: `byte_D420` - byte_D420:	db 1			; DATA XREF: sub_D470+1r RAM:loc_D8EBw
+- 27413: `byte_DA72` - byte_DA72:	db 1Dh			; DATA XREF: sub_DAB4+8Do
+- 27415: `byte_DA74` - byte_DA74:	db 42h			; DATA XREF: sub_DAB4+Do
+- 27417: `msgCrdY` - msgCrdY:	db 0Ah			; DATA XREF: sub_DAE6+1w sub_DAB4+45r
+- 28274: `byte_DEB9` - byte_DEB9:	db 0			; DATA XREF: sub_DCE9+38o
+- 28287: `byte_DEC5` - byte_DEC5:	db 0C4h			; DATA XREF: PrnPlanetOnSmallMap+Br
+- 28291: `byte_DED0` - byte_DED0:	db 4Ah,	41h, 4Dh, 45h, 53h, 4Fh, 4Eh, 20h, 20h,	20h, 0
+- 28318: `PlanetEconomy` - PlanetEconomy:	db 5			; DATA XREF: PrnCountdownJump+7Br
+- 28330: `byte_DF00` - byte_DF00:	db 0			; DATA XREF: sub_DF24+4w
+- 28940: `byte_E1BB` - byte_E1BB:	db 0			; DATA XREF: sub_E962+6o sub_EF48+25o
+- 28959: `byte_E1DF` - byte_E1DF:	db 0			; DATA XREF: sub_E212r	RAM:E273r ...
+- 29430: `byte_E394` - byte_E394:	db 0			; DATA XREF: RAM:E3A2r	sub_E3CC+11w ...
+- 29432: `byte_E397` - byte_E397:	db 0			; DATA XREF: RAM:E3F0w	RAM:E3FBr
+- 29472: `byte_E3C9` - byte_E3C9:	db 0			; DATA XREF: sub_E3CCw
+- 29724: `byte_E52C` - byte_E52C:	db 18h			; DATA XREF: PrintSmallCursOnMap+1DEr
+- 29726: `CrdYDownGalaxyMap` - CrdYDownGalaxyMap:db 0A7h		; DATA XREF: PrintSmallCursOnMap+1F2r
+- 30533: `byte_E8A8` - byte_E8A8:	db 0			; DATA XREF: sub_E83C+17w sub_E85D+16r
+- 30534: `byte_E8A9` - byte_E8A9:	db 0			; DATA XREF: sub_E83C+10w sub_E85D+Fr
+- 30535: `byte_E8AA` - byte_E8AA:	db 0			; DATA XREF: sub_E83C+1Dw sub_E85D+1Ar
+- 30536: `byte_E8AB` - byte_E8AB:	db 0			; DATA XREF: sub_E776+4w sub_E776+1Dw	...
+- 31035: `byte_EB5E` - byte_EB5E:	db 0			; DATA XREF: sub_D8CE:loc_D8D0r
+- 31037: `byte_EB5F` - byte_EB5F:	db 0			; DATA XREF: RAM:loc_E99Fw RAM:E9A7r ...
+- 31039: `byte_EB62` - byte_EB62:	db 0			; DATA XREF: sub_DDEC:loc_DDF3w
+- 32155: `byte_F0AE` - byte_F0AE:	db 8			; DATA XREF: RAM:EFE8o
+- 32161: `byte_F0B4` - byte_F0B4:	db 2			; DATA XREF: RAM:loc_EFEFo
+- 34944: `ControlKey1` - ControlKey1:	db 0			; DATA XREF: Use_Y_Cloacking+4o
+- 34946: `ControlKeyMove` - ControlKeyMove:	db 10h			; DATA XREF: ControlKeyIfMapOn+Er
+- 34948: `ControlKey2` - ControlKey2:	db 0			; DATA XREF: ScanKeyInPauser
+- 34950: `ControlKey3` - ControlKey3:	db 0			; DATA XREF: UseEnergyBombr
+- 34958: `byte_FC0F` - byte_FC0F:	db 0			; DATA XREF: sub_728D+145o
+- 35294: `ScanKeys` - ScanKeys:				; CODE XREF: sub_FF25+10p
+- 35365: `byte_FDB3` - byte_FDB3:	db 41h			; DATA XREF: PrintMessage1_A+179o
+- 35624: `AngleLeftRight` - AngleLeftRight:	dw 0			; DATA XREF: sub_F9AB+1Ao sub_FE01+Er	...
+- 35625: `byte_FF0A` - byte_FF0A:	db 0			; DATA XREF: sub_FE01+7Cr
+
+## объекты
+
+-   842: `objCoriolis` - objCoriolis:	db 0			; DATA XREF: NewJumpDockingCrdObj+4o
+-   912: `SlotObj_01` - SlotObj_01:	db 1Ch,	0, 80h		; field_0
+-   940: `SlotObj_02` - SlotObj_02:	db 47h,	0, 80h		; field_0
+-   968: `SlotObj_03` - SlotObj_03:	db 1, 1, 1		; field_0
+-   996: `SlotObj_04` - SlotObj_04:	db 1, 1, 1		; field_0
+-  1024: `SlotObj_05` - SlotObj_05:	db 1, 1, 1		; field_0 ; DATA XREF: MoveAllObjects+59o
+-  1053: `objMissile` - objMissile:	db 0, 0, 0		; field_0 ; DATA XREF: sub_A28Do
+-  1082: `AdrDataShips` - AdrDataShips:	db 80h			; DATA XREF: sub_7A9E+19o
+-  3419: `vShipNew1` - vShipNew1:	db 1Fh,	1, 0FFh
+-  3460: `nShipNew1` - nShipNew1:	db  1Fh
+-  3484: `eShipNew1` - eShipNew1:	dw unk_6D3A
+-  3554: `vShipNew2` - vShipNew2:	db 1Fh,	1, 9Ah
+-  3587: `nShipNew2` - nShipNew2:	db  1Fh
+-  3611: `eShipNew2` - eShipNew2:	dw unk_6E00
+-  3681: `vShipNew3` - vShipNew3:	db 1Fh,	1, 0FFh
+-  3707: `nShipNew3` - nShipNew3:	db  1Fh
+-  4261: `TempLaser` - TempLaser:	db 0			; DATA XREF: sub_9946+Aw FireLaser+8r	...
+-  7040: `ShipHyperJump` - ShipHyperJump:				; CODE XREF: sub_7E02j
+- 12645: `ScanerCrdXobj` - ScanerCrdXobj:	db 0			; DATA XREF: sub_9736+Fw sub_9736+55r	...
+- 12646: `ScanerCrdYobj` - ScanerCrdYobj:	db 0			; DATA XREF: sub_9736:loc_9765w
+- 12648: `ScanerCrdZobj` - ScanerCrdZobj:	db 93h			; DATA XREF: sub_9736:loc_9785w
+- 12650: `ScanerNumObj` - ScanerNumObj:	db 1			; DATA XREF: sub_96DC+Aw
+- 13810: `MissileTarget` - MissileTarget:				; CODE XREF: UseMissile+33j
+- 13820: `MissileUntarget` - MissileUntarget:			; CODE XREF: UseMissile+3Bj
+- 13825: `MissileFire` - MissileFire:				; CODE XREF: UseMissile+37j
+- 14000: `FlgObjNear` - FlgObjNear:	db 10h			; DATA XREF: PrnExplodeObjr sub_96DCr	...
+- 14001: `ObjInTarget` - ObjInTarget:	db 5			; DATA XREF: sub_7D64+3r
+- 14060: `nMissileObj` - nMissileObj:	db 0			; DATA XREF: MoveAllObjects+36r
+- 16506: `DistanceToObj` - DistanceToObj:	dw 202h			; DATA XREF: PrintObject_2+8r
+- 19553: `PatternObject` - PatternObject:	db 0, 32h, 0		; DATA XREF: SetObjInSlot+20o
+- 19704: `ShipSetObject` - ShipSetObject:				; CODE XREF: CallFunctionObj_1+167p
+- 19856: `ShipSetShip` - ShipSetShip:				; CODE XREF: CallFunctionObj_1+16j
+- 20021: `ShipSet2Alloys` - ShipSet2Alloys:				; CODE XREF: CallFunctionObj_1+22Cj
+- 20348: `AdrSlotObj` - AdrSlotObj:	dw 6159h		; DATA XREF: CalcVisibleVerges+9w
+- 24827: `Missile1` - Missile1:	db 0			; DATA XREF: sub_9946+7w sub_99B5+31r	...
+- 24990: `MissileJammed` - MissileJammed:	db 8			; DATA XREF: RAM:9C07o	sub_DAB4+17o ...
+- 24992: `ShipLaunchMisile` - ShipLaunchMisile:db 7			; DATA XREF: ReactionObject+7Co
+- 25042: `nObjMissile` - nObjMissile:	db 0			; DATA XREF: UseMissile+Co
+
+## прочее
+
+-     4: `field_0` - field_0:	db ?			; dCargo
+-     5: `field_1` - field_1:	db ?			; dCollision
+-     6: `field_2` - field_2:	db ?			; dChanceFire
+-     7: `field_3` - field_3:	db ?			; dVertexN
+-     8: `field_4` - field_4:	db ?			; dEdgeN
+-     9: `field_5` - field_5:	db ?			; dNormalN
+-    10: `field_6` - field_6:	db ?			; dMaxSpeed
+-    11: `field_7` - field_7:	db ?			; dEnergy
+-    12: `field_8` - field_8:	dw ?			; dCash
+-    13: `field_A` - field_A:	db ?			; dFlg_1
+-    14: `field_B` - field_B:	db ?			; dSize
+-    15: `field_C` - field_C:	dw ?			; dVertex
+-    16: `field_E` - field_E:	dw ?			; dEdge
+-    17: `field_10` - field_10:	dw ?			; dNormal
+-    18: `field_12` - field_12:	db ?			; dFlg_2
+-    19: `field_13` - field_13:	db ?			; dFactor
+-    20: `field_14` - field_14:	db ?			; dLaser
+-    21: `field_15` - field_15:	dw ?			; dRating
+-    30: `field_9` - field_9:	db 6 dup(?)
+-    31: `field_F` - field_F:	db 6 dup(?)
+-    33: `field_1B` - field_1B:	db ?			; speed
+-    34: `field_1C` - field_1C:	db ?			; seed up
+-    35: `field_1D` - field_1D:	db ?			; oTurnLR
+-    36: `field_1E` - field_1E:	db ?			; oTurnDU
+-    37: `field_1F` - field_1F:	db ?			; oRadiusBlast
+-    38: `field_20` - field_20:	db ?			; oFlg_1
+-    39: `field_21` - field_21:	db ?			; oFlg_2
+-    40: `field_22` - field_22:	db ?			; oEnerg
+-    41: `field_23` - field_23:	dw ?			; oAdrData
+-    42: `field_25` - field_25:	db ?			; oFlg_3
+-    43: `field_26` - field_26:	db ?			; oFlg_4
+-   883: `DataOfAround` - DataOfAround:	db 13h,	0, 0		; field_0 ; DATA XREF: ReCalcCrdObj_coriolis+59o
+-  1211: `d_Adder` - d_Adder:	db 0			; field_0 ; DATA XREF: RAM:61C5o
+-  1353: `unk_644E` - unk_644E:	db  18h			; DATA XREF: RAM:6430o
+-  1357: `unk_6452` - unk_6452:	db  0Ah			; DATA XREF: RAM:6432o
+-  3337: `vTargon6` - vTargon6:	db 1Fh,	24h, 66h
+-  3356: `nTargon6` - nTargon6:	db  1Fh
+-  3376: `eTargon6` - eTargon6:	dw unk_6C72
+-  3397: `unk_6C72` - unk_6C72:	db  12h			; DATA XREF: RAM:eTargon6o
+-  3400: `unk_6C75` - unk_6C75:	db    2			; DATA XREF: RAM:6C5Do
+-  3513: `unk_6D3A` - unk_6D3A:	db  11h			; DATA XREF: RAM:eShipNew1o
+-  3523: `unk_6D44` - unk_6D44:	db    1			; DATA XREF: RAM:6D1Do
+-  3643: `unk_6E00` - unk_6E00:	db  10h			; DATA XREF: RAM:eShipNew2o
+-  3651: `unk_6E08` - unk_6E08:	db    1			; DATA XREF: RAM:6DE0o
+-  4020: `TempAdr` - TempAdr:	dw 6838h		; DATA XREF: sub_AA31r
+-  4111: `unk_705F` - unk_705F:	db    0			; DATA XREF: RAM:E98Ao	sub_EB2F+1o
+-  4248: `HighDeltaSpeed` - HighDeltaSpeed:	db 0Ch			; DATA XREF: CalcAngSpeed4Prn+32w
+-  4251: `ShieldFront` - ShieldFront:	db 0A0h			; DATA XREF: UpdateAllIndicators+7o
+-  4254: `ShieldRear` - ShieldRear:	db 0A0h			; DATA XREF: sub_9946+1Ew RAM:99B0r ...
+-  4258: `Temperature` - Temperature:	db 0			; DATA XREF: sub_8B3F:loc_8B47w
+-  4263: `Altitude` - Altitude:	db 0			; DATA XREF: PrintCompass+9Aw
+-  4268: `ShieldUnit1` - ShieldUnit1:	db 0A0h	; а		; DATA XREF: sub_9946+24o sub_9A8Do
+-  4274: `ShieldUnit4` - ShieldUnit4:	db 0A0h			; DATA XREF: Damage2Pilot+6r sub_9AE2o ...
+-  4281: `InFreeSpace` - InFreeSpace:	db 0			; DATA XREF: CalcCrdCoriolis2r
+-  4283: `IndDanger` - IndDanger:	db 0			; DATA XREF: GoDocking+23r
+-  4285: `RndWord` - RndWord:	db 0			; DATA XREF: RAM:8C43r	sub_ABAFo ...
+-  4319: `CoriolisNear` - CoriolisNear:	db 1			; DATA XREF: GoDocking+19r
+-  4337: `BlockControl` - BlockControl:	db 0			; DATA XREF: sub_728D:GameMainr
+-  4795: `unk_72FB` - unk_72FB:	db  42h	; B		; DATA XREF: ScanKeyInPause+17o
+-  4944: `unk_738E` - unk_738E:	db    3			; DATA XREF: SetCrdSunPlInFreeSpace+4o
+-  5113: `unk_7470` - unk_7470:	db  22h	; "             ; DATA XREF: sub_728D+11Fo
+-  5286: `word_7578` - word_7578:	dw 0			; DATA XREF: RAM:7366w
+-  7661: `word_80D1` - word_80D1:	dw 411Ah		; DATA XREF: sub_813Ew	sub_813E+18r
+-  8652: `word_8524` - word_8524:	dw 5123h		; DATA XREF: UpdateAllIndicatorso
+-  8892: `word_861E` - word_861E:	dw 0			; DATA XREF: PrnCircle_Clip+4w
+-  8894: `word_8620` - word_8620:	dw 8040h		; DATA XREF: PrnCircle_Clip+15w
+-  8898: `word_8623` - word_8623:	dw 4118h		; DATA XREF: sub_86A1:loc_8B0Fw
+-  8900: `word_8625` - word_8625:	dw 7AA4h		; DATA XREF: sub_8ACD+13w
+- 10881: `off_8ECD` - off_8ECD:	dw loc_86FA+1		; DATA XREF: sub_8E77+7o
+- 12066: `unk_93D3` - unk_93D3:	db  1Eh			; DATA XREF: sub_9296+B5o
+- 12082: `unk_93E3` - unk_93E3:	db  10h			; DATA XREF: sub_9296:loc_92F9o
+- 12283: `word_9523` - word_9523:	dw 8000h		; DATA XREF: sub_9579+30r sub_9579+47w ...
+- 12284: `word_9525` - word_9525:	dw 0B27h		; DATA XREF: sub_9579:loc_95A6r
+- 13303: `unk_99A3` - unk_99A3:	db  44h	; D		; DATA XREF: sub_99B5+Do
+- 13560: `unk_9ADA` - unk_9ADA:	db    0			; DATA XREF: sub_9AA7+4o
+- 13994: `FrameCounter` - FrameCounter:	db 96h			; DATA XREF: CounterShipHyperJumpr
+- 14007: `TimeWorkECM` - TimeWorkECM:	db 0			; DATA XREF: LaunchDocking+37w
+- 14058: `Mission2` - Mission2:	db 0			; DATA XREF: DestroyObj+6r
+- 15905: `RadiusBlast` - RadiusBlast:	db 28h			; DATA XREF: sub_7E02+50r
+- 16239: `unk_A89C` - unk_A89C:	db  68h	; h		; DATA XREF: CopyLocator2Scr+3Fo
+- 16453: `VergesVisible` - VergesVisible:	db    0			; DATA XREF: CalcVisibleVerges+14o
+- 18059: `unk_B138` - unk_B138:	db 0B6h	; ╢		; DATA XREF: MoveAllObjects:loc_9CD1w
+- 18085: `unk_B150` - unk_B150:	db 0BDh	; ╜		; DATA XREF: PrnLineInBuf_clip+EAw
+- 18087: `unk_B152` - unk_B152:	db    9			; DATA XREF: PrnLineInBuf_clip:loc_B11Aw
+- 18091: `unk_B156` - unk_B156:	db  2Ch	; ,		; DATA XREF: PrnLineInBuf_clip+DDw
+- 18844: `word_B452` - word_B452:	dw 0B4A7h		; DATA XREF: SetPrnCrdInExtSlot+6r
+- 19430: `word_B7AA` - word_B7AA:	dw 0A26Ch		; DATA XREF: IntRnd_A+2r IntRnd_A+Bw
+- 19563: `SKO4Intro` - SKO4Intro:	db  58h	; X		; DATA XREF: SetShip4Intro+3Bo
+- 20569: `TablSqr` - TablSqr:	db 0, 1, 4, 9, 10h, 19h, 24h, 31h
+- 20633: `DataCocpit` - DataCocpit:	db    0			; DATA XREF: PrnCocpit_Ifn+22o
+- 22664: `unk_C7EE` - unk_C7EE:	db 0FFh			; DATA XREF: j_MoveAllObjects+1B1Fo
+- 22837: `unk_C89A` - unk_C89A:	db    0			; DATA XREF: DemoModeOno
+- 22939: `unk_C900` - unk_C900:	db    0			; DATA XREF: DemoModeOn+15o
+- 24522: `unk_CF2F` - unk_CF2F:	db    0			; DATA XREF: RAM:B7E2o
+- 24838: `word_D04B` - word_D04B:	dw 0D548h		; DATA XREF: sub_99B5:loc_99F8r
+- 25005: `DigitsInNumber` - DigitsInNumber:	db 1			; DATA XREF: RAM:D2EDw	RAM:D30Er ...
+- 25016: `word_D0D5` - word_D0D5:	dw 0D508h		; DATA XREF: sub_7430+Br sub_7447+8r ...
+- 25356: `aJameson_1` - aJameson_1:	.ascii 'JAMESON   ',0   ; DATA XREF: InitGame+3o
+- 25439: `unk_D28F` - unk_D28F:	db 0F0h	; Ё		; DATA XREF: InitGame+34o
+- 25483: `word_D2DC` - word_D2DC:	dw 0			; DATA XREF: RAM:D2F0w	RAM:loc_D31Dr ...
+- 27414: `msgTimeLife` - msgTimeLife:	db 0			; DATA XREF: sub_DAB4+6o sub_DAB4+2Fw	...
+- 27418: `msgNumber` - msgNumber:	db 0			; DATA XREF: sub_D1E9r	sub_DAE6+5w ...
+- 27421: `nMsgDamage` - nMsgDamage:	db 0F5h			; DATA XREF: sub_D1E9:loc_D213w
+- 28293: `TempName` - TempName:	.ascii 'LAVE',0         ; DATA XREF: sub_D857+Eo sub_DF24+10o ...
+- 28332: `word_DF01` - word_DF01:	dw 0DEDFh		; DATA XREF: GeneratePlanetName:loc_E01Fw
+- 28407: `MinDistance` - MinDistance:	dw 0			; DATA XREF: sub_5FD5+3Dr
+- 28676: `word_E07B` - word_E07B:	dw 2			; DATA XREF: LaunchDocking-358Fr
+- 28960: `word_E1E0` - word_E1E0:	dw 0			; DATA XREF: sub_700Fr
+- 28962: `word_E1E2` - word_E1E2:	dw 0			; DATA XREF: sub_E212+13r sub_E212+18w ...
+- 28963: `word_E1E4` - word_E1E4:	dw 0			; DATA XREF: sub_E212+2Cr sub_E212+31w ...
+- 28964: `word_E1E6` - word_E1E6:	dw 0			; DATA XREF: sub_E364+3w sub_E38Dr
+- 29431: `word_E395` - word_E395:	dw 0			; DATA XREF: sub_E3CC+Dw RAM:E41Br ...
+- 29473: `word_E3CA` - word_E3CA:	dw 0			; DATA XREF: sub_E3CC+7w sub_E3CC+Ar
+- 29722: `CursorWidth` - CursorWidth:	db 10h			; DATA XREF: PrintSmallCursOnMapr
+- 30175: `unk_E6F8` - unk_E6F8:	db 0F1h	; ё		; DATA XREF: RAM:E716o
+- 30531: `word_E8A4` - word_E8A4:	dw 0			; DATA XREF: sub_E83C+9w sub_E85D+6r
+- 30532: `word_E8A6` - word_E8A6:	dw 0			; DATA XREF: sub_E83C+3w sub_E85Dr
+- 30537: `word_E8AC` - word_E8AC:	dw 0			; DATA XREF: sub_E776w	sub_E776+24r ...
+- 30568: `unk_E8D8` - unk_E8D8:	db 0F0h	; Ё		; DATA XREF: sub_E87E+5Eo
+- 30970: `word_EB2D` - word_EB2D:	dw 0C9A7h		; DATA XREF: RAM:E9EEo
+- 31038: `word_EB60` - word_EB60:	dw 0			; DATA XREF: RAM:E98Dw	RAM:E9BFr ...
+- 32238: `word_F11A` - word_F11A:	dw 0F11Eh		; DATA XREF: PrintMessage1_A:loc_D443r
+- 32239: `word_F11C` - word_F11C:	dw 0F4D0h		; DATA XREF: PrintMessage2r
+- 33280: `unk_F52E` - unk_F52E:	db    2			; CODE XREF: RAM:F553j
+- 33300: `unk_F542` - unk_F542:	db 0F5h	; ї		; CODE XREF: RAM:F55Ej
+- 33309: `word_F54B` - word_F54B:	dw 0B302h
+- 33379: `unk_F597` - unk_F597:	db    0			; CODE XREF: RAM:F54Dj
+- 33392: `unk_F5A4` - unk_F5A4:	db    0			; CODE XREF: RAM:F556j
+- 33917: `Msg_B8` - Msg_B8:		db 0B0h	; ░
+- 35250: `unk_FD41` - unk_FD41:	db  20h			; DATA XREF: sub_FCBA+10o
+- 35328: `unk_FD8E` - unk_FD8E:	db 0CAh	; ╩		; DATA XREF: RAM:EF92o
+- 35336: `unk_FD96` - unk_FD96:	db  79h	; y		; DATA XREF: sub_E87E+847o
+- 35339: `unk_FD99` - unk_FD99:	db  40h	; @		; DATA XREF: sub_D470+127o
+- 35341: `unk_FD9B` - unk_FD9B:	db  41h	; A		; DATA XREF: RAM:D893o
+- 35430: `unk_FDF3` - unk_FDF3:	db 0B1h	; ▒		; DATA XREF: RAM:EDE5o
+- 35438: `unk_FDFB` - unk_FDFB:	db 0D9h	; ┘		; DATA XREF: sub_EF48+16o
+- 35628: `DeltaSpeed` - DeltaSpeed:	db 0			; DATA XREF: UseEscapePod+25w
+- 35692: `word_FF56` - word_FF56:	dw 411Ch		; DATA XREF: sub_FF25+1w sub_FF25+21r
+- 35693: `unk_FF58` - unk_FF58:	db    1			; DATA XREF: sub_FCBA+1Co
+- 35813: `unk_FFD0` - unk_FFD0:	db    0			; DATA XREF: sub_F8E4+Bo sub_F8E4+1Ao
+
+## радар/круги
+
+-  3863: `CompassIndFill` - CompassIndFill:	db 18h,	3Ch, 3Ch, 18h	; DATA XREF: sub_6F29+3o
+-  3865: `CompassInd_N` - CompassInd_N:	db 9, 1Ah, 2Ch,	48h
+-  3866: `CompassInd_S` - CompassInd_S:	db 0Eh,	10h, 8,	70h
+-  3867: `CompassInd_W` - CompassInd_W:	db 41h,	82h, 0B4h, 58h
+-  3868: `CompassInd_E` - CompassInd_E:	db 0Eh,	1Ch, 20h, 1Ch
+-  8536: `DataCompass` - DataCompass:	db 0, 0, 1		; DATA XREF: PrnCompasso
+-  8889: `CircleFlg` - CircleFlg:	db 0Fh			; DATA XREF: RAM:7641w	RAM:771Bw ...
+-  8890: `CircleRadius` - CircleRadius:	db 0D6h			; DATA XREF: PrnSunPlanet+1Dr
+-  8903: `DirPrnCircle` - DirPrnCircle:	db 1			; DATA XREF: sub_5E36:loc_5E50r
+-  8905: `FillCircle` - FillCircle:	db 1			; DATA XREF: sub_862B+Er sub_8643+Dr ...
+- 11017: `DataFillCircle` - DataFillCircle:	dw 0FFFFh		; DATA XREF: sub_5E36+Ar sub_86A1+52Co ...
+- 12652: `FlgSaveScaner` - FlgSaveScaner:	db 0			; DATA XREF: sub_7A84+16w sub_96DC+46w ...
+- 24855: `RadiusCircle` - RadiusCircle:	db 2Ah			; DATA XREF: RAM:8E51r
+
+## стыковка/гипер
+
+-  4351: `AutoDocking` - AutoDocking:	db 0			; DATA XREF: GoDocking+35w
+- 14006: `ManualDocking` - ManualDocking:	db 0			; DATA XREF: GoDockingr GoDocking+7w ...
+- 24803: `JumpDocking` - JumpDocking:	db 0			; DATA XREF: GoDocking+28r
+- 24807: `FlgJumpDocking` - FlgJumpDocking:	db 0			; DATA XREF: sub_80D3r	sub_9296r ...
+- 24869: `JumpCounter` - JumpCounter:	dw 0
+- 27653: `JumpCountdown` - JumpCountdown:	db 0			; DATA XREF: InitGame+40w GoJump+Cr ...
+- 27730: `JumpDocked` - JumpDocked:				; CODE XREF: GoJump+15j
+
+## торговля
+
+-  4094: `TableBasePrice` - TableBasePrice:	db 13h,	82h, 6,	1	; DATA XREF: GenerateAnotherPrice+7o
+- 28942: `ProductPrice` - ProductPrice:	dw  24h			; DATA XREF: GenerateAnotherPrice+3o
+
+## флаги/режимы
+
+-  5117: `GameMain` - GameMain:				; CODE XREF: sub_728D+197j
+- 28670: `DemoMode` - DemoMode:	db 0E0h			; DATA XREF: LaunchDocking:loc_5E55o
+- 34956: `FlagsSetUp` - FlagsSetUp:	db 8Ch			; DATA XREF: ScanKeyInPause+6o
+
+## экран/буфер
+
+-  4242: `WhatOnScreen` - WhatOnScreen:	db 0Bh			; DATA XREF: GoDocking+39w
+- 25004: `FlgPrnNumber` - FlgPrnNumber:	db 0
+
