@@ -148,9 +148,10 @@ fn parse_args() -> Options {
                 println!("  ближайшая планета, +/- или колесо — масштаб, F1 — чит:");
                 println!("  телепорт на станцию выбранной планеты, Esc — закрыть.");
                 println!();
-                println!("Нативный полёт (F1): X/S или ↑/↓ — тангаж, N/M или ←/→ —");
-                println!("  крен, Q/E — рыскание, A/RightShift — тяга, Z — торможение,");
-                println!("  Space/RightCtrl — огонь. Esc — меню паузы, 1 или F1 — Z80.");
+                println!("Нативный полёт (F1): S/X или ↑/↓ — тангаж, N/M или ←/→ —");
+                println!("  крен, Space — тяга вперёд, Shift — торможение,");
+                println!("  A/RightCtrl — огонь. Tab — источник (Native/Z80 LINK),");
+                println!("  Esc — меню паузы, 1 или F1 — Z80.");
                 println!();
                 println!("Закупка оборудования (F4): клик/Enter — купить,");
                 println!("  1-9 (+вторая цифра) — номер товара, стрелки — выбор,");
@@ -1081,11 +1082,20 @@ impl<'a> App<'a> {
 
     /// Перенести состояние клавиатуры и джойстика в эмулятор.
     fn apply_input(&mut self) {
-        self.machine.release_all_keys();
-        self.machine.release_joystick();
         if self.menu || self.hdmap.active || self.shop.active || self.flight.active {
+            self.machine.release_all_keys();
+            self.machine.release_joystick();
             return;
         }
+        self.forward_input();
+    }
+
+    /// Передать матрицу клавиш и джойстик в эмулятор без проверки нативных
+    /// экранов. Нужно для Z80 LINK: там под нативным рендером продолжает
+    /// работать эмулятор, и ему требуется живой ввод.
+    fn forward_input(&mut self) {
+        self.machine.release_all_keys();
+        self.machine.release_joystick();
         for (row, bits) in self.matrix.iter().enumerate() {
             for (bit, &down) in bits.iter().enumerate() {
                 if down {
@@ -1144,9 +1154,14 @@ impl<'a> App<'a> {
                 // для сравнения, в режиме Native эмулятор стоит.
                 if matches!(self.flight.source, flight::FlightSource::Z80) {
                     if !self.menu {
-                        self.apply_input();
+                        // Z80 LINK: эмулятор продолжает жить, ввод идёт в игру.
+                        self.forward_input();
                         self.machine.run_frame();
                         self.flight.sync_from_z80(&self.machine.mem, true);
+                        // Звёзды/таймеры двигаются и в Z80 LINK — скорость
+                        // берётся из памяти игры в sync_from_z80.
+                        self.flight
+                            .tick(flight::Controls::default(), 1.0 / 50.0);
                     } else {
                         self.machine.release_all_keys();
                         self.machine.release_joystick();
@@ -1785,6 +1800,68 @@ mod intro_tests {
         assert!(!app.flight.active, "F1 не закрыл нативный полёт");
     }
 
+    /// Z80 LINK: под нативным рендером эмулятор продолжает работать, поэтому
+    /// ввод обязательно должен доходить до Z80-игры (иначе полёт «зависает»).
+    #[test]
+    fn z80_link_forwards_input_to_emulator() {
+        let opts = test_options();
+        let mut app = App::new(boot(), &opts);
+        app.key_event(KeyCode::F1, true, false);
+        assert!(app.flight.active);
+        assert_eq!(app.flight.source, flight::FlightSource::Z80);
+        // S — тангаж вверх в матрице (полуряд 1, бит 1).
+        app.key_event(KeyCode::KeyS, true, false);
+        app.forward_input();
+        assert_eq!(
+            app.machine.keyboard[1] & 0x02,
+            0,
+            "в Z80 LINK клавиша не дошла до эмулятора"
+        );
+        // Отпускание обязано снять клавишу.
+        app.key_event(KeyCode::KeyS, false, false);
+        app.forward_input();
+        assert_eq!(app.machine.keyboard[1] & 0x02, 0x02);
+        // Джойстик тоже передаётся.
+        app.key_event(KeyCode::ArrowUp, true, false);
+        app.forward_input();
+        assert_eq!(app.machine.kempston & 0x08, 0x08, "Kempston не дошёл");
+    }
+
+    /// В нативном режиме полёт получает управление из матрицы клавиатуры:
+    /// тангаж и скорость должны меняться от нажатий.
+    #[test]
+    fn native_flight_accepts_keyboard_controls() {
+        let opts = test_options();
+        let mut app = App::new(boot(), &opts);
+        app.key_event(KeyCode::F1, true, false);
+        app.key_event(KeyCode::Tab, true, false);
+        assert_eq!(app.flight.source, flight::FlightSource::Native);
+
+        let controls = flight::Controls::from_matrix(&app.matrix, &app.kempston);
+        assert!(!controls.pitch_up, "S ещё не нажата");
+        // S = тангаж вверх, Space = throttle up.
+        app.key_event(KeyCode::KeyS, true, false);
+        app.key_event(KeyCode::Space, true, false);
+        let controls = flight::Controls::from_matrix(&app.matrix, &app.kempston);
+        assert!(controls.pitch_up, "S не даёт тангаж вверх");
+        assert!(controls.throttle_up, "Space не даёт тягу");
+
+        // Прогоняем ровно тот же цикл, что и кадр полёта в Native-режиме.
+        let before_forward = app.flight.forward();
+        let before_speed = app.flight.speed();
+        let before_pos = app.flight.position();
+        for _ in 0..20 {
+            let controls = flight::Controls::from_matrix(&app.matrix, &app.kempston);
+            app.flight.tick(controls, 1.0 / 50.0);
+        }
+        assert!(
+            app.flight.forward() != before_forward,
+            "корабль не поворачивает"
+        );
+        assert!(app.flight.speed() > before_speed, "скорость не растёт");
+        assert_ne!(app.flight.position(), before_pos, "корабль не летит вперёд");
+    }
+
     /// Имя текущей системы для нативного полёта берётся из памяти игры.
     #[test]
     fn current_system_reads_live_memory() {
@@ -2178,4 +2255,5 @@ mod intro_tests {
             "нажатие O не передано игре"
         );
     }
+
 }
