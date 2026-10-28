@@ -529,8 +529,9 @@ impl Flight {
     }
 
     fn draw_stars_view(&self, frame: &mut Frame, screen: &Screen, view_rot: &Rotation) {
+        let cam = view_rot.transpose();
         for star in &self.stars {
-            let v = view_rot.apply(star.pos);
+            let v = cam.apply(star.pos);
             if v[2] <= NEAR {
                 continue;
             }
@@ -633,14 +634,15 @@ impl Flight {
 
     /// Нарисовать лучи выстрелов противников.
     fn draw_enemy_shots_view(&self, frame: &mut Frame, screen: &Screen, top: i32, bottom: i32, view_rot: &Rotation) {
+        let cam = view_rot.transpose();
         let (xmin, ymin) = (0.0, top as f32);
         let (xmax, ymax) = (frame.width as f32 - 1.0, bottom as f32 - 1.0);
         for shot in &self.enemy_shots {
             let Some((a, b)) = clip_segment_near(shot.from, shot.to) else {
                 continue;
             };
-            let va = view_rot.apply(a);
-            let vb = view_rot.apply(b);
+            let va = cam.apply(a);
+            let vb = cam.apply(b);
             if va[2] <= NEAR && vb[2] <= NEAR {
                 continue;
             }
@@ -680,12 +682,13 @@ impl Flight {
     }
 
     fn draw_bodies_view(&self, frame: &mut Frame, screen: &Screen, view_rot: &Rotation) {
+        let cam = view_rot.transpose();
         // Дальние объекты рисуются первыми, ближние перекрывают их.
         let mut order: Vec<(f32, usize)> = self
             .bodies
             .iter()
             .enumerate()
-            .map(|(i, b)| (view_rot.apply(b.pos)[2], i))
+            .map(|(i, b)| (cam.apply(b.pos)[2], i))
             .collect();
         order.sort_by(|a, b| b.0.total_cmp(&a.0));
         for (vz, i) in order {
@@ -693,19 +696,19 @@ impl Flight {
                 continue;
             }
             let b = &self.bodies[i];
-            let vpos = view_rot.apply(b.pos);
+            let vpos = cam.apply(b.pos);
             if vpos[2] <= NEAR {
                 continue;
             }
             match b.kind {
                 BodyKind::Planet => {
-                    let Some((x, y, r, _)) = self.project_view(b, screen, view_rot) else {
+                    let Some((x, y, r, _)) = self.project_view(b, screen, &cam) else {
                         continue;
                     };
                     fill_disc(frame, x, y, r, b.color);
                 }
                 BodyKind::Sun => {
-                    let Some((x, y, r, _)) = self.project_view(b, screen, view_rot) else {
+                    let Some((x, y, r, _)) = self.project_view(b, screen, &cam) else {
                         continue;
                     };
                     fill_disc(frame, x, y, r, SUN_COLOR);
@@ -714,7 +717,7 @@ impl Flight {
                     let Some(model) = b.model else {
                         continue;
                     };
-                    let vrot = view_rot.mul(&b.rot);
+                    let vrot = cam.mul(&b.rot);
                     render3d::draw_ship(frame, model, &vrot, vpos, screen, b.color);
                 }
             }
