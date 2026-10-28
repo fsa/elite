@@ -97,6 +97,15 @@ const STAR_ANGLE_LR_PER_UNIT: f32 = 2.0 / 256.0;
 /// Поворот звёздного поля за единицу `HighAngleDU` (тангаж).
 const STAR_ANGLE_DU_PER_UNIT: f32 = 1.0 / 256.0;
 
+fn view_rotation(dir: ViewDir) -> Rotation {
+    match dir {
+        ViewDir::Forward => Rotation::identity(),
+        ViewDir::Back => Rotation::axis_angle([0.0, 1.0, 0.0], std::f32::consts::PI),
+        ViewDir::Left => Rotation::axis_angle([0.0, 1.0, 0.0], std::f32::consts::FRAC_PI_2),
+        ViewDir::Right => Rotation::axis_angle([0.0, 1.0, 0.0], -std::f32::consts::FRAC_PI_2),
+    }
+}
+
 // Адреса в памяти Z80 (версия Кладова). Координаты объектов ведутся уже
 // в системе координат игрока: камера стоит в начале координат вдоль +Z.
 /// Минимальный объём памяти, покрывающий все адреса полётных данных
@@ -195,10 +204,31 @@ struct EnemyShot {
     life: f32,
 }
 
+/// Направление вида из кабины.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum ViewDir {
+    /// Вид вперёд (+Z)
+    Forward,
+    /// Вид назад (-Z)
+    Back,
+    /// Вид влево (-X)
+    Left,
+    /// Вид вправо (+X)
+    Right,
+}
+
+impl Default for ViewDir {
+    fn default() -> Self {
+        ViewDir::Forward
+    }
+}
+
 /// Экран полёта по данным Z80.
 pub struct Flight {
     /// Показывать ли вид из кабины вместо ZX-кадра.
     pub active: bool,
+    /// Текущее направление вида из кабины.
+    pub view_dir: ViewDir,
     /// Предыдущий `TempLaser` из Z80 — по его росту ловим выстрел.
     prev_laser_temp: Option<u8>,
     /// Предыдущий передний щит Z80 — по его падению ловим атаку.
@@ -227,6 +257,7 @@ impl Flight {
     pub fn new() -> Self {
         let mut f = Flight {
             active: false,
+            view_dir: ViewDir::Forward,
             prev_laser_temp: None,
             prev_z80_shield: None,
             prev_star_table: None,
@@ -249,6 +280,7 @@ impl Flight {
     /// (ноль оставляет цвет по умолчанию).
     pub fn open(&mut self, planet_color: u32) {
         self.active = true;
+        self.view_dir = ViewDir::Forward;
         self.prev_laser_temp = None;
         self.prev_z80_shield = None;
         self.prev_star_table = None;
@@ -263,6 +295,14 @@ impl Flight {
             self.planet_color = planet_green(planet_color);
         }
         self.stars = make_stars(&mut self.rng, STAR_COUNT);
+    }
+
+    /// Переключить вид по сторонам (F1-F4 в нативном полёте).
+    pub fn set_view_dir(&mut self, dir: ViewDir) {
+        if !self.active {
+            return;
+        }
+        self.view_dir = dir;
     }
 
     /// Закрыть экран и вернуться к ZX-кадру (клавиша `1` или `F1`).
@@ -459,12 +499,16 @@ impl Flight {
             by: 0.0,
         };
 
+        let view_rot = view_rotation(self.view_dir);
+
         frame.set_clip(0, 0, frame.width, view_h);
-        self.draw_stars(frame, &screen);
-        self.draw_bodies(frame, &screen);
-        self.draw_enemy_shots(frame, &screen, 0, view_bottom);
-        self.draw_crosshair(frame, cx, cy, s);
-        if self.laser_timer > 0.0 {
+        self.draw_stars_view(frame, &screen, &view_rot);
+        self.draw_bodies_view(frame, &screen, &view_rot);
+        self.draw_enemy_shots_view(frame, &screen, 0, view_bottom, &view_rot);
+        if self.view_dir == ViewDir::Forward {
+            self.draw_crosshair(frame, cx, cy, s);
+        }
+        if self.laser_timer > 0.0 && self.view_dir == ViewDir::Forward {
             self.draw_laser(frame, cx, cy, view_bottom - 1, s);
         }
         if self.damage_flash > 0.0 {
@@ -484,6 +528,33 @@ impl Flight {
     fn turn_stars(&mut self, turn: &Rotation) {
         for star in &mut self.stars {
             star.pos = turn.apply(star.pos);
+        }
+    }
+
+    fn draw_stars_view(&self, frame: &mut Frame, screen: &Screen, view_rot: &Rotation) {
+        for star in &self.stars {
+            let v = view_rot.apply(star.pos);
+            if v[2] <= NEAR {
+                continue;
+            }
+            let x = screen.cx + v[0] / v[2] * screen.k;
+            let y = screen.cy - v[1] / v[2] * screen.k;
+            if x < 0.0 || y < 0.0 || x >= frame.width as f32 || y >= frame.height as f32 {
+                continue;
+            }
+            let bright = 0.25 + star.mag as f32 / 255.0 * 0.75;
+            let c = 0xFF00_0000
+                | ((bright * 210.0) as u32) << 16
+                | ((bright * 225.0) as u32) << 8
+                | (bright * 255.0) as u32;
+            let (xi, yi) = (x.round() as i32, y.round() as i32);
+            frame.plot(xi, yi, c);
+            if star.mag > 210 {
+                frame.plot(xi + 1, yi, c);
+                frame.plot(xi - 1, yi, c);
+                frame.plot(xi, yi + 1, c);
+                frame.plot(xi, yi - 1, c);
+            }
         }
     }
 
@@ -560,17 +631,22 @@ impl Flight {
     }
 
     /// Нарисовать лучи выстрелов противников.
-    fn draw_enemy_shots(&self, frame: &mut Frame, screen: &Screen, top: i32, bottom: i32) {
+    fn draw_enemy_shots_view(&self, frame: &mut Frame, screen: &Screen, top: i32, bottom: i32, view_rot: &Rotation) {
         let (xmin, ymin) = (0.0, top as f32);
         let (xmax, ymax) = (frame.width as f32 - 1.0, bottom as f32 - 1.0);
         for shot in &self.enemy_shots {
             let Some((a, b)) = clip_segment_near(shot.from, shot.to) else {
                 continue;
             };
-            let ax = screen.cx + a[0] / a[2] * screen.k;
-            let ay = screen.cy - a[1] / a[2] * screen.k;
-            let bx = screen.cx + b[0] / b[2] * screen.k;
-            let by = screen.cy - b[1] / b[2] * screen.k;
+            let va = view_rot.apply(a);
+            let vb = view_rot.apply(b);
+            if va[2] <= NEAR && vb[2] <= NEAR {
+                continue;
+            }
+            let ax = screen.cx + va[0] / va[2].max(NEAR) * screen.k;
+            let ay = screen.cy - va[1] / va[2].max(NEAR) * screen.k;
+            let bx = screen.cx + vb[0] / vb[2].max(NEAR) * screen.k;
+            let by = screen.cy - vb[1] / vb[2].max(NEAR) * screen.k;
             // В оригинале луч не обрывается у перекрестия, а уходит через
             // него до края вида. Продлеваем отрезок в том же направлении и
             // отдаём отсечение прямоугольнику — так выстрел хорошо виден.
@@ -602,32 +678,58 @@ impl Flight {
         }
     }
 
-    fn draw_bodies(&self, frame: &mut Frame, screen: &Screen) {
+    fn draw_bodies_view(&self, frame: &mut Frame, screen: &Screen, view_rot: &Rotation) {
         // Дальние объекты рисуются первыми, ближние перекрывают их.
         let mut order: Vec<(f32, usize)> = self
             .bodies
             .iter()
             .enumerate()
-            .map(|(i, b)| (b.pos[2], i))
+            .map(|(i, b)| (view_rot.apply(b.pos)[2], i))
             .collect();
         order.sort_by(|a, b| b.0.total_cmp(&a.0));
-        for (z, i) in order {
-            if z <= NEAR {
+        for (vz, i) in order {
+            if vz <= NEAR {
                 continue;
             }
             let b = &self.bodies[i];
+            let vpos = view_rot.apply(b.pos);
+            if vpos[2] <= NEAR {
+                continue;
+            }
             match b.kind {
-                BodyKind::Planet => self.draw_planet(frame, b, screen),
-                BodyKind::Sun => self.draw_sun(frame, b, screen),
+                BodyKind::Planet => {
+                    let Some((x, y, r, _)) = self.project_view(b, screen, view_rot) else {
+                        continue;
+                    };
+                    fill_disc(frame, x, y, r, b.color);
+                }
+                BodyKind::Sun => {
+                    let Some((x, y, r, _)) = self.project_view(b, screen, view_rot) else {
+                        continue;
+                    };
+                    fill_disc(frame, x, y, r, SUN_COLOR);
+                }
                 BodyKind::Ship | BodyKind::Station => {
                     let Some(model) = b.model else {
                         continue;
                     };
-                    // Координаты Z80 уже в системе вида, камера — в начале.
-                    render3d::draw_ship(frame, model, &b.rot, b.pos, screen, b.color);
+                    let vrot = view_rot.mul(&b.rot);
+                    render3d::draw_ship(frame, model, &vrot, vpos, screen, b.color);
                 }
             }
         }
+    }
+
+    /// Проекция центра объекта: экранные координаты и радиус диска.
+    fn project_view(&self, b: &Body, screen: &Screen, view_rot: &Rotation) -> Option<(f32, f32, f32, f32)> {
+        let v = view_rot.apply(b.pos);
+        if v[2] <= NEAR {
+            return None;
+        }
+        let x = screen.cx + v[0] / v[2] * screen.k;
+        let y = screen.cy - v[1] / v[2] * screen.k;
+        let r = b.radius / v[2] * screen.k;
+        Some((x, y, r, v[2]))
     }
 
     /// Проекция центра объекта: экранные координаты и радиус диска.

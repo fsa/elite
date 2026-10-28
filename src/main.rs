@@ -962,11 +962,23 @@ impl<'a> App<'a> {
             self.menu_key(code);
             return;
         }
-        // Экран полёта: F1/1 возвращают Z80-кадр, Esc открывает меню паузы
-        // (оно рисуется поверх экрана, а симуляция замирает).
+        // Экран полёта: F1-4 переключают вид из кабины, F1/1 возвращают Z80-кадр,
+        // Esc открывает меню паузы (оно рисуется поверх экрана, а симуляция замирает).
         if self.flight.active {
             match code {
-                KeyCode::F1 | KeyCode::Digit1 => self.flight.close(),
+                KeyCode::F1 => {
+                    self.flight.set_view_dir(crate::flight::ViewDir::Forward);
+                }
+                KeyCode::F2 => {
+                    self.flight.set_view_dir(crate::flight::ViewDir::Back);
+                }
+                KeyCode::F3 => {
+                    self.flight.set_view_dir(crate::flight::ViewDir::Left);
+                }
+                KeyCode::F4 => {
+                    self.flight.set_view_dir(crate::flight::ViewDir::Right);
+                }
+                KeyCode::Digit1 => self.flight.close(),
                 KeyCode::Escape => {
                     self.menu = true;
                     self.menu_sel = 0;
