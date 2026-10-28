@@ -299,7 +299,10 @@ impl Flight {
         if !self.active {
             return;
         }
-        self.view_dir = dir;
+        if self.view_dir != dir {
+            self.view_dir = dir;
+            self.stars = make_stars(&mut self.rng, self.stars.len().max(STAR_COUNT));
+        }
     }
 
     /// Закрыть экран и вернуться к ZX-кадру (клавиша `1` или `F1`).
@@ -580,23 +583,47 @@ impl Flight {
         };
         let b = b.max(1.0);
         // Оригинал применяет растяжение раз в игровой такт (~5.5 Гц).
-        // В нативном кадре 50 Гц делаем те же проходы по тактам,
-        // а не каждый кадр, чтобы темп совпадал с оригиналом.
         let grow = (1.0 + b / STAR_ZOOM_DIVISOR);
+        let cam = view_rotation(self.view_dir).transpose();
         let mut rng = self.rng;
         for star in &mut self.stars {
-            star.pos[0] *= grow;
-            star.pos[1] *= grow;
-            let z = star.pos[2];
+            let v = cam.apply(star.pos);
+            if v[2] <= NEAR {
+                *star = spawn_star(&mut rng);
+                continue;
+            }
+            match self.view_dir {
+                ViewDir::Forward => {
+                    star.pos[0] *= grow;
+                    star.pos[1] *= grow;
+                }
+                ViewDir::Back => {
+                    star.pos[0] *= 1.0 / grow.max(1.0001);
+                    star.pos[1] *= 1.0 / grow.max(1.0001);
+                    star.pos[2] = -star.pos[2].abs().max(1.0);
+                }
+                ViewDir::Left => {
+                    star.pos[1] *= grow;
+                    star.pos[2] *= grow;
+                    star.pos[0] = -star.pos[0].abs().max(1.0);
+                }
+                ViewDir::Right => {
+                    star.pos[1] *= grow;
+                    star.pos[2] *= grow;
+                    star.pos[0] = star.pos[0].abs().max(1.0);
+                }
+            }
+            let v2 = cam.apply(star.pos);
+            let z = v2[2];
             let radius = if z > NEAR {
-                (star.pos[0] * star.pos[0] + star.pos[1] * star.pos[1]).sqrt() / z
+                (v2[0] * v2[0] + v2[1] * v2[1]).sqrt() / z
             } else {
                 f32::INFINITY
             };
-            let distance2 = star.pos.iter().map(|v| v * v).sum::<f32>();
+            let distance2 = v2.iter().map(|val| val * val).sum::<f32>();
             if radius <= STAR_RESPAWN_RADIUS
                 && distance2 <= STAR_MAX_DISTANCE * STAR_MAX_DISTANCE
-                && star.pos.iter().all(|v| v.is_finite())
+                && v2.iter().all(|val| val.is_finite())
             {
                 continue;
             }
