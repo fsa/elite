@@ -8,7 +8,6 @@ mod hdmap;
 mod machine;
 mod native;
 mod render3d;
-mod flight_model;
 mod shipdata;
 mod splash;
 mod z80;
@@ -121,7 +120,7 @@ fn parse_args() -> Options {
                 println!("  --native   включить нативные (Rust) замены подпрограмм");
                 println!("  --save FILE фиксированный файл командира вместо диалога");
                 println!("  --fullscreen запуск в полноэкранном режиме (borderless)");
-                println!("В игре: F1 — нативный полёт (Rust; назад — 1 или F1),");
+                println!("В игре: F1 — экран полёта (нативный рендер по данным Z80; назад — 1 или F1),");
                 println!("        F10 — карта галактики (нативная), F4 — закупка");
                 println!("        оборудования (нативная), Esc — меню паузы");
                 println!("        (продолжить/сохранить/загрузить/выход),");
@@ -137,7 +136,7 @@ fn parse_args() -> Options {
                 println!();
                 println!("Управление:");
                 println!("  Esc        меню паузы (продолжить/сохранить/загрузить/выход)");
-                println!("  F1         нативный полёт (в игре; возврат — 1 или F1)");
+                println!("  F1         экран полёта (в игре; возврат — 1 или F1)");
                 println!("  F4         закупка оборудования (нативный экран)");
                 println!("  F11, Alt+Enter полный экран");
                 println!("  Ctrl+Q     выход из игры");
@@ -148,10 +147,10 @@ fn parse_args() -> Options {
                 println!("  ближайшая планета, +/- или колесо — масштаб, F1 — чит:");
                 println!("  телепорт на станцию выбранной планеты, Esc — закрыть.");
                 println!();
-                println!("Нативный полёт (F1): S/X или ↑/↓ — тангаж, N/M или ←/→ —");
-                println!("  крен, Space — тяга вперёд, Shift — торможение,");
-                println!("  A/RightCtrl — огонь. Tab — источник (Native/Z80 LINK),");
-                println!("  Esc — меню паузы, 1 или F1 — Z80.");
+                println!("Экран полёта (F1): управление как в оригинале — S/X или");
+                println!("  ↑/↓ — тангаж, N/M или ←/→ — крен, Space — ускорение,");
+                println!("  Shift — торможение, A/RightCtrl — огонь; Esc — меню паузы,");
+                println!("  1 или F1 — назад к Z80-кадру.");
                 println!();
                 println!("Закупка оборудования (F4): клик/Enter — купить,");
                 println!("  1-9 (+вторая цифра) — номер товара, стрелки — выбор,");
@@ -347,10 +346,10 @@ fn cockpit_layout(_opts: &Options) -> cockpit::CockpitLayout {
     cockpit::KLADOV_COCKPIT
 }
 
-/// Имя и цвет текущей системы из живой памяти Z80 — начальные данные для
-/// нативного полёта. Если координаты не совпали ни с одной звездой (например,
+/// Цвет планеты текущей системы из живой памяти Z80 — оттенок планеты на
+/// экране полёта. Если координаты не совпали ни с одной звездой (например,
 /// игра ещё на заставке), берётся первая планета галактики.
-fn current_system(mem: &[u8], _kladov: bool) -> (String, u32) {
+fn current_planet_color(mem: &[u8]) -> u32 {
     let layout = galaxy::KLADOV_GALAXY;
     let seed: [u8; 6] = mem
         .get(layout.seed..layout.seed + 6)
@@ -363,14 +362,7 @@ fn current_system(mem: &[u8], _kladov: bool) -> (String, u32) {
         .iter()
         .find(|p| p.x == x && p.y_raw == y)
         .unwrap_or(&planets[0]);
-    let digraphs = mem.get(layout.digraphs..layout.digraphs + 64).unwrap_or(&[]);
-    let name = galaxy::name(planet.state, digraphs);
-    let name = if name.trim().is_empty() {
-        "UNKNOWN".to_string()
-    } else {
-        name
-    };
-    (name, galaxy::color(planet.state))
+    galaxy::color(planet.state)
 }
 
 /// Start the PipeWire audio output unless muted. Returns `None` (with a
@@ -699,8 +691,8 @@ fn run_window(machine: Spectrum, opts: &Options) {
 /// В игре показывается полный ZX-кадр 256x192 (вид из кабины и родная
 /// растровая панель оригинала) целым множителем по центру окна (см.
 /// [`display::layout`]), поверх — HD-слой [`Spectrum::hd`](machine::Spectrum).
-/// Нативный кокпит (`src/cockpit.rs`) — черновик, он рисуется только на
-/// заставке. Отдельные нативные экраны занимают окно целиком.
+/// Нативный кокпит (`src/cockpit.rs`) рисуется на заставке и на экране
+/// полёта. Отдельные нативные экраны занимают окно целиком.
 ///
 /// Клавиши читаются как `physical_key` (позиция клавиши), поэтому активная
 /// раскладка (в частности русская) на управление не влияет.
@@ -718,9 +710,9 @@ struct App<'a> {
     hdmap: hdmap::Map,
     /// Нативный экран закупки оборудования (F4) — заменяет экран игры.
     shop: equip::Shop,
-    /// Нативный движок полёта (F1) — альтернатива Z80-полёту. Пока активен,
-    /// окно занимает [`flight::Flight`]; эмулятор крутится в фоне ради
-    /// оригинального звука (а в Z80 LINK ещё и задаёт мир).
+    /// Экран полёта (F1) — нативный рендер по данным Z80. Пока он активен,
+    /// окно занимает вид из кабины и нативная приборная панель; эмулятор
+    /// продолжает работать и задаёт мир, поэтому ввод идёт в игру.
     flight: flight::Flight,
     /// Нативная заставка (титульный экран): пока игра на интро, эмуляция не
     /// идёт, а окно занимает нативный рендер (`splash`).
@@ -809,7 +801,7 @@ impl<'a> App<'a> {
             return;
         }
         let attrs = Window::default_attributes()
-            .with_title("Elite — F1: нативный полёт, Esc: меню, F10: карта, F4: закупка, F11: полный экран, Ctrl+Q: выход")
+            .with_title("Elite — F1: полёт, Esc: меню, F10: карта, F4: закупка, F11: полный экран, Ctrl+Q: выход")
             .with_inner_size(LogicalSize::new(4.0 * SRC_W as f64, 4.0 * SRC_H as f64));
         let window = match event_loop.create_window(attrs) {
             Ok(w) => Rc::new(w),
@@ -970,14 +962,11 @@ impl<'a> App<'a> {
             self.menu_key(code);
             return;
         }
-        // Нативный полёт: F1/1 возвращают Z80-версию, Tab переключает источник (Native/Z80), Esc открывает меню
-        // паузы (оно рисуется поверх нативного экрана, а полёт замирает).
+        // Экран полёта: F1/1 возвращают Z80-кадр, Esc открывает меню паузы
+        // (оно рисуется поверх экрана, а симуляция замирает).
         if self.flight.active {
             match code {
                 KeyCode::F1 | KeyCode::Digit1 => self.flight.close(),
-                KeyCode::Tab => {
-                    self.flight.toggle_source();
-                }
                 KeyCode::Escape => {
                     self.menu = true;
                     self.menu_sel = 0;
@@ -986,21 +975,13 @@ impl<'a> App<'a> {
             }
             return;
         }
-        // F1 — нативный движок полёта. Доступен только в игре (не на
-        // заставке); повторный F1 или клавиша 1 возвращают Z80.
+        // F1 — экран полёта (нативный рендер по данным Z80). Доступен только
+        // в игре (не на заставке); повторный F1 или клавиша 1 возвращают
+        // ZX-кадр.
         if code == KeyCode::F1 {
             if !self.machine.intro_seen {
-                let layout = cockpit_layout(self.opts);
-                let mem = &self.machine.mem;
-                let val = |addr: u16| mem.get(addr as usize).copied().unwrap_or(0);
-                let (system, planet_color) = current_system(mem, true);
-                self.flight.open(flight::FlightSeed {
-                    system: &system,
-                    speed: val(layout.speed),
-                    fuel: val(layout.fuel),
-                    shield: val(layout.shield_front),
-                    planet_color,
-                });
+                let planet_color = current_planet_color(&self.machine.mem);
+                self.flight.open(planet_color);
                 self.hdmap.close();
                 self.shop.close();
                 self.menu = false;
@@ -1052,15 +1033,11 @@ impl<'a> App<'a> {
                 1 => {
                     if !intro {
                         do_save(&mut self.machine, self.opts, &mut self.last_path);
-                        // Сохранение относится к Z80-игре; нативный полёт
-                        // закрываем, чтобы не продолжать его со старым миром.
-                        self.flight.close();
                         self.menu = false;
                     }
                 }
                 2 => {
                     do_load(&mut self.machine, self.opts, &mut self.last_path);
-                    self.flight.close();
                     self.menu = false;
                 }
                 _ => self.quit = true,
@@ -1083,7 +1060,7 @@ impl<'a> App<'a> {
 
     /// Перенести состояние клавиатуры и джойстика в эмулятор.
     fn apply_input(&mut self) {
-        if self.menu || self.hdmap.active || self.shop.active || self.flight.active {
+        if self.menu || self.hdmap.active || self.shop.active {
             self.machine.release_all_keys();
             self.machine.release_joystick();
             return;
@@ -1106,7 +1083,7 @@ impl<'a> App<'a> {
     }
 
     /// Передать матрицу клавиш и джойстик в эмулятор без проверки нативных
-    /// экранов. Нужно для Z80 LINK: там под нативным рендером продолжает
+    /// экранов. Нужно экрану полёта: под нативным рендером продолжает
     /// работать эмулятор, и ему требуется живой ввод.
     fn forward_input(&mut self) {
         self.machine.release_all_keys();
@@ -1159,39 +1136,22 @@ impl<'a> App<'a> {
             || self.machine.intro_seen
             || self.flight.active
         {
-            // Отдельный нативный экран (карта/закупка/заставка/полёт): HD-слой во
-            // всё окно, игра на паузе. Слой непрозрачный и покрывает окно
-            // целиком, поэтому композитится в левый верхний угол (0, 0).
+            // Отдельный нативный экран (карта/закупка/заставка/полёт): HD-слой
+            // во всё окно. Карта, закупка и заставка ставят игру на паузу; под
+            // экраном полёта эмулятор продолжает работать. Слой непрозрачный и
+            // покрывает окно целиком, поэтому композитится в угол (0, 0).
             self.machine.hd.resize(size.width as usize, size.height as usize);
             self.machine.hd.clear(display::TRANSPARENT);
             if self.flight.active {
-                // Нативный полёт. В режиме Z80-linked эмулятор продолжает
-                // работать и задаёт мир; в режиме Native он тоже работает —
-                // ради оригинального звука и ввода, — но сцену не задаёт.
-                if matches!(self.flight.source, flight::FlightSource::Z80) {
-                    if !self.menu {
-                        // Z80 LINK: эмулятор продолжает жить, ввод идёт в игру.
-                        self.forward_input();
-                        self.machine.run_frame();
-                        self.flight.sync_from_z80(&self.machine.mem, true);
-                        // Звёзды/таймеры двигаются и в Z80 LINK — скорость
-                        // берётся из памяти игры в sync_from_z80.
-                        self.flight
-                            .tick(flight::Controls::default(), 1.0 / 50.0);
-                        self.play_frame_audio();
-                    } else {
-                        self.machine.release_all_keys();
-                        self.machine.release_joystick();
-                    }
-                } else if !self.menu {
-                    // Native: эмулятор крутится в фоне, чтобы звук оставался
-                    // оригинальным. Нативное движение считает flight.tick.
+                // Экран полёта: рисует то, что посчитал Z80, поэтому эмулятор
+                // продолжает работать, а ввод идёт в игру. На паузе (меню)
+                // симуляция замирает.
+                if !self.menu {
                     self.forward_input();
                     self.machine.run_frame();
+                    self.flight.sync_from_z80(&self.machine.mem);
+                    self.flight.tick(1.0 / 50.0);
                     self.play_frame_audio();
-                    let controls =
-                        flight::Controls::from_matrix(&self.matrix, &self.kempston);
-                    self.flight.tick(controls, 1.0 / 50.0);
                 } else {
                     self.machine.release_all_keys();
                     self.machine.release_joystick();
@@ -1236,9 +1196,14 @@ impl<'a> App<'a> {
         self.mouse_wheel_down = false;
         self.machine.render_rgba(&mut self.buf);
         if self.flight.active {
-            // Нативный полёт: звёзды, планета, солнце, станция и корабли —
-            // тем же каркасным рендером, что и заставка.
-            self.flight.draw(&mut self.machine.hd, &self.font);
+            // Экран полёта: нативный вид в верхней части окна (по данным Z80)
+            // и та же приборная панель, что на заставке, — внизу.
+            let g = cockpit::panel_geometry(size.width, size.height);
+            self.flight
+                .draw(&mut self.machine.hd, g.panel_y.max(1));
+            let cl = cockpit_layout(self.opts);
+            self.cockpit
+                .draw(&mut self.machine.hd, &self.machine.mem, &self.font, cl);
             if self.menu {
                 draw_pause_menu(&mut self.machine.hd, &self.font, self.menu_sel, false);
             }
@@ -1777,21 +1742,27 @@ mod intro_tests {
         assert!(!app.shop.active, "F4 не закрыл экран закупки");
     }
 
-    /// F1 открывает нативный движок полёта: ввод забирает полёт, а не
-    /// `apply_input`, F10/F4 не открываются поверх полёта, а 1 или F1
-    /// возвращают Z80.
+    /// F1 открывает экран полёта: рендер идёт по данным Z80, ввод уходит в
+    /// эмулятор, F10/F4 не открываются поверх, а 1 или F1 возвращают ZX-кадр.
     #[test]
-    fn f1_opens_and_closes_native_flight() {
+    fn f1_opens_and_closes_flight() {
         let opts = test_options();
         let mut app = App::new(boot(), &opts);
         assert!(!app.flight.active);
         app.key_event(KeyCode::F1, true, false);
-        assert!(app.flight.active, "F1 не открыл нативный полёт");
+        assert!(app.flight.active, "F1 не открыл экран полёта");
         assert!(!app.hdmap.active && !app.shop.active);
 
-        // Ввод принадлежит нативному полёту, в эмулятор не попадает.
+        // Под экраном продолжает работать Z80, поэтому ввод должен доходить
+        // до эмулятора.
+        app.key_event(KeyCode::KeyS, true, false);
         app.apply_input();
-        assert_eq!(app.machine.kempston, 0, "ввод не должен уходить в игру");
+        assert_eq!(
+            app.machine.keyboard[1] & 0x02,
+            0,
+            "ввод не дошёл до эмулятора под экраном полёта"
+        );
+        app.key_event(KeyCode::KeyS, false, false);
 
         // Поверх полёта карта и закупка не открываются.
         app.key_event(KeyCode::F10, true, false);
@@ -1799,39 +1770,38 @@ mod intro_tests {
         app.key_event(KeyCode::F4, true, false);
         assert!(!app.shop.active, "F4 открыл закупку поверх полёта");
 
-        // Esc — пауза, но движок остаётся выбранным; Esc снова — продолжить.
+        // Esc — пауза, но экран остаётся выбранным; Esc снова — продолжить.
         app.key_event(KeyCode::Escape, true, false);
-        assert!(app.menu && app.flight.active, "Esc не открыл меню полёта");
+        assert!(app.menu && app.flight.active, "Esc не открыл меню");
         app.key_event(KeyCode::Escape, true, false);
         assert!(!app.menu && app.flight.active, "Esc не вернул в полёт");
 
-        // Клавиша 1 — назад к Z80-версии.
+        // Клавиша 1 — назад к Z80-кадру.
         app.key_event(KeyCode::Digit1, true, false);
-        assert!(!app.flight.active, "1 не закрыла нативный полёт");
+        assert!(!app.flight.active, "1 не закрыла экран полёта");
 
         // Повторное открытие и закрытие по F1.
         app.key_event(KeyCode::F1, true, false);
         assert!(app.flight.active);
         app.key_event(KeyCode::F1, true, false);
-        assert!(!app.flight.active, "F1 не закрыл нативный полёт");
+        assert!(!app.flight.active, "F1 не закрыл экран полёта");
     }
 
-    /// Z80 LINK: под нативным рендером эмулятор продолжает работать, поэтому
-    /// ввод обязательно должен доходить до Z80-игры (иначе полёт «зависает»).
+    /// Под экраном полёта эмулятор продолжает работать, поэтому ввод
+    /// обязательно должен доходить до Z80-игры (иначе полёт «зависает»).
     #[test]
-    fn z80_link_forwards_input_to_emulator() {
+    fn flight_forwards_input_to_emulator() {
         let opts = test_options();
         let mut app = App::new(boot(), &opts);
         app.key_event(KeyCode::F1, true, false);
         assert!(app.flight.active);
-        assert_eq!(app.flight.source, flight::FlightSource::Z80);
         // S — тангаж вверх в матрице (полуряд 1, бит 1).
         app.key_event(KeyCode::KeyS, true, false);
         app.forward_input();
         assert_eq!(
             app.machine.keyboard[1] & 0x02,
             0,
-            "в Z80 LINK клавиша не дошла до эмулятора"
+            "клавиша не дошла до эмулятора"
         );
         // Отпускание обязано снять клавишу.
         app.key_event(KeyCode::KeyS, false, false);
@@ -1843,47 +1813,11 @@ mod intro_tests {
         assert_eq!(app.machine.kempston & 0x08, 0x08, "Kempston не дошёл");
     }
 
-    /// В нативном режиме полёт получает управление из матрицы клавиатуры:
-    /// тангаж и скорость должны меняться от нажатий.
+    /// Цвет планеты для экрана полёта берётся из памяти игры.
     #[test]
-    fn native_flight_accepts_keyboard_controls() {
-        let opts = test_options();
-        let mut app = App::new(boot(), &opts);
-        app.key_event(KeyCode::F1, true, false);
-        app.key_event(KeyCode::Tab, true, false);
-        assert_eq!(app.flight.source, flight::FlightSource::Native);
-
-        let controls = flight::Controls::from_matrix(&app.matrix, &app.kempston);
-        assert!(!controls.pitch_up, "S ещё не нажата");
-        // S = тангаж вверх, Space = throttle up.
-        app.key_event(KeyCode::KeyS, true, false);
-        app.key_event(KeyCode::Space, true, false);
-        let controls = flight::Controls::from_matrix(&app.matrix, &app.kempston);
-        assert!(controls.pitch_up, "S не даёт тангаж вверх");
-        assert!(controls.throttle_up, "Space не даёт тягу");
-
-        // Прогоняем ровно тот же цикл, что и кадр полёта в Native-режиме.
-        let before_forward = app.flight.forward();
-        let before_speed = app.flight.speed();
-        let before_pos = app.flight.position();
-        for _ in 0..20 {
-            let controls = flight::Controls::from_matrix(&app.matrix, &app.kempston);
-            app.flight.tick(controls, 1.0 / 50.0);
-        }
-        assert!(
-            app.flight.forward() != before_forward,
-            "корабль не поворачивает"
-        );
-        assert!(app.flight.speed() > before_speed, "скорость не растёт");
-        assert_ne!(app.flight.position(), before_pos, "корабль не летит вперёд");
-    }
-
-    /// Имя текущей системы для нативного полёта берётся из памяти игры.
-    #[test]
-    fn current_system_reads_live_memory() {
+    fn current_planet_color_reads_live_memory() {
         let m = boot();
-        let (name, color) = current_system(&m.mem, false);
-        assert!(!name.is_empty(), "имя текущей системы пустое");
+        let color = current_planet_color(&m.mem);
         assert_eq!(color >> 24, 0xFF, "цвет планеты должен быть непрозрачным");
     }
 
@@ -1947,7 +1881,7 @@ mod intro_tests {
         app.key_event(KeyCode::F1, true, false);
         assert!(
             !app.flight.active,
-            "F1 не должен открывать нативный полёт на заставке Кладова"
+            "F1 не должен открывать экран полёта на заставке Кладова"
         );
     }
 
@@ -2205,6 +2139,48 @@ mod intro_tests {
         }
         assert!(started, "SPACE не запустил игру Кладова");
     }
+
+    /// Экран полёта: вид из кабины занимает окно до панели, ниже — нативный
+    /// кокпит. Вместе они покрывают всё окно без прозрачных щелей.
+    /// `ELITE_DUMP_FLIGHT_SCREEN=<file>` сохраняет кадр в PPM.
+    #[test]
+    fn flight_screen_combines_view_and_cockpit() {
+        let base = env!("CARGO_MANIFEST_DIR");
+        let m = boot();
+        let mut fl = flight::Flight::new();
+        fl.open(current_planet_color(&m.mem));
+        fl.sync_from_z80(&m.mem);
+        let (w, h) = (1280usize, 960usize);
+        let mut hd = display::Frame::new(w, h);
+        let g = cockpit::panel_geometry(w as u32, h as u32);
+        fl.draw(&mut hd, g.panel_y.max(1));
+        // Выше панели вид непрозрачен, ниже — прозрачен (там панель).
+        for y in 0..g.panel_y as usize {
+            assert!(
+                hd.pixels()[y * w..(y + 1) * w]
+                    .iter()
+                    .all(|&p| p >> 24 == 0xFF),
+                "вид из кабины не покрывает строку {y}"
+            );
+        }
+        for y in g.panel_y as usize..h {
+            assert!(
+                hd.pixels()[y * w..(y + 1) * w].iter().all(|&p| p == 0),
+                "вид залез на панель в строке {y}"
+            );
+        }
+        let font = &m.mem[PAUSE_FONT_ADDR..PAUSE_FONT_ADDR + PAUSE_FONT_LEN];
+        cockpit::Cockpit::new().draw(&mut hd, &m.mem, font, cockpit_layout(&test_options()));
+        assert!(
+            hd.pixels().iter().all(|&p| p >> 24 == 0xFF),
+            "на стыке вида и панели осталась прозрачная щель"
+        );
+        if let Ok(path) = env::var("ELITE_DUMP_FLIGHT_SCREEN") {
+            std::fs::create_dir_all(format!("{base}/tmp")).unwrap();
+            write_ppm(&path, hd.pixels(), w, h);
+        }
+    }
+
 
     /// Меню паузы рисует затемнённый пункт SAVE на заставке.
     #[test]
