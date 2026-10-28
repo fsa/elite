@@ -604,12 +604,12 @@ impl Flight {
                 }
                 ViewDir::Left => {
                     star.pos[1] *= grow;
-                    star.pos[2] *= grow;
+                    star.pos[2] *= 1.0 / grow.max(1.0001);
                     star.pos[0] = -star.pos[0].abs().max(1.0);
                 }
                 ViewDir::Right => {
                     star.pos[1] *= grow;
-                    star.pos[2] *= grow;
+                    star.pos[2] *= 1.0 / grow.max(1.0001);
                     star.pos[0] = star.pos[0].abs().max(1.0);
                 }
             }

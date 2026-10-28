@@ -973,10 +973,10 @@ impl<'a> App<'a> {
                     self.flight.set_view_dir(crate::flight::ViewDir::Back);
                 }
                 KeyCode::F3 => {
-                    self.flight.set_view_dir(crate::flight::ViewDir::Right);
+                    self.flight.set_view_dir(crate::flight::ViewDir::Left);
                 }
                 KeyCode::F4 => {
-                    self.flight.set_view_dir(crate::flight::ViewDir::Left);
+                    self.flight.set_view_dir(crate::flight::ViewDir::Right);
                 }
                 KeyCode::Digit1 => self.flight.close(),
                 KeyCode::Escape => {
