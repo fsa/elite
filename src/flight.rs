@@ -1,7 +1,7 @@
 //! Нативный движок космического полёта (клавиша F1).
 //!
-//! Это альтернатива Z80-полёту: пока движок активен, эмулятор стоит, а окно
-//! целиком занимает нативный рендер. Возврат к Z80 — клавиша `1` (или `F1`).
+//! Это альтернатива Z80-полёту: пока движок активен, окно целиком занимает
+//! нативный рендер. Возврат к Z80 — клавиша `1` (или `F1`).
 //! Оформление повторяет титульный экран: чёрный фон, заголовок
 //! `---- E L I T E ----` шрифтом сетки ZX, жёлтая подсказка внизу.
 //! Объекты (корабли, станция) рисуются тем же каркасным рендером, что и
@@ -22,8 +22,10 @@
 //! * щиты, топливо, скорость и температура лазера на нижней панели.
 //!
 //! Движок не пишет в память Z80: возврат по `1` продолжает игру с того же
-//! места, где она была поставлена на паузу. Скорость/топливо/щиты при входе
-//! читаются из памяти игры как начальные значения.
+//! места. В Native эмулятор всё же крутится в фоне — ради оригинального
+//! биперного звука; в Z80 LINK он ещё и задаёт координаты мира.
+//! Скорость/топливо/щиты при входе читаются из памяти игры как начальные
+//! значения.
 
 use crate::display::Frame;
 pub use crate::flight_model::Controls;
@@ -42,34 +44,125 @@ const CYAN: u32 = 0xFF00_FFFF;
 const RED: u32 = 0xFFFF_4040;
 /// Тусклый серый — второстепенные подписи.
 const DIM: u32 = 0xFF80_8080;
+/// Солнце — ровный жёлтый диск.
+const SUN_COLOR: u32 = 0xFFFF_FF00;
 
-/// Максимальная скорость в игровых единицах в секунду.
-const MAX_SPEED: f32 = 1400.0;
+/// Максимальная скорость в единицах `HighDeltaSpeed` (0..=31).
+///
+/// В оригинале `DeltaSpeed` — 16-битное слово с шагом `0xA0` на кадр, а его
+/// старший байт `HighDeltaSpeed` меняется на 1 за 1/0.625 кадра. Полная шкала
+/// заканчивается на 31: выше игра скорость не поднимает.
+const SPEED_MAX: f32 = 31.0;
+/// Стартовая скорость оригинала (`HighDeltaSpeed = 12`).
+const SPEED_START: f32 = 12.0;
+/// Прирост/сброс скорости в единицах `HighDeltaSpeed` в секунду.
+///
+/// `DeltaSpeed` меняется на `0xA0` за кадр 50 Гц, то есть старший байт — на
+/// `0xA0 / 256 * 50 = 31.25` единицы в секунду.
+const SPEED_ACCEL: f32 = 31.25;
+/// Мировых единиц на единицу `HighDeltaSpeed` в секунду.
+///
+/// По замерам оригинала планета уходит примерно на 0.2 единицы координат за
+/// кадр на каждую единицу скорости (`speed=12` — 2.6/кадр, `speed=31` —
+/// 7.68/кадр). При 50 Гц это 10 мировых единиц в секунду.
+const WORLD_SPEED_PER_UNIT: f32 = 10.0;
 /// Угловая скорость управления (радиан в секунду).
 const ROT_SPEED: f32 = 1.15;
-/// Ускорение/торможение (доля максимальной скорости в секунду).
-const ACCEL: f32 = 0.42;
-const DECEL: f32 = 0.65;
 /// Перегрев лазера: прирост за выстрел и остывание в секунду.
 const LASER_HEAT: f32 = 0.16;
 const LASER_COOL: f32 = 0.30;
 /// Сколько секунд виден луч лазера.
 const LASER_TIME: f32 = 0.10;
+/// Сколько секунд виден луч выстрела противника.
+///
+/// В оригинале луч живёт один кадр (флаг `oFlags` сбрасывается сразу после
+/// печати), но при 50 Гц это почти незаметно. Чуть более долгий след делает
+/// атаку читаемой, не превращая её в постоянную линию.
+const ENEMY_LASER_TIME: f32 = 0.14;
 /// Ближняя плоскость отсечения.
 const NEAR: f32 = 0.5;
+/// Число звёзд на экране по умолчанию.
+///
+/// В оригинале таблица `byte_7A39` содержит ровно 16 звёзд на кадр
+/// 256×192. На современном разрешении такое поле выглядит почти пустым,
+/// поэтому фактическое число звёзд считается от площади кадра
+/// (см. [`star_count_for`]), а эта константа задаёт минимум.
+const STAR_COUNT: usize = 16;
+/// Площадь кадра, на которую приходится одна звезда.
+///
+/// В оригинале одна звезда на ~3072 пикселя. Здесь плотность вдвое ниже:
+/// современная точка — это 1 px, и слишком густое поле превращается в шум.
+const STAR_AREA_PER_STAR: f32 = 6_000.0;
+/// Пределы числа звёзд, чтобы поле не пустело и не забивало экран.
+const STAR_COUNT_MIN: usize = 16;
+const STAR_COUNT_MAX: usize = 400;
+/// Делитель шага звёздного поля.
+///
+/// В оригинале координаты звёзд растягиваются от центра примерно на
+/// `(HighDeltaSpeed >> 1) + 1` единиц за кадр. Прямой перенос этого шага в
+/// перспективную проекцию даёт слишком резкое движение, поэтому темп подобран
+/// так, чтобы на крейсерской скорости звезда пересекала кадр за несколько
+/// секунд, как в оригинале.
+const STAR_ZOOM_DIVISOR: f32 = 3000.0;
+/// Радиус (`x/z` или `y/z`), после которого звезда ушла за кадр.
+///
+/// Оригинал не «приближает» звезду в бесконечность: когда её координата
+/// выходит за край, она рождается заново ближе к центру. Тот же порог не даёт
+/// звезде разгоняться в огромную полосу на последних кадрах.
+const STAR_RESPAWN_RADIUS: f32 = 1.8;
+/// Абсолютный предел расстояния до звезды.
+///
+/// После поворотов камеры большая боковая координата может стать глубиной,
+/// поэтому одного углового порога мало: без предела звезда уползала бы всё
+/// дальше от начала координат.
+const STAR_MAX_DISTANCE: f32 = 15_000.0;
+/// Шаг растяжения звёзд на такте J-драйва.
+///
+/// В `PrintStars` J-драйв вызывает `sub_78B1` три раза: со скоростями
+/// `0x1E`, `0x10` и `0x10`, то есть с `b = 16`, `9` и `9`. Сумма `34`
+/// даёт тот же разгон за такт, как три прохода оригинала.
+const STAR_FAST_SCROLL_B: f32 = 34.0;
+/// Поворот звёздного поля за единицу `HighAngleLR` (крен).
+///
+/// В `CalcNewCrdObj_Pl` крен применяется как `angleLR * 2 / 256`, а тангаж —
+/// как `angleDU / 256`. Это малые углы за игровой такт, а не за кадр 50 Гц:
+/// оригинал пересчитывает координаты примерно на 5.5 Гц, поэтому в Z80 LINK
+/// поворот звёзд применяется только на такте (см. `sync_from_z80`).
+const STAR_ANGLE_LR_PER_UNIT: f32 = 2.0 / 256.0;
+/// Поворот звёздного поля за единицу `HighAngleDU` (тангаж).
+const STAR_ANGLE_DU_PER_UNIT: f32 = 1.0 / 256.0;
 
 // Адреса в памяти Z80 (версия Кладова). Координаты объектов ведутся уже
 // в системе координат игрока: камера стоит в начале координат вдоль +Z.
-/// Минимальный объём памяти, покрывающий все адреса полётных данных.
-const Z80_MEM_MIN: usize = 0x7119;
-/// `HighDeltaSpeed` — текущая скорость, 0..0xA0.
+/// Минимальный объём памяти, покрывающий все адреса полётных данных
+/// (включая таблицу звёзд и флаг J-драйва).
+const Z80_MEM_MIN: usize = 0x7EE0;
+/// `HighAngleLR` — угловая скорость крена (знак-величина).
+const Z80_HIGH_ANGLE_LR: usize = 0x70E4;
+/// `HighAngleDU` — угловая скорость тангажа (знак-величина).
+const Z80_HIGH_ANGLE_DU: usize = 0x70E5;
+/// `HighDeltaSpeed` — текущая скорость, 0..=31.
 const Z80_HIGH_DELTA_SPEED: usize = 0x70E6;
+/// `Speed` — индикатор скорости: `5 * HighDeltaSpeed + 5`, 0..=0xA0.
+///
+/// В отличие от `HighDeltaSpeed`, эту ячейку J-драйв не трогает, поэтому
+/// скорость в Z80 LINK надёжнее брать отсюда.
+const Z80_SPEED_GAUGE: usize = 0x70F4;
 /// `ShieldFront` — передний щит, 0..0xA0.
 const Z80_SHIELD_FRONT: usize = 0x70E8;
 /// `Fuel` — топливо, 0..0xA0.
 const Z80_FUEL: usize = 0x70EC;
 /// `TempLaser` — нагрев лазера, 0..0xA0.
 const Z80_TEMP_LASER: usize = 0x70F0;
+/// Таблица звёзд оригинала (`byte_7A39`): 16 пар координат.
+///
+/// Оригинал пересчитывает её только на игровом такте (около 5.5 Гц), а не
+/// каждый кадр 50 Гц. По изменению таблицы удобно ловить сам такт.
+const Z80_STARS_TABLE: usize = 0x7A39;
+/// Длина таблицы звёзд в байтах.
+const Z80_STARS_LEN: usize = 0x20;
+/// `StarsFastScroll` — взводится на такт J-драйва, гасится в `PrintStars`.
+const Z80_STARS_FAST_SCROLL: usize = 0x7EDD;
 /// Слот станции (`objCoriolis`).
 const Z80_OBJ_CORIOLIS: usize = 0x6048;
 /// Первый из шести основных слотов объектов.
@@ -86,25 +179,34 @@ const Z80_SLOT_OADRDATA: usize = 0x23;
 const Z80_SUN_CRD: usize = 0x7107;
 /// Координаты планеты (9 байт, знак-величина).
 const Z80_PLANET_CRD: usize = 0x7110;
-/// Радиус солнца и планеты в единицах координат игры.
+/// Радиус солнца в единицах координат игры.
 ///
-/// Подобран по оригиналу: сразу после старта (`PlanetCrd.z ≈ 96000`) круг
-/// планеты имеет радиус ≈108 px в окне 256x128. При нативном фокусе
-/// `1.15 * высота_вида` это даёт `R = (108/128) * 96000 / 1.15 ≈ 70000`.
-const CELESTIAL_RADIUS: f32 = 70_000.0;
+/// Оригинал считает радиус диска как `0xA00000 / z`: при `z ≈ 96000` это
+/// ≈108 px в окне 256x128. Фокус `1.15 * высота_вида` переводит это в
+/// `R = (108/128) * 96000 / 1.15 ≈ 70000`.
+const SUN_RADIUS: f32 = 70_000.0;
+/// Радиус планеты. Меньше калиброванного радиуса оригинала: планета
+/// рисуется сплошной заливкой, поэтому при том же радиусе заливала бы почти
+/// весь вид. Такой диск читается как планета, а не как стена.
+const PLANET_RADIUS: f32 = 42_000.0;
+/// Планета — тёмно-зелёный диск: такого оттенка нет ни у одного другого
+/// объекта, и на его фоне хорошо видны белые, циановые и жёлтые детали.
+const PLANET_COLOR: u32 = 0xFF00_5800;
 
 /// Начальные значения, снятые с Z80-игры при входе в нативный полёт.
 #[derive(Clone, Copy, Debug)]
 pub struct FlightSeed<'a> {
     /// Имя текущей системы (для строки состояния).
     pub system: &'a str,
-    /// Скорость из памяти игры (`Speed`, 0..0xA0).
+    /// Значение индикатора скорости из памяти игры (`Speed`, 0..0xA0).
+    /// Оригинал хранит там `5 * HighDeltaSpeed + 5`.
     pub speed: u8,
     /// Топливо (`Fuel`, 0..0xA0).
     pub fuel: u8,
     /// Передний щит (`ShieldFront`, 0..0xA0).
     pub shield: u8,
-    /// Цвет планеты текущей системы (из [`crate::galaxy::color`]).
+    /// Цвет системы из [`crate::galaxy::color`]; задаёт оттенок зелёной
+    /// планеты, но не может сделать её не зелёной.
     pub planet_color: u32,
 }
 
@@ -147,6 +249,16 @@ struct Star {
     mag: u8,
 }
 
+/// Выстрел противника: отрезок от корабля к окрестности перекрестия.
+///
+/// Храним мировые координаты, чтобы линия правильно поворачивалась вместе с
+/// камерой, пока живёт.
+struct EnemyShot {
+    from: [f32; 3],
+    to: [f32; 3],
+    life: f32,
+}
+
 /// Источник данных для нативного рендера.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum FlightSource {
@@ -167,7 +279,7 @@ pub struct Flight {
     rot: Rotation,
     /// Положение корабля в мире.
     pos: [f32; 3],
-    /// Текущая скорость `0..1` от [`MAX_SPEED`].
+    /// Текущая скорость в единицах `HighDeltaSpeed` (`0..=31`).
     speed: f32,
     /// Угловые скорости с инерцией (радиан/с).
     ang_pitch: f32,
@@ -176,6 +288,18 @@ pub struct Flight {
     fuel: f32,
     laser_heat: f32,
     laser_timer: f32,
+    /// Предыдущий `TempLaser` из Z80 — по его росту ловим выстрел в LINK.
+    prev_laser_temp: Option<u8>,
+    /// Предыдущий передний щит Z80 — по его падению ловим атаку в LINK.
+    prev_z80_shield: Option<u8>,
+    /// Снимок таблицы звёзд Z80: её изменение означает игровой такт.
+    prev_star_table: Option<[u8; Z80_STARS_LEN]>,
+    /// В памяти был замечен взвод `StarsFastScroll` (J-драйв).
+    z80_fast_scroll: bool,
+    /// Разогнать звёзды на ближайшем шаге симуляции (J-драйв).
+    star_boost: bool,
+    /// Лучи выстрелов противников.
+    enemy_shots: Vec<EnemyShot>,
     damage_flash: f32,
     message_timer: f32,
     respawn_timer: f32,
@@ -197,13 +321,19 @@ impl Flight {
             started: false,
             rot: Rotation::identity(),
             pos: [0.0; 3],
-            speed: 0.22,
+            speed: SPEED_START,
             ang_pitch: 0.0,
             ang_roll: 0.0,
             shield: 1.0,
             fuel: 1.0,
             laser_heat: 0.0,
             laser_timer: 0.0,
+            prev_laser_temp: None,
+            prev_z80_shield: None,
+            prev_star_table: None,
+            z80_fast_scroll: false,
+            star_boost: false,
+            enemy_shots: Vec::new(),
             damage_flash: 0.0,
             message_timer: 0.0,
             respawn_timer: 0.0,
@@ -213,7 +343,7 @@ impl Flight {
             bodies: Vec::new(),
             stars: Vec::new(),
             system: String::new(),
-            planet_color: 0xFF4A80B0,
+            planet_color: PLANET_COLOR,
             rng: 0x1234_5678,
         };
         f.reset_scene();
@@ -225,13 +355,19 @@ impl Flight {
         self.active = true;
         // По умолчанию Z80 LINK для сравнения с оригиналом
         self.source = FlightSource::Z80;
+        self.prev_laser_temp = None;
+        self.prev_z80_shield = None;
+        self.prev_star_table = None;
+        self.z80_fast_scroll = false;
+        self.star_boost = false;
+        self.enemy_shots.clear();
         self.system = if seed.system.is_empty() {
             "UNKNOWN".to_string()
         } else {
             seed.system.to_uppercase()
         };
-        if seed.planet_color & 0xFF00_0000 != 0 {
-            self.planet_color = seed.planet_color;
+        if seed.planet_color != 0 {
+            self.planet_color = planet_green(seed.planet_color);
         }
         if !self.started {
             self.started = true;
@@ -244,9 +380,11 @@ impl Flight {
                 }
             }
         }
-        // Скорость на станции равна нулю — нативный движок всё равно должен
-        // уметь лететь, поэтому даём небольшой стартовый импульс.
-        self.speed = (seed.speed as f32 / 0xA0 as f32).clamp(0.15, 1.0);
+        // Индикатор `Speed` в памяти игры — это `5 * HighDeltaSpeed + 5`
+        // (0..0xA0), поэтому переводим его обратно в единицы оригинала.
+        // Нулевая скорость допустима: даже тогда звёзды ползут (в оригинале
+        // шаг звезды равен `(HighDeltaSpeed >> 1) + 1`).
+        self.speed = ((seed.speed as f32 - 5.0) / 5.0).clamp(0.0, SPEED_MAX);
         self.fuel = (seed.fuel as f32 / 0xA0 as f32).clamp(0.0, 1.0);
         self.shield = (seed.shield as f32 / 0xA0 as f32).clamp(0.0, 1.0);
     }
@@ -256,10 +394,19 @@ impl Flight {
         self.active = false;
     }
 
-    /// Текущая скорость `0..1`.
+    /// Текущая скорость в единицах `HighDeltaSpeed` (0..=31).
     #[cfg(test)]
     pub fn speed(&self) -> f32 {
         self.speed
+    }
+
+    /// Доля полной шкалы скорости, как у индикатора оригинала.
+    ///
+    /// Оригинал показывает `5 * HighDeltaSpeed + 5` из `0xA0`, то есть
+    /// `(HighDeltaSpeed + 1) / 32`: на нуле шкала не пустая, а на 31 —
+    /// заполнена полностью.
+    fn speed_fraction(&self) -> f32 {
+        ((self.speed + 1.0) / (SPEED_MAX + 1.0)).clamp(0.0, 1.0)
     }
 
     /// Положение корабля в мире.
@@ -280,8 +427,9 @@ impl Flight {
         self.pos = [0.0; 3];
         self.ang_pitch = 0.0;
         self.ang_roll = 0.0;
-        self.stars = make_stars(&mut self.rng, 280);
+        self.stars = make_stars(&mut self.rng, STAR_COUNT);
         self.bodies.clear();
+        self.enemy_shots.clear();
 
         let station = shipdata::SHIPS
             .iter()
@@ -327,7 +475,7 @@ impl Flight {
             rot: Rotation::identity(),
             spin: [0.0, 1.0, 0.0],
             spin_rate: 0.02,
-            radius: CELESTIAL_RADIUS,
+            radius: PLANET_RADIUS,
             color: self.planet_color,
             fire_timer: 0.0,
         });
@@ -338,8 +486,8 @@ impl Flight {
             rot: Rotation::identity(),
             spin: [0.0; 3],
             spin_rate: 0.0,
-            radius: CELESTIAL_RADIUS,
-            color: 0xFFFF_D040,
+            radius: SUN_RADIUS,
+            color: SUN_COLOR,
             fire_timer: 0.0,
         });
     }
@@ -353,6 +501,11 @@ impl Flight {
             FlightSource::Native => FlightSource::Z80,
             FlightSource::Z80 => FlightSource::Native,
         };
+        // Снимок таблицы звёзд после смены источника устаревает: иначе первый
+        // синк применил бы накопленный поворот одним скачком.
+        self.prev_star_table = None;
+        self.z80_fast_scroll = false;
+        self.star_boost = false;
         if self.source == FlightSource::Native {
             // Адаптер Z80 LINK полностью заменяет `bodies`, `rot` и `pos`
             // данными из памяти эмулятора. Без пересборки сцены в Native
@@ -364,9 +517,10 @@ impl Flight {
     /// Пересобрать собственную сцену нативного полёта.
     fn rebuild_native_scene(&mut self) {
         self.reset_scene();
-        // На станции скорость нулевая; для нативного полёта даём минимальный
-        // импульс, иначе мир и звёзды стоят на месте.
-        self.speed = self.speed.max(0.15);
+        self.prev_z80_shield = None;
+        // Нулевая скорость допустима: индикатор показывает минимум 1/32, а
+        // звёзды всё равно медленно расходятся, как в оригинале.
+        self.speed = self.speed.clamp(0.0, SPEED_MAX);
     }
 
     /// Синхронизировать нативный рендер с данными из памяти Z80.
@@ -387,13 +541,65 @@ impl Flight {
         self.pos = [0.0; 3];
         self.rot = Rotation::identity();
 
-        // Приборы. Скорость — HighDeltaSpeed (0..0xA0); щиты, топливо и
-        // нагрев лазера в памяти тоже в диапазоне 0..0xA0.
+        // Приборы. Скорость берём из индикатора (`5 * HighDeltaSpeed + 5`):
+        // на такте J-драйва `PrintStars` временно пишет в `HighDeltaSpeed`
+        // `0x1E`/`0x10`, и прямой опрос заставлял бы шкалу прыгать.
         let full = 0xA0 as f32;
-        self.speed = (mem[Z80_HIGH_DELTA_SPEED] as f32 / full).clamp(0.0, 1.0);
-        self.shield = (mem[Z80_SHIELD_FRONT] as f32 / full).clamp(0.0, 1.0);
+        let gauge = mem[Z80_SPEED_GAUGE];
+        self.speed = (gauge.saturating_sub(5) as f32 / 5.0).clamp(0.0, SPEED_MAX);
+        let shield_raw = mem[Z80_SHIELD_FRONT];
+        // Оригинал не оставляет флаг выстрела противника в памяти: бит 3
+        // сбрасывается сразу после печати луча. Зато попадание уменьшает
+        // `ShieldFront` — по этому падению и показываем ответный луч.
+        let shield_dropped = self
+            .prev_z80_shield
+            .is_some_and(|prev| shield_raw < prev);
+        self.prev_z80_shield = Some(shield_raw);
+        self.shield = (shield_raw as f32 / full).clamp(0.0, 1.0);
         self.fuel = (mem[Z80_FUEL] as f32 / full).clamp(0.0, 1.0);
-        self.laser_heat = (mem[Z80_TEMP_LASER] as f32 / full).clamp(0.0, 1.0);
+
+        // В Z80 LINK нет абсолютной ориентации, но угловые скорости известны.
+        // Оригинал пересчитывает звёзды и координаты объектов не каждый кадр,
+        // а на игровом такте (~5.5 Гц): таблица звёзд `byte_7A39` меняется
+        // только тогда. Раньше поворот применялся на каждом кадре 50 Гц,
+        // из-за чего звёзды крутились примерно в 9 раз быстрее объектов.
+        let mut table = [0u8; Z80_STARS_LEN];
+        table.copy_from_slice(&mem[Z80_STARS_TABLE..Z80_STARS_TABLE + Z80_STARS_LEN]);
+        let ticked = self.prev_star_table.is_some_and(|prev| prev != table);
+        self.prev_star_table = Some(table);
+        if mem[Z80_STARS_FAST_SCROLL] == 1 {
+            self.z80_fast_scroll = true;
+        }
+        if ticked {
+            // J-драйв `PrintStars` проматывает звёзды тремя проходами
+            // `sub_78B1` (скорости `0x1E` и дважды `0x10`) и на этом такте
+            // временно перезаписывает `HighDeltaSpeed`. Ловим и сам флаг, и
+            // этот след, если флаг не попал в кадр опроса.
+            let fast = self.z80_fast_scroll
+                || mem[Z80_HIGH_DELTA_SPEED] as i32 != self.speed.round() as i32;
+            let roll = read_signed8(mem[Z80_HIGH_ANGLE_LR]) * STAR_ANGLE_LR_PER_UNIT;
+            let pitch = -read_signed8(mem[Z80_HIGH_ANGLE_DU]) * STAR_ANGLE_DU_PER_UNIT;
+            let turn = Rotation::axis_angle([0.0, 0.0, 1.0], roll)
+                .mul(&Rotation::axis_angle([1.0, 0.0, 0.0], pitch));
+            // Каждый проход `sub_78B1` поворачивает поле, поэтому при J-драйве
+            // за такт набегает тройной поворот.
+            for _ in 0..if fast { 3 } else { 1 } {
+                self.turn_stars(&turn);
+            }
+            self.star_boost |= fast;
+            self.z80_fast_scroll = false;
+        }
+
+        // Выстрел в оригинале виден только по нагреву лазера: `TempLaser`
+        // подскакивает на несколько единиц, затем остывает.
+        let temp = mem[Z80_TEMP_LASER];
+        if let Some(prev) = self.prev_laser_temp {
+            if temp > prev.saturating_add(2) {
+                self.laser_timer = LASER_TIME;
+            }
+        }
+        self.prev_laser_temp = Some(temp);
+        self.laser_heat = (temp as f32 / full).clamp(0.0, 1.0);
 
         let mut bodies: Vec<Body> = Vec::with_capacity(9);
         // Станция, шесть основных слотов и слот ракеты. Пустые слоты
@@ -415,19 +621,22 @@ impl Flight {
             mem,
             Z80_SUN_CRD,
             BodyKind::Sun,
-            CELESTIAL_RADIUS,
-            0xFFFF_D040,
+            SUN_RADIUS,
+            SUN_COLOR,
         );
         push_z80_celestial(
             &mut bodies,
             mem,
             Z80_PLANET_CRD,
             BodyKind::Planet,
-            CELESTIAL_RADIUS,
+            PLANET_RADIUS,
             self.planet_color,
         );
 
         self.bodies = bodies;
+        if shield_dropped {
+            self.spawn_z80_enemy_shots();
+        }
     }
 
     /// Один шаг симуляции.
@@ -440,14 +649,14 @@ impl Flight {
             self.tick += 1;
             let dt = dt.clamp(0.0, 0.1);
             self.laser_timer = (self.laser_timer - dt).max(0.0);
+            self.decay_enemy_shots(dt);
             // Нагрев лазера приходит из памяти игры, сам его не остываем.
             self.damage_flash = (self.damage_flash - dt).max(0.0);
             self.message_timer = (self.message_timer - dt).max(0.0);
             self.respawn_timer = (self.respawn_timer - dt).max(0.0);
             // Камеру в Z80 не двигаем сами, но звёздное поле должно лететь
             // со скоростью, прочитанной из памяти игры.
-            let forward = self.rot.transpose().apply([0.0, 0.0, 1.0]);
-            self.advance_stars(forward, dt);
+            self.advance_stars(dt);
             return;
         }
         self.tick += 1;
@@ -465,31 +674,43 @@ impl Flight {
         self.ang_roll *= damp;
         self.ang_pitch = self.ang_pitch.clamp(-ROT_SPEED * 1.4, ROT_SPEED * 1.4);
         self.ang_roll = self.ang_roll.clamp(-ROT_SPEED * 1.4, ROT_SPEED * 1.4);
+        // Тот же поворот применяем и к камере, и к звёздам: звёзды хранятся
+        // в координатах вида, поэтому им достаточно повернуть свои позиции.
+        let mut turn = Rotation::identity();
         if self.ang_pitch.abs() > 1e-4 {
-            self.rot = Rotation::axis_angle([1.0, 0.0, 0.0], self.ang_pitch * dt)
-                .mul(&self.rot);
+            // Знак обратный угловой скорости: при взгляде вверх (S) мир
+            // должен уезжать вниз по экрану, а не наоборот.
+            turn = Rotation::axis_angle([1.0, 0.0, 0.0], -self.ang_pitch * dt).mul(&turn);
         }
         if self.ang_roll.abs() > 1e-4 {
-            self.rot = Rotation::axis_angle([0.0, 0.0, 1.0], self.ang_roll * dt)
-                .mul(&self.rot);
+            turn = Rotation::axis_angle([0.0, 0.0, 1.0], self.ang_roll * dt).mul(&turn);
         }
+        self.rot = turn.mul(&self.rot);
+        self.turn_stars(&turn);
 
-        // Тяга. В оригинальной игре корабль всегда движется вперёд,
-        // минимальная скорость не равна нулю.
+        // Тяга. В оригинале `DeltaSpeed` меняется на 0xA0 за кадр в обе
+        // стороны, то есть на 31.25 единицы `HighDeltaSpeed` в секунду.
         let throttle = (c.throttle_up as i32 - c.throttle_down as i32) as f32;
         if throttle > 0.0 && self.fuel > 0.0 {
-            self.speed = (self.speed + ACCEL * dt).min(1.0);
+            self.speed = (self.speed + SPEED_ACCEL * dt).min(SPEED_MAX);
             self.fuel = (self.fuel - 0.020 * dt).max(0.0);
         } else if throttle < 0.0 {
-            self.speed = (self.speed - DECEL * dt).max(0.12);
+            self.speed = (self.speed - SPEED_ACCEL * dt).max(0.0);
         } else {
-            self.speed = self.speed.max(0.12);
+            self.speed = self.speed.clamp(0.0, SPEED_MAX);
         }
 
         // Лазер: выстрел, попадание и остывание.
         self.laser_timer = (self.laser_timer - dt).max(0.0);
+        self.decay_enemy_shots(dt);
         self.laser_heat = (self.laser_heat - LASER_COOL * dt).max(0.0);
-        if c.fire && self.laser_heat < 0.95 && self.laser_timer <= 0.0 {
+        // В Z80 LINK попадания считает сама игра; здесь только показываем
+        // луч, который приходит через рост `TempLaser` в `sync_from_z80`.
+        if c.fire
+            && self.source != FlightSource::Z80
+            && self.laser_heat < 0.95
+            && self.laser_timer <= 0.0
+        {
             self.fire();
         }
         self.damage_flash = (self.damage_flash - dt).max(0.0);
@@ -501,17 +722,19 @@ impl Flight {
         if self.source != FlightSource::Z80 {
             let forward = self.rot.transpose().apply([0.0, 0.0, 1.0]);
             for i in 0..3 {
-                self.pos[i] += forward[i] * self.speed * MAX_SPEED * dt;
+                self.pos[i] +=
+                    forward[i] * self.speed * WORLD_SPEED_PER_UNIT * dt;
             }
-            self.advance_stars(forward, dt);
+            self.advance_stars(dt);
         } else {
-            let forward = self.rot.transpose().apply([0.0, 0.0, 1.0]);
             // В Z80 режиме не двигаем камеру самостоятельно, только звёзды
-            self.advance_stars(forward, dt);
+            self.advance_stars(dt);
         }
 
         // Собственное вращение и простая тактика противников.
         let forward_cur = self.rot.transpose().apply([0.0, 0.0, 1.0]);
+        let right_cur = self.rot.transpose().apply([1.0, 0.0, 0.0]);
+        let up_cur = self.rot.transpose().apply([0.0, 1.0, 0.0]);
         for b in &mut self.bodies {
             if b.spin_rate != 0.0 {
                 b.rot = Rotation::axis_angle(b.spin, b.spin_rate * dt).mul(&b.rot);
@@ -540,6 +763,26 @@ impl Flight {
                 if dot > 0.35 {
                     self.shield = (self.shield - 0.045).max(0.02);
                     self.damage_flash = 0.25;
+                    // Луч из точки выстрела корабля к перекрестию. В
+                    // оригинале он тоже рисуется от вершины лазера к
+                    // случайной точке возле центра экрана.
+                    let origin = [
+                        b.pos[0] + d[0] * b.radius * 0.6,
+                        b.pos[1] + d[1] * b.radius * 0.6,
+                        b.pos[2] + d[2] * b.radius * 0.6,
+                    ];
+                    let jx = (next(&mut self.rng) % 161) as f32 - 80.0;
+                    let jy = (next(&mut self.rng) % 121) as f32 - 60.0;
+                    let target = [
+                        self.pos[0] + forward_cur[0] * 6000.0 + right_cur[0] * jx + up_cur[0] * jy,
+                        self.pos[1] + forward_cur[1] * 6000.0 + right_cur[1] * jx + up_cur[1] * jy,
+                        self.pos[2] + forward_cur[2] * 6000.0 + right_cur[2] * jx + up_cur[2] * jy,
+                    ];
+                    self.enemy_shots.push(EnemyShot {
+                        from: origin,
+                        to: target,
+                        life: ENEMY_LASER_TIME,
+                    });
                 }
                 b.fire_timer = 2.2 + (next(&mut self.rng) % 180) as f32 / 50.0;
             }
@@ -584,6 +827,43 @@ impl Flight {
         }
     }
 
+    /// Погасить отжившие лучи противников.
+    fn decay_enemy_shots(&mut self, dt: f32) {
+        for shot in &mut self.enemy_shots {
+            shot.life -= dt;
+        }
+        self.enemy_shots.retain(|shot| shot.life > 0.0);
+    }
+
+    /// Показать выстрел противника в Z80 LINK.
+    ///
+    /// Луч пускаем от ближайших кораблей, которые находятся впереди, к
+    /// окрестности перекрестия — так же, как это делает оригинал.
+    fn spawn_z80_enemy_shots(&mut self) {
+        let mut targets: Vec<usize> = self
+            .bodies
+            .iter()
+            .enumerate()
+            .filter(|(_, b)| b.kind == BodyKind::Ship && b.model.is_some() && b.pos[2] > NEAR)
+            .map(|(i, _)| i)
+            .collect();
+        targets.sort_by(|&a, &b| {
+            self.bodies[a].pos[2]
+                .partial_cmp(&self.bodies[b].pos[2])
+                .unwrap_or(std::cmp::Ordering::Equal)
+        });
+        for i in targets.into_iter().take(2) {
+            let origin = self.bodies[i].pos;
+            let jx = (next(&mut self.rng) % 161) as f32 - 80.0;
+            let jy = (next(&mut self.rng) % 121) as f32 - 60.0;
+            self.enemy_shots.push(EnemyShot {
+                from: origin,
+                to: [jx, jy, 8000.0],
+                life: ENEMY_LASER_TIME,
+            });
+        }
+    }
+
     fn spawn_enemy(&mut self) {
         let models = ["d_Viper", "d_Cobra1", "dSidewinderH", "d_Krait"];
         let name = models[(self.next_rng() as usize) % models.len()];
@@ -618,9 +898,11 @@ impl Flight {
         let w = frame.width as i32;
         let h = frame.height as i32;
         frame.fill_rect(0, 0, frame.width, frame.height, BG);
-        // В режиме Z80 LINK всегда держим звёзды
-        if self.stars.is_empty() {
-            self.stars = make_stars(&mut self.rng, 280);
+        // Плотность звёзд зависит от площади кадра: на большом разрешении
+        // исходных 16 точек недостаточно, экран выглядит пустым.
+        let want_stars = star_count_for(frame.width, frame.height);
+        if self.stars.len() != want_stars {
+            self.stars = make_stars(&mut self.rng, want_stars);
         }
         // В режиме Z80 LINK всегда добавляем планету/солнце если их нет
         let has_planet = self.bodies.iter().any(|b| matches!(b.kind, BodyKind::Planet));
@@ -633,7 +915,7 @@ impl Flight {
                 rot: Rotation::identity(),
                 spin: [0.0, 1.0, 0.0],
                 spin_rate: 0.02,
-                radius: CELESTIAL_RADIUS,
+                radius: PLANET_RADIUS,
                 color: self.planet_color,
                 fire_timer: 0.0,
             });
@@ -646,16 +928,11 @@ impl Flight {
                 rot: Rotation::identity(),
                 spin: [0.0; 3],
                 spin_rate: 0.0,
-                radius: CELESTIAL_RADIUS,
-                color: 0xFFFF_D040,
+                radius: SUN_RADIUS,
+                color: SUN_COLOR,
                 fire_timer: 0.0,
             });
         }
-        // Сохраняем звёзды
-        if self.stars.is_empty() {
-            self.stars = make_stars(&mut self.rng, 280);
-        }
-
         // Сетка ZX 256x192, как на заставке: заголовок и подсказка остаются
         // в тех же местах, поэтому экран полёта выглядит её продолжением.
         let s = ((frame.width / 256).min(frame.height / 192)).max(1) as i32;
@@ -708,6 +985,7 @@ impl Flight {
         );
         self.draw_stars(frame, &screen);
         self.draw_bodies(frame, &screen);
+        self.draw_enemy_shots(frame, &screen, view_top, view_bottom);
         self.draw_crosshair(frame, cx, cy, s);
         if self.laser_timer > 0.0 {
             self.draw_laser(frame, cx, cy, view_bottom, s);
@@ -732,60 +1010,75 @@ impl Flight {
             );
         }
         self.draw_hud(frame, font, s, hud_top, ox);
-        let hint = match self.source {
-            FlightSource::Native => "1 Z80   F1 NATIVE   TAB LINK   ESC PAUSE",
-            FlightSource::Z80 => "1 Z80   F1 NATIVE   TAB LINK   ESC PAUSE",
-        };
-        frame.draw_text(font, ox + 8 * s, h - 12 * s, hint, HINT, s as usize);
+        frame.draw_text(
+            font,
+            ox + 8 * s,
+            h - 12 * s,
+            "A FIRE  1 Z80  TAB LINK  ESC",
+            HINT,
+            s as usize,
+        );
+    }
+
+    /// Повернуть звёздное поле на шаг камеры.
+    ///
+    /// Звёзды хранятся прямо в координатах вида (`+Z` — вперёд). Поворот
+    /// камеры на `turn` переводит старые координаты вида в новые той же
+    /// матрицей, поэтому никакой отдельной ориентации поля не нужно.
+    fn turn_stars(&mut self, turn: &Rotation) {
+        for star in &mut self.stars {
+            star.pos = turn.apply(star.pos);
+        }
     }
 
     /// Сдвинуть звёздное поле назад относительно корабля.
     ///
-    /// Звёзды хранятся в координатах, связанных с кораблём. При полёте они
-    /// смещаются в направлении, противоположном движению, поэтому чем выше
-    /// скорость, тем быстрее они проносятся мимо. Ушедшие за камеру звёзды
-    /// рождаются заново впереди — поле остаётся бесконечным.
-    fn advance_stars(&mut self, forward: [f32; 3], dt: f32) {
-        let step = self.speed * MAX_SPEED * dt;
-        if step.abs() < 1e-9 {
+    /// Оригинал (`sub_78B1`) не сдвигает звёзды на фиксированное расстояние:
+    /// каждый кадр он растягивает их координаты от центра в
+    /// `1 + b/256` раз, где `b = (HighDeltaSpeed >> 1) + 1`. В перспективной
+    /// проекции это ровно то же, что «звезда летит навстречу»: `x/z` растёт.
+    /// Поэтому здесь масштабируем `x` и `y`, а не уменьшаем `z` — так скорость
+    /// звезды не зависит от её начальной глубины и не взрывается у камеры.
+    /// Ушедшие за край звезды рождаются заново ближе к центру.
+    fn advance_stars(&mut self, dt: f32) {
+        let frames = (dt * 50.0).max(0.0);
+        if frames <= 0.0 {
             return;
         }
-        // Базис для разброса новых звёзд вокруг направления полёта.
-        let up = if forward[1].abs() < 0.9 {
-            [0.0, 1.0, 0.0]
+        // J-драйв: на ближайшем шаге звёзды должны улететь так же далеко,
+        // как после трёх проходов `sub_78B1` на одном такте оригинала.
+        let b = if self.star_boost {
+            self.star_boost = false;
+            STAR_FAST_SCROLL_B
         } else {
-            [1.0, 0.0, 0.0]
+            (self.speed * 0.5).floor() + 1.0
         };
-        let right = normalize(cross(up, forward));
-        let top = cross(forward, right);
+        let grow = (1.0 + b / STAR_ZOOM_DIVISOR).powf(frames);
         let mut rng = self.rng;
         for star in &mut self.stars {
-            for (i, p) in star.pos.iter_mut().enumerate() {
-                *p -= forward[i] * step;
-            }
-            let v = self.rot.apply(star.pos);
-            if v[2] > NEAR {
+            star.pos[0] *= grow;
+            star.pos[1] *= grow;
+            let z = star.pos[2];
+            let radius = if z > NEAR {
+                (star.pos[0] * star.pos[0] + star.pos[1] * star.pos[1]).sqrt() / z
+            } else {
+                f32::INFINITY
+            };
+            let distance2 = star.pos.iter().map(|v| v * v).sum::<f32>();
+            if radius <= STAR_RESPAWN_RADIUS
+                && distance2 <= STAR_MAX_DISTANCE * STAR_MAX_DISTANCE
+                && star.pos.iter().all(|v| v.is_finite())
+            {
                 continue;
             }
-            // Новая звезда впереди, в конусе вокруг курса.
-            let dist = 1200.0 + (next(&mut rng) as f32 / u32::MAX as f32) * 4800.0;
-            let around = next(&mut rng) as f32 / u32::MAX as f32 * std::f32::consts::TAU;
-            let spread = (next(&mut rng) as f32 / u32::MAX as f32).sqrt() * 0.55;
-            let (sa, ca) = around.sin_cos();
-            for i in 0..3 {
-                star.pos[i] = forward[i] * dist
-                    + (right[i] * ca + top[i] * sa) * spread * dist;
-            }
-            star.mag = (next(&mut rng) >> 24) as u8;
+            *star = spawn_star(&mut rng);
         }
         self.rng = rng;
     }
 
     fn draw_stars(&self, frame: &mut Frame, screen: &Screen) {
-        let forward = self.rot.transpose().apply([0.0, 0.0, 1.0]);
-        let speed = self.speed * MAX_SPEED;
         for star in &self.stars {
-            let v = self.rot.apply(star.pos);
+            let v = star.pos;
             if v[2] <= NEAR {
                 continue;
             }
@@ -800,22 +1093,6 @@ impl Flight {
                 | ((bright * 225.0) as u32) << 8
                 | (bright * 255.0) as u32;
             let (xi, yi) = (x.round() as i32, y.round() as i32);
-            // Небольшой след от движения: на большой скорости звёзды
-            // вытягиваются вдоль курса, как при движении камеры.
-            if speed > 150.0 && star.mag > 160 {
-                let age = 0.035;
-                let tail = [
-                    star.pos[0] + forward[0] * speed * age,
-                    star.pos[1] + forward[1] * speed * age,
-                    star.pos[2] + forward[2] * speed * age,
-                ];
-                let tv = self.rot.apply(tail);
-                if tv[2] > NEAR {
-                    let tx = screen.cx + tv[0] / tv[2] * screen.k;
-                    let ty = screen.cy - tv[1] / tv[2] * screen.k;
-                    frame.line(tx.round() as i32, ty.round() as i32, xi, yi, c & 0x80FF_FFFF);
-                }
-            }
             frame.plot(xi, yi, c);
             if star.mag > 210 {
                 frame.plot(xi + 1, yi, c);
@@ -823,6 +1100,60 @@ impl Flight {
                 frame.plot(xi, yi + 1, c);
                 frame.plot(xi, yi - 1, c);
             }
+        }
+    }
+
+    /// Перевести мировую точку в координаты вида (камера в `self.pos`,
+    /// матрица `self.rot` — мир → вид).
+    fn view_point(&self, p: [f32; 3]) -> [f32; 3] {
+        self.rot.apply([
+            p[0] - self.pos[0],
+            p[1] - self.pos[1],
+            p[2] - self.pos[2],
+        ])
+    }
+
+    /// Нарисовать лучи выстрелов противников.
+    fn draw_enemy_shots(&self, frame: &mut Frame, screen: &Screen, top: i32, bottom: i32) {
+        let (xmin, ymin) = (0.0, top as f32);
+        let (xmax, ymax) = (frame.width as f32 - 1.0, bottom as f32 - 1.0);
+        for shot in &self.enemy_shots {
+            let Some((a, b)) = clip_segment_near(self.view_point(shot.from), self.view_point(shot.to))
+            else {
+                continue;
+            };
+            let ax = screen.cx + a[0] / a[2] * screen.k;
+            let ay = screen.cy - a[1] / a[2] * screen.k;
+            let bx = screen.cx + b[0] / b[2] * screen.k;
+            let by = screen.cy - b[1] / b[2] * screen.k;
+            // В оригинале луч не обрывается у перекрестия, а уходит через
+            // него до края вида. Продлеваем отрезок в том же направлении и
+            // отдаём отсечение прямоугольнику — так выстрел хорошо виден.
+            let dx = bx - ax;
+            let dy = by - ay;
+            let len = (dx * dx + dy * dy).sqrt();
+            let (dir_x, dir_y) = if len < 1e-3 {
+                (1.0, 0.0)
+            } else {
+                (dx / len, dy / len)
+            };
+            let far = 8192.0;
+            let Some((x0, y0, x1, y1)) = clip_segment_2d(
+                ax,
+                ay,
+                bx + dir_x * far,
+                by + dir_y * far,
+                xmin,
+                ymin,
+                xmax,
+                ymax,
+            ) else {
+                continue;
+            };
+            frame.line(x0, y0, x1, y1, 0xFFFF_A020);
+            // Второй пиксель поперёк луча делает выстрел заметнее на фоне
+            // тонких циановых корпусов.
+            frame.line(x0, y0 + 1, x1, y1 + 1, RED);
         }
     }
 
@@ -897,34 +1228,8 @@ impl Flight {
             return;
         }
         let (cx, cy, r) = (x.round() as i32, y.round() as i32, r.round() as i32);
-        // Освещение: направление от планеты к солнцу в экранных координатах.
-        let sun = self
-            .bodies
-            .iter()
-            .find(|s| s.kind == BodyKind::Sun)
-            .map(|s| {
-                let l = self
-                    .rot
-                    .apply([s.pos[0] - b.pos[0], s.pos[1] - b.pos[1], s.pos[2] - b.pos[2]]);
-                let n = (l[0] * l[0] + l[1] * l[1]).sqrt().max(1e-3);
-                (l[0] / n, -l[1] / n)
-            })
-            .unwrap_or((0.0, 0.0));
-        let base = darken(b.color, 0.22);
-        let lit = b.color;
-        let bright = lighten(b.color, 1.35);
-        frame.disc(cx, cy, r, base);
-        // Смещённый освещённый диск оставляет ночную часть планеты тёмной.
-        let ox = (sun.0 * r as f32 * 0.38).round() as i32;
-        let oy = (sun.1 * r as f32 * 0.38).round() as i32;
-        frame.disc(cx + ox, cy + oy, (r as f32 * 0.86) as i32, lit);
-        frame.disc(
-            cx + (ox as f32 * 1.25) as i32,
-            cy + (oy as f32 * 1.25) as i32,
-            (r as f32 * 0.30) as i32,
-            bright,
-        );
-        frame.circle(cx, cy, r, lighten(b.color, 1.6));
+        // Планета — один ровный диск без колец и градиентов.
+        frame.disc(cx, cy, r, b.color);
     }
 
     fn draw_sun(&self, frame: &mut Frame, b: &Body, screen: &Screen) {
@@ -932,19 +1237,16 @@ impl Flight {
             return;
         };
         if r < 0.8
-            || x + r * 2.2 < 0.0
-            || y + r * 2.2 < 0.0
-            || x - r * 2.2 > frame.width as f32
-            || y - r * 2.2 > frame.height as f32
+            || x + r < 0.0
+            || y + r < 0.0
+            || x - r > frame.width as f32
+            || y - r > frame.height as f32
         {
             return;
         }
         let (cx, cy, r) = (x.round() as i32, y.round() as i32, r.round().max(1.0) as i32);
-        // Ореол: несколько непрозрачных дисков от тёмно-оранжевого к белому.
-        frame.disc(cx, cy, (r as f32 * 2.0) as i32, 0xFF3A_1800);
-        frame.disc(cx, cy, (r as f32 * 1.45) as i32, 0xFF9A_4A00);
-        frame.disc(cx, cy, r, 0xFFFF_C040);
-        frame.disc(cx, cy, (r as f32 * 0.55) as i32, 0xFFFF_FFF0);
+        // Солнце — просто жёлтый диск, без ореола из нескольких окружностей.
+        frame.disc(cx, cy, r, b.color);
     }
 
     fn draw_crosshair(&self, frame: &mut Frame, cx: f32, cy: f32, s: i32) {
@@ -975,7 +1277,7 @@ impl Flight {
         // x5 в нижнюю полосу иначе не помещаются четыре строки шрифта.
         let rows = [
             [
-                ("SPEED", self.speed, CYAN),
+                ("SPEED", self.speed_fraction(), CYAN),
                 (
                     "SHIELD",
                     self.shield,
@@ -1031,36 +1333,119 @@ fn draw_bar(frame: &mut Frame, frac: f32, x: i32, y: i32, w: i32, h: i32, color:
     }
 }
 
-/// Осветлить цвет `0xFFRRGGBB` (множитель > 1).
-fn lighten(c: u32, k: f32) -> u32 {
-    let ch = |shift: u32| {
-        ((((c >> shift) & 0xFF) as f32 * k).round().clamp(0.0, 255.0) as u32) << shift
-    };
-    0xFF00_0000 | ch(16) | ch(8) | ch(0)
-}
-
-/// Затемнить цвет `0xFFRRGGBB` (множитель < 1).
-fn darken(c: u32, k: f32) -> u32 {
-    lighten(c, k)
-}
-
-/// Детерминированное звёздное поле: звёзды вокруг корабля, движущиеся назад при полёте.
+/// Детерминированное звёздное поле: звёзды перед кораблём.
 fn make_stars(rng: &mut u32, count: usize) -> Vec<Star> {
-    let mut out = Vec::with_capacity(count);
-    for _ in 0..count {
-        let a = next(rng) as f32 / u32::MAX as f32 * std::f32::consts::TAU;
-        let z = next(rng) as f32 / u32::MAX as f32 * 2.0 - 1.0;
-        let r = (1.0 - z * z).sqrt();
-        let d = 1200.0 + (next(rng) as f32 / u32::MAX as f32) * 4800.0;
-        out.push(Star {
-            pos: [r * a.cos() * d, r * a.sin() * d, z * d],
-            mag: (next(rng) >> 24) as u8,
-        });
+    (0..count).map(|_| spawn_star(rng)).collect()
+}
+
+/// Сколько звёзд рисовать для кадра такого размера.
+///
+/// Число растёт с площадью экрана: на 256×192 это исходные 16 звёзд, на
+/// 1280×800 — около 170. Так плотность поля примерно сохраняется, но не
+/// доходит до «шума» из сотен точек на маленьком окне.
+fn star_count_for(width: usize, height: usize) -> usize {
+    let count = (width * height) as f32 / STAR_AREA_PER_STAR;
+    (count.round() as usize).clamp(STAR_COUNT_MIN, STAR_COUNT_MAX)
+}
+
+/// Родить звезду ближе к центру кадра.
+///
+/// Угловой радиус намеренно небольшой: звёзды должны расходиться из центра
+/// пучком, как в оригинале, а не появляться уже по всему экрану. Тогда по их
+/// движению видно направление полёта.
+fn spawn_star(rng: &mut u32) -> Star {
+    let around = next(rng) as f32 / u32::MAX as f32 * std::f32::consts::TAU;
+    let radius = 0.03 + (next(rng) as f32 / u32::MAX as f32) * 0.25;
+    let z = 1200.0 + (next(rng) as f32 / u32::MAX as f32) * 4800.0;
+    let (sa, ca) = around.sin_cos();
+    Star {
+        pos: [ca * radius * z, sa * radius * z, z],
+        mag: (next(rng) >> 24) as u8,
     }
-    out
 }
 
 /// Векторное произведение.
+/// Отсечь отрезок по ближней плоскости в координатах вида.
+///
+/// Возвращает точки уже с `z > NEAR`, чтобы проекция не улетала в
+/// бесконечность.
+fn clip_segment_near(mut a: [f32; 3], mut b: [f32; 3]) -> Option<([f32; 3], [f32; 3])> {
+    if a[2] <= NEAR && b[2] <= NEAR {
+        return None;
+    }
+    let t = |a: [f32; 3], b: [f32; 3]| (NEAR - a[2]) / (b[2] - a[2]);
+    if a[2] <= NEAR {
+        let t = t(a, b);
+        a = [
+            a[0] + (b[0] - a[0]) * t,
+            a[1] + (b[1] - a[1]) * t,
+            NEAR,
+        ];
+    } else if b[2] <= NEAR {
+        let t = t(b, a);
+        b = [
+            b[0] + (a[0] - b[0]) * t,
+            b[1] + (a[1] - b[1]) * t,
+            NEAR,
+        ];
+    }
+    Some((a, b))
+}
+
+/// Отсечь 2D-отрезок прямоугольником (Liang–Barsky).
+///
+/// Без этого `Frame::line` честно шёл бы от координаты в миллионы пикселей,
+/// что для выстрела сбоку от камеры заметно тормозит кадр.
+fn clip_segment_2d(
+    x0: f32,
+    y0: f32,
+    x1: f32,
+    y1: f32,
+    xmin: f32,
+    ymin: f32,
+    xmax: f32,
+    ymax: f32,
+) -> Option<(i32, i32, i32, i32)> {
+    if ![x0, y0, x1, y1].iter().all(|v| v.is_finite()) {
+        return None;
+    }
+    let dx = x1 - x0;
+    let dy = y1 - y0;
+    let p = [-dx, dx, -dy, dy];
+    let q = [x0 - xmin, xmax - x0, y0 - ymin, ymax - y0];
+    let (mut t0, mut t1) = (0.0f32, 1.0f32);
+    for i in 0..4 {
+        if p[i].abs() < f32::EPSILON {
+            if q[i] < 0.0 {
+                return None;
+            }
+            continue;
+        }
+        let r = q[i] / p[i];
+        if p[i] < 0.0 {
+            if r > t1 {
+                return None;
+            }
+            if r > t0 {
+                t0 = r;
+            }
+        } else {
+            if r < t0 {
+                return None;
+            }
+            if r < t1 {
+                t1 = r;
+            }
+        }
+    }
+    Some((
+        (x0 + t0 * dx).round() as i32,
+        (y0 + t0 * dy).round() as i32,
+        (x0 + t1 * dx).round() as i32,
+        (y0 + t1 * dy).round() as i32,
+    ))
+}
+
 fn cross(a: [f32; 3], b: [f32; 3]) -> [f32; 3] {
     [
         a[1] * b[2] - a[2] * b[1],
@@ -1104,6 +1489,15 @@ fn read_signed8(b: u8) -> f32 {
     } else {
         mag
     }
+}
+
+/// Зелёный оттенок планеты с небольшой вариацией яркости по системе.
+///
+/// Канал красного и синего всегда нулевой, поэтому планета не совпадает по
+/// цвету ни с белыми кораблями, ни с циановой станцией, ни с жёлтым солнцем.
+fn planet_green(seed: u32) -> u32 {
+    let g = 0x58 + ((seed >> 8) & 0x1F);
+    0xFF00_0000 | (g << 8)
 }
 
 /// Модель по адресу блока данных объекта из памяти Z80.
@@ -1209,6 +1603,11 @@ fn next(rng: &mut u32) -> u32 {
 mod tests {
     use super::*;
 
+    /// Тёмно-зелёный пиксель планеты: красный и синий нулевые, зелёный заметен.
+    fn is_planet_green(p: u32) -> bool {
+        p >> 24 == 0xFF && p & 0x00FF_00FF == 0 && (p >> 8) & 0xFF >= 0x58
+    }
+
     fn open() -> Flight {
         let mut f = Flight::new();
         f.open(FlightSeed {
@@ -1255,15 +1654,323 @@ mod tests {
         // лететь со скоростью из памяти игры, иначе экран выглядит застывшим.
         let mut f = open();
         f.source = FlightSource::Z80;
-        f.speed = 1.0;
+        f.speed = 12.0;
         if let Some(s) = f.stars.first_mut() {
-            s.pos = [0.0, 0.0, 2000.0];
+            s.pos = [200.0, 0.0, 2000.0];
         }
         let start = f.stars[0].pos;
         f.tick(Controls::default(), 0.1);
         let moved = f.stars[0].pos;
         let step = (0..3).map(|i| (moved[i] - start[i]).abs()).sum::<f32>();
         assert!(step > 1.0, "в Z80 LINK звёзды не движутся");
+    }
+
+    #[test]
+    fn z80_link_stars_turn_with_angle_rates() {
+        let mut f = open();
+        f.source = FlightSource::Z80;
+        let mut mem = vec![0u8; Z80_MEM_MIN];
+        let star = |pos: [f32; 3]| Star { pos, mag: 128 };
+
+        // Первый синк только запоминает таблицу звёзд: такта ещё не было.
+        f.sync_from_z80(&mem, true);
+
+        // Поворот без нового такта не применяется: иначе звёзды крутились бы
+        // на каждом кадре 50 Гц, а не с частотой игрового цикла (~5.5 Гц).
+        f.stars = vec![star([1000.0, 0.0, 0.0])];
+        mem[Z80_HIGH_ANGLE_LR] = 0x04;
+        mem[Z80_HIGH_ANGLE_DU] = 0x00;
+        f.sync_from_z80(&mem, true);
+        assert_eq!(
+            f.stars[0].pos,
+            [1000.0, 0.0, 0.0],
+            "поворот применён без игрового такта"
+        );
+
+        // Игровой такт ловим по изменению таблицы звёзд, как в памяти игры.
+        // Крен вправо: звезда на оси X должна уйти в +Y.
+        let mut tick = |f: &mut Flight, mem: &mut [u8]| {
+            mem[Z80_STARS_TABLE] = mem[Z80_STARS_TABLE].wrapping_add(1);
+            f.sync_from_z80(mem, true);
+        };
+        tick(&mut f, &mut mem);
+        let p = f.stars[0].pos;
+        let roll_angle = p[1].atan2(p[0]);
+        assert!(p[1] > 0.0, "положительный крен должен крутить поле против часовой");
+        // Масштаб из CalcNewCrdObj_Pl: крен *2/256.
+        assert!(
+            (roll_angle - 4.0 * 2.0 / 256.0).abs() < 1e-3,
+            "неверный масштаб крена: {roll_angle}"
+        );
+
+        // Тангаж: звезда впереди должна уйти вверх (положительный Y вида).
+        // Знак `HighAngleDU` противоположен повороту поля: при взгляде вверх
+        // мир на экране уезжает вниз.
+        f.stars = vec![star([0.0, 0.0, 1000.0])];
+        mem[Z80_HIGH_ANGLE_LR] = 0x00;
+        mem[Z80_HIGH_ANGLE_DU] = 0x02;
+        tick(&mut f, &mut mem);
+        let p = f.stars[0].pos;
+        let pitch_angle = (p[1] / 1000.0).asin();
+        assert!(p[1] > 0.0, "положительный тангаж должен уводить поле вверх");
+        // Масштаб из CalcNewCrdObj_Pl: тангаж *1/256.
+        assert!(
+            (pitch_angle - 2.0 / 256.0).abs() < 1e-3,
+            "неверный масштаб тангажа: {pitch_angle}"
+        );
+
+        // Обратный знак — обратное вращение.
+        f.stars = vec![star([1000.0, 0.0, 0.0])];
+        mem[Z80_HIGH_ANGLE_LR] = 0x84;
+        mem[Z80_HIGH_ANGLE_DU] = 0x00;
+        tick(&mut f, &mut mem);
+        assert!(
+            f.stars[0].pos[1] < 0.0,
+            "отрицательный крен должен крутить поле по часовой"
+        );
+    }
+
+    #[test]
+    fn z80_link_speed_comes_from_gauge_not_clobbered_speed() {
+        // На такте J-драйва `PrintStars` пишет в `HighDeltaSpeed` 0x1E/0x10.
+        // Шкала скорости не должна из-за этого прыгать.
+        let mut f = open();
+        f.source = FlightSource::Z80;
+        let mut mem = vec![0u8; Z80_MEM_MIN];
+        mem[Z80_SPEED_GAUGE] = 0x41; // 5 * 12 + 5
+        mem[Z80_HIGH_DELTA_SPEED] = 0x10; // след J-драйва
+        f.sync_from_z80(&mem, true);
+        assert!(
+            (f.speed - 12.0).abs() < 1e-6,
+            "скорость взята из затёртого HighDeltaSpeed: {}",
+            f.speed
+        );
+    }
+
+    #[test]
+    fn j_drive_accelerates_stars_on_game_tick() {
+        let mut f = open();
+        f.source = FlightSource::Z80;
+        let mut mem = vec![0u8; Z80_MEM_MIN];
+        mem[Z80_SPEED_GAUGE] = 0x41; // скорость 12
+        mem[Z80_HIGH_DELTA_SPEED] = 12;
+        f.sync_from_z80(&mem, true); // запомнили таблицу звёзд
+        let star = |pos: [f32; 3]| Star { pos, mag: 128 };
+
+        // Обычный такт: таблица обновилась, скорость настоящая.
+        f.stars = vec![star([100.0, 0.0, 1000.0])];
+        mem[Z80_STARS_TABLE] = 1;
+        f.sync_from_z80(&mem, true);
+        let before = f.stars[0].pos[0];
+        f.tick(Controls::default(), 1.0 / 50.0);
+        let normal = f.stars[0].pos[0] - before;
+
+        // Такт J-драйва: HighDeltaSpeed затёрт, таблица обновилась.
+        f.stars = vec![star([100.0, 0.0, 1000.0])];
+        mem[Z80_STARS_TABLE] = 2;
+        mem[Z80_HIGH_DELTA_SPEED] = 0x10;
+        f.sync_from_z80(&mem, true);
+        let before = f.stars[0].pos[0];
+        f.tick(Controls::default(), 1.0 / 50.0);
+        let fast = f.stars[0].pos[0] - before;
+
+        assert!(normal > 0.0, "звёзды не движутся на обычном такте");
+        assert!(
+            fast > normal * 2.0,
+            "J-драйв не разогнал звёзды: {normal} -> {fast}"
+        );
+    }
+
+    #[test]
+    fn j_drive_flag_latches_until_game_tick() {
+        let mut f = open();
+        f.source = FlightSource::Z80;
+        let mut mem = vec![0u8; Z80_MEM_MIN];
+        mem[Z80_SPEED_GAUGE] = 0x41;
+        f.sync_from_z80(&mem, true);
+
+        // `StarsFastScroll` может быть виден в кадре до обновления таблицы.
+        mem[Z80_STARS_FAST_SCROLL] = 1;
+        f.sync_from_z80(&mem, true);
+        assert!(!f.star_boost, "разгон включён до игрового такта");
+
+        mem[Z80_STARS_TABLE] = 3;
+        f.sync_from_z80(&mem, true);
+        assert!(f.star_boost, "флаг J-драйва потерян между кадрами");
+    }
+
+    #[test]
+    fn stars_stay_in_view_after_many_turns() {
+        // После длительного вращения и полёта ни одна звезда не должна
+        // оказаться в бесконечности или NaN — иначе на экране появляются
+        // длинные линии через весь кадр.
+        let mut f = open();
+        f.source = FlightSource::Z80;
+        let mut mem = vec![0u8; Z80_MEM_MIN];
+        mem[Z80_SPEED_GAUGE] = 0xA0; // скорость 31
+        mem[Z80_HIGH_DELTA_SPEED] = 31;
+        for frame in 0..2000 {
+            mem[Z80_HIGH_ANGLE_LR] = if frame % 2 == 0 { 0x0F } else { 0x8F };
+            mem[Z80_HIGH_ANGLE_DU] = if frame % 3 == 0 { 0x0F } else { 0x00 };
+            // Имитируем игровой такт: таблица звёзд обновляется.
+            mem[Z80_STARS_TABLE + frame % Z80_STARS_LEN] = frame as u8;
+            f.sync_from_z80(&mem, true);
+            f.tick(Controls::default(), 1.0 / 50.0);
+        }
+        for s in &f.stars {
+            assert!(s.pos.iter().all(|v| v.is_finite()), "координата звезды не число");
+            assert!(
+                s.pos.iter().all(|v| v.abs() < 20_000.0),
+                "звезда улетела слишком далеко: {:?}",
+                s.pos
+            );
+        }
+    }
+
+    #[test]
+    fn close_star_does_not_draw_long_streak() {
+        // Раньше близкая звезда оставляла линию через весь кадр: хвост
+        // проецировался по другой матрице. Теперь звезда — только точка.
+        let mut f = open();
+        f.stars = vec![Star {
+            pos: [0.4, 0.0, 0.6],
+            mag: 255,
+        }];
+        let mut frame = Frame::new(256, 192);
+        let screen = Screen {
+            cx: 128.0,
+            cy: 96.0,
+            k: 128.0,
+            bx: 0.0,
+            by: 0.0,
+        };
+        f.draw_stars(&mut frame, &screen);
+        let lit = frame.pixels().iter().filter(|&&p| p != 0).count();
+        assert!(lit <= 5, "звезда нарисовала {lit} пикселей вместо точки");
+    }
+
+    #[test]
+    fn planet_is_dark_green_and_smaller_than_sun() {
+        let f = open();
+        let planet = f.bodies.iter().find(|b| b.kind == BodyKind::Planet).unwrap();
+        assert_eq!(planet.color & 0x00FF_00FF, 0, "у планеты не зелёный цвет");
+        assert!((planet.color >> 8) & 0xFF > 0, "планета слишком тёмная");
+        assert_eq!(planet.radius, PLANET_RADIUS);
+        assert!(planet.radius < SUN_RADIUS, "планета не должна быть больше солнца");
+    }
+
+    #[test]
+    fn z80_link_detects_laser_shot_by_heating() {
+        let mut f = open();
+        f.source = FlightSource::Z80;
+        let mut mem = vec![0u8; Z80_MEM_MIN];
+
+        f.sync_from_z80(&mem, true);
+        assert_eq!(f.laser_timer, 0.0);
+
+        // Оригинал поднял TempLaser выстрелом: показываем луч.
+        mem[Z80_TEMP_LASER] = 0x08;
+        f.sync_from_z80(&mem, true);
+        assert!(
+            f.laser_timer > 0.0,
+            "выстрел в Z80 LINK не превратился в видимый луч"
+        );
+
+        // Остывание не должно само включать лазер.
+        f.laser_timer = 0.0;
+        mem[Z80_TEMP_LASER] = 0x00;
+        f.sync_from_z80(&mem, true);
+        assert_eq!(f.laser_timer, 0.0);
+    }
+
+    #[test]
+    fn enemy_attack_draws_visible_beam() {
+        let mut f = open();
+        f.bodies.clear();
+        f.bodies.push(Body {
+            kind: BodyKind::Ship,
+            model: shipdata::SHIPS.iter().find(|s| s.name == "d_Viper"),
+            pos: [0.0, 0.0, 1400.0],
+            rot: Rotation::identity(),
+            spin: [0.0; 3],
+            spin_rate: 0.0,
+            radius: 110.0,
+            color: CYAN,
+            fire_timer: 0.0,
+        });
+        let shield_before = f.shield;
+        f.tick(Controls::default(), 1.0 / 50.0);
+        assert!(f.shield < shield_before, "атака не сняла щит");
+        assert!(!f.enemy_shots.is_empty(), "выстрел противника не создан");
+
+        let font = vec![0xFFu8; 0x300];
+        let mut frame = Frame::new(1280, 960);
+        f.draw(&mut frame, &font);
+        let beam_pixels = frame
+            .pixels()
+            .iter()
+            .filter(|&&p| p == 0xFFFF_A020)
+            .count();
+        assert!(
+            beam_pixels > 50,
+            "луч противника не попал в кадр или оборвался у перекрестия: {beam_pixels} px"
+        );
+    }
+
+    #[test]
+    fn z80_link_shows_enemy_beam_when_shield_drops() {
+        let mut f = open();
+        f.source = FlightSource::Z80;
+        let mut mem = z80_mem_with_flight();
+        f.sync_from_z80(&mem, true);
+        assert!(f.enemy_shots.is_empty(), "луч появился без попадания");
+
+        // Оригинал обработал попадание: передний щит уменьшился.
+        mem[Z80_SHIELD_FRONT] = 0x40;
+        f.sync_from_z80(&mem, true);
+        assert!(
+            !f.enemy_shots.is_empty(),
+            "падение щита в Z80 LINK не показано лучом"
+        );
+        let shot = &f.enemy_shots[0];
+        assert!(
+            shot.from[2] > NEAR,
+            "луч противника начался не у корабля: {:?}",
+            shot.from
+        );
+    }
+
+    #[test]
+    fn z80_link_does_not_simulate_native_hits() {
+        // В Z80 LINK попадания считает оригинальная игра. Локальный тик не
+        // должен удалять объект, пришедший из памяти, и накручивать победы.
+        let mut f = open();
+        f.source = FlightSource::Z80;
+        f.bodies.clear();
+        f.bodies.push(Body {
+            kind: BodyKind::Ship,
+            model: None,
+            pos: [0.0, 0.0, 1000.0],
+            rot: Rotation::identity(),
+            spin: [0.0; 3],
+            spin_rate: 0.0,
+            radius: 100.0,
+            color: FG,
+            fire_timer: 0.0,
+        });
+        f.tick(
+            Controls {
+                fire: true,
+                ..Controls::default()
+            },
+            1.0 / 50.0,
+        );
+        assert_eq!(f.kills, 0, "победа накручена без участия Z80");
+        assert_eq!(
+            f.bodies.iter().filter(|b| b.kind == BodyKind::Ship).count(),
+            1,
+            "корабль из памяти Z80 удалён нативным выстрелом"
+        );
     }
 
     #[test]
@@ -1290,14 +1997,17 @@ mod tests {
             .find(|b| b.kind == BodyKind::Station)
             .unwrap();
         assert_eq!(station.pos, [1800.0, -420.0, 4200.0]);
-        assert!(f.speed >= 0.15, "нулевая скорость — звёзды стоят");
+        assert!(
+            f.speed_fraction() > 0.0,
+            "нулевая скорость — пустая шкала индикатора"
+        );
 
         // После возврата в Native мир снова движется.
         if let Some(s) = f.stars.first_mut() {
-            s.pos = [0.0, 0.0, 2000.0];
+            s.pos = [200.0, 0.0, 2000.0];
         }
         let start = f.stars[0].pos;
-        for _ in 0..10 {
+        for _ in 0..20 {
             f.tick(Controls::default(), 1.0 / 50.0);
         }
         let moved = f.stars[0].pos;
@@ -1309,7 +2019,7 @@ mod tests {
         let mut frame = Frame::new(1280, 960);
         f.draw(&mut frame, &font);
         assert!(
-            frame.pixels().iter().any(|&p| p == 0xFF40_80C0),
+            frame.pixels().iter().any(|&p| is_planet_green(p)),
             "планета не нарисована после возврата в Native"
         );
     }
@@ -1318,6 +2028,7 @@ mod tests {
     fn pitch_changes_orientation_and_forward_motion() {
         let mut f = open();
         let before = f.rot;
+        let speed_before = f.speed;
         f.tick(
             Controls {
                 pitch_up: true,
@@ -1327,7 +2038,7 @@ mod tests {
             1.0 / 50.0,
         );
         assert!(f.rot.m != before.m, "тангаж не изменил ориентацию");
-        assert!(f.speed > 0.22, "тяга не увеличила скорость");
+        assert!(f.speed > speed_before, "тяга не увеличила скорость");
         let start = f.pos;
         for _ in 0..50 {
             f.tick(Controls::default(), 1.0 / 50.0);
@@ -1336,18 +2047,136 @@ mod tests {
     }
 
     #[test]
+    fn pitch_up_moves_world_down() {
+        // Если нос поднимается (S), звёзды и объекты впереди должны уезжать
+        // вниз по экрану. Раньше знак был перепутан.
+        let mut f = open();
+        f.stars = vec![Star {
+            pos: [0.0, 0.0, 1000.0],
+            mag: 128,
+        }];
+        f.tick(Controls { pitch_up: true, ..Controls::default() }, 1.0 / 50.0);
+        assert!(
+            f.stars[0].pos[1] < 0.0,
+            "при подъёме носа звезда ушла вверх: {}",
+            f.stars[0].pos[1]
+        );
+    }
+
+    #[test]
     fn stars_move_faster_with_speed() {
+        let star = |pos: [f32; 3]| Star { pos, mag: 128 };
+        let mut slow = open();
+        slow.speed = 0.0;
+        slow.stars = vec![star([200.0, 0.0, 2000.0])];
         let mut fast = open();
-        fast.speed = 1.0;
-        if let Some(s) = fast.stars.first_mut() {
-            s.pos = [0.0, 0.0, 2000.0];
-        }
+        fast.speed = SPEED_MAX;
+        fast.stars = vec![star([200.0, 0.0, 2000.0])];
+
+        let start = slow.stars[0].pos;
+        slow.tick(Controls::default(), 0.1);
+        let slow_step = (slow.stars[0].pos[0] - start[0]).abs();
         let start = fast.stars[0].pos;
         fast.tick(Controls::default(), 0.1);
-        let moved = fast.stars[0].pos;
-        let step = (0..3).map(|i| (moved[i] - start[i]).abs()).sum::<f32>();
-        assert!(step > 1.0, "на полной скорости звёзды не движутся");
-        assert!(moved[2] < start[2], "звёзды должны двигаться навстречу камере");
+        let fast_step = (fast.stars[0].pos[0] - start[0]).abs();
+
+        assert!(slow_step > 0.0, "на минимальной скорости звёзды стоят");
+        assert!(
+            fast_step > slow_step * 2.0,
+            "скорость слабо влияет на звёзды: {slow_step} -> {fast_step}"
+        );
+        assert!(fast.stars[0].pos[2] > 0.0, "звезда должна оставаться впереди");
+    }
+
+    #[test]
+    fn star_field_spawns_near_center_and_scales_with_screen() {
+        // Исходное поле — 16 звёзд, но на большом кадре их должно быть
+        // заметно больше, иначе экран выглядит пустым.
+        let f = open();
+        assert_eq!(f.stars.len(), STAR_COUNT);
+        for s in &f.stars {
+            let r = (s.pos[0] * s.pos[0] + s.pos[1] * s.pos[1]).sqrt() / s.pos[2];
+            assert!(
+                r <= 0.3,
+                "звезда родилась слишком далеко от центра: радиус {r:.2}"
+            );
+        }
+        assert_eq!(star_count_for(256, 192), STAR_COUNT);
+        let small = star_count_for(640, 480);
+        let large = star_count_for(1280, 800);
+        assert!(small < large, "плотность звёзд не растёт с разрешением");
+        assert!(large >= 150, "на большом экране звёзд всё ещё мало: {large}");
+        assert!(star_count_for(4000, 3000) <= STAR_COUNT_MAX);
+    }
+
+    #[test]
+    fn stars_cross_view_at_calm_pace() {
+        // Регрессия на «звёзды летят слишком быстро»: на крейсерской скорости
+        // звезда должна идти от радиуса 0.3 до края кадра несколько секунд,
+        // а не доли секунды.
+        let mut f = open();
+        f.speed = 12.0;
+        f.stars = vec![Star {
+            pos: [600.0, 0.0, 2000.0],
+            mag: 128,
+        }];
+        let mut frames = 0;
+        while frames < 2000 {
+            let s = &f.stars[0];
+            if s.pos[0] / s.pos[2] >= 1.0 {
+                break;
+            }
+            f.tick(Controls::default(), 1.0 / 50.0);
+            frames += 1;
+        }
+        let seconds = frames as f32 / 50.0;
+        assert!(
+            (2.0..12.0).contains(&seconds),
+            "звезда пересекает кадр за {seconds:.2} с — темп не похож на оригинал"
+        );
+    }
+
+    #[test]
+    fn speed_gauge_matches_original_full_range() {
+        let mut f = open();
+        // В памяти было 0x50 = 5*15+5, значит скорость 15 из 31.
+        assert!((f.speed - 15.0).abs() < 1e-6);
+        assert!((f.speed_fraction() - 16.0 / 32.0).abs() < 1e-6);
+        // На нуле шкала не пустая, на максимуме — полная.
+        f.speed = 0.0;
+        assert!((f.speed_fraction() - 1.0 / 32.0).abs() < 1e-6);
+        f.speed = SPEED_MAX;
+        assert!((f.speed_fraction() - 1.0).abs() < 1e-6);
+    }
+
+    #[test]
+    fn thrust_reaches_maximum_and_brake_returns_to_minimum() {
+        let mut f = open();
+        let frames = (SPEED_MAX / SPEED_ACCEL * 50.0).ceil() as usize + 10;
+        for _ in 0..frames {
+            f.tick(
+                Controls {
+                    throttle_up: true,
+                    ..Controls::default()
+                },
+                1.0 / 50.0,
+            );
+        }
+        assert!(
+            (f.speed - SPEED_MAX).abs() < 1e-3,
+            "тяга не выводит на максимум: {}",
+            f.speed
+        );
+        for _ in 0..frames {
+            f.tick(
+                Controls {
+                    throttle_down: true,
+                    ..Controls::default()
+                },
+                1.0 / 50.0,
+            );
+        }
+        assert!(f.speed < 1e-3, "торможение не сбрасывает скорость: {}", f.speed);
     }
 
     #[test]
@@ -1375,7 +2204,7 @@ mod tests {
             "объекты и перекрестие не нарисованы"
         );
         assert!(
-            frame.pixels().iter().any(|&p| p == 0xFF40_80C0),
+            frame.pixels().iter().any(|&p| is_planet_green(p)),
             "цвет планеты не взят из начальных данных системы"
         );
         if let Ok(path) = std::env::var("ELITE_DUMP_FLIGHT") {
@@ -1450,6 +2279,7 @@ mod tests {
     fn z80_mem_with_flight() -> Vec<u8> {
         let mut mem = vec![0u8; 0x10000];
         mem[Z80_HIGH_DELTA_SPEED] = 0x17;
+        mem[Z80_SPEED_GAUGE] = 0x17 * 5 + 5; // индикатор скорости
         mem[Z80_SHIELD_FRONT] = 0x50;
         mem[Z80_FUEL] = 0xA0;
         mem[Z80_TEMP_LASER] = 0x20;
@@ -1496,7 +2326,7 @@ mod tests {
         let mem = z80_mem_with_flight();
         f.sync_from_z80(&mem, true);
 
-        assert!((f.speed - 0x17 as f32 / 0xA0 as f32).abs() < 1e-6);
+        assert!((f.speed - 0x17 as f32).abs() < 1e-6);
         assert!((f.shield - 0x50 as f32 / 0xA0 as f32).abs() < 1e-6);
         assert!((f.fuel - 1.0).abs() < 1e-6);
         assert!((f.laser_heat - 0x20 as f32 / 0xA0 as f32).abs() < 1e-6);
@@ -1559,6 +2389,7 @@ mod tests {
             "слот без модели попал в сцену"
         );
     }
+
 
     /// Загрузить образ Кладова и выйти в космос, как это делает игра.
     fn launch_kladov() -> crate::machine::Spectrum {
@@ -1641,9 +2472,11 @@ mod tests {
         f.sync_from_z80(&m.mem, true);
 
         // Приборы и камера — из живой памяти игры.
+        let gauge_speed = (m.mem[Z80_SPEED_GAUGE].saturating_sub(5) / 5) as f32;
         assert!(
-            (f.speed - m.mem[Z80_HIGH_DELTA_SPEED] as f32 / 0xA0 as f32).abs() < 1e-6,
-            "скорость не совпала с HighDeltaSpeed"
+            (f.speed - gauge_speed).abs() < 1e-6,
+            "скорость не совпала со шкалой: {} != {gauge_speed}",
+            f.speed
         );
         assert_eq!(f.pos, [0.0; 3], "камера Z80 LINK должна быть в начале координат");
 

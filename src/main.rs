@@ -719,7 +719,8 @@ struct App<'a> {
     /// Нативный экран закупки оборудования (F4) — заменяет экран игры.
     shop: equip::Shop,
     /// Нативный движок полёта (F1) — альтернатива Z80-полёту. Пока активен,
-    /// эмулятор стоит, а окно занимает [`flight::Flight`].
+    /// окно занимает [`flight::Flight`]; эмулятор крутится в фоне ради
+    /// оригинального звука (а в Z80 LINK ещё и задаёт мир).
     flight: flight::Flight,
     /// Нативная заставка (титульный экран): пока игра на интро, эмуляция не
     /// идёт, а окно занимает нативный рендер (`splash`).
@@ -891,7 +892,7 @@ impl<'a> App<'a> {
                 KeyCode::ArrowUp | KeyCode::KeyS => self.hdmap.move_by(0, -4),
                 KeyCode::ArrowDown | KeyCode::KeyX => self.hdmap.move_by(0, 4),
                 KeyCode::Enter | KeyCode::Space => {
-                    // На автоповторе не переходим в игру (Space — огонь).
+                    // На автоповторе не подтверждаем выбор повторно.
                     if !repeat {
                         self.hdmap.snap_to_nearest();
                     }
@@ -934,7 +935,7 @@ impl<'a> App<'a> {
                 KeyCode::ArrowUp => self.shop.move_selection(-1),
                 KeyCode::ArrowDown => self.shop.move_selection(1),
                 KeyCode::Enter | KeyCode::Space => {
-                    // На автоповторе не переходим в игру (Space — огонь).
+                    // На автоповторе не подтверждаем выбор повторно.
                     if !repeat {
                         self.shop.confirm(&mut self.machine.mem);
                     }
@@ -1090,6 +1091,20 @@ impl<'a> App<'a> {
         self.forward_input();
     }
 
+    /// Синтезировать и отдать звук последнего кадра эмулятора.
+    fn play_frame_audio(&mut self) {
+        if self.audio.is_none() && self.wav_samples.is_none() {
+            return;
+        }
+        self.machine.render_audio(&mut self.audio_buf);
+        if let Some(audio) = &self.audio {
+            audio.push(&self.audio_buf);
+        }
+        if let Some(wav) = &mut self.wav_samples {
+            wav.extend_from_slice(&self.audio_buf);
+        }
+    }
+
     /// Передать матрицу клавиш и джойстик в эмулятор без проверки нативных
     /// экранов. Нужно для Z80 LINK: там под нативным рендером продолжает
     /// работать эмулятор, и ему требуется живой ввод.
@@ -1150,8 +1165,9 @@ impl<'a> App<'a> {
             self.machine.hd.resize(size.width as usize, size.height as usize);
             self.machine.hd.clear(display::TRANSPARENT);
             if self.flight.active {
-                // Нативный полёт. В режиме Z80-linked эмулятор продолжает работать
-                // для сравнения, в режиме Native эмулятор стоит.
+                // Нативный полёт. В режиме Z80-linked эмулятор продолжает
+                // работать и задаёт мир; в режиме Native он тоже работает —
+                // ради оригинального звука и ввода, — но сцену не задаёт.
                 if matches!(self.flight.source, flight::FlightSource::Z80) {
                     if !self.menu {
                         // Z80 LINK: эмулятор продолжает жить, ввод идёт в игру.
@@ -1162,18 +1178,23 @@ impl<'a> App<'a> {
                         // берётся из памяти игры в sync_from_z80.
                         self.flight
                             .tick(flight::Controls::default(), 1.0 / 50.0);
+                        self.play_frame_audio();
                     } else {
                         self.machine.release_all_keys();
                         self.machine.release_joystick();
                     }
+                } else if !self.menu {
+                    // Native: эмулятор крутится в фоне, чтобы звук оставался
+                    // оригинальным. Нативное движение считает flight.tick.
+                    self.forward_input();
+                    self.machine.run_frame();
+                    self.play_frame_audio();
+                    let controls =
+                        flight::Controls::from_matrix(&self.matrix, &self.kempston);
+                    self.flight.tick(controls, 1.0 / 50.0);
                 } else {
                     self.machine.release_all_keys();
                     self.machine.release_joystick();
-                    if !self.menu {
-                        let controls =
-                            flight::Controls::from_matrix(&self.matrix, &self.kempston);
-                        self.flight.tick(controls, 1.0 / 50.0);
-                    }
                 }
             } else if self.machine.intro_seen {
                 // Нативная заставка: вращающаяся тестовая фигура, ZX-кадр не
@@ -1207,13 +1228,7 @@ impl<'a> App<'a> {
                     self.machine.save_requested = false;
                     do_save(&mut self.machine, self.opts, &mut self.last_path);
                 }
-                self.machine.render_audio(&mut self.audio_buf);
-                if let Some(audio) = &self.audio {
-                    audio.push(&self.audio_buf);
-                }
-                if let Some(wav) = &mut self.wav_samples {
-                    wav.extend_from_slice(&self.audio_buf);
-                }
+                self.play_frame_audio();
             }
         }
         // Сбрасываем однократные события мыши
@@ -1762,8 +1777,9 @@ mod intro_tests {
         assert!(!app.shop.active, "F4 не закрыл экран закупки");
     }
 
-    /// F1 открывает нативный движок полёта: Z80 стоит, ввод не уходит в игру,
-    /// F10/F4 не открываются поверх полёта, а 1 или F1 возвращают Z80.
+    /// F1 открывает нативный движок полёта: ввод забирает полёт, а не
+    /// `apply_input`, F10/F4 не открываются поверх полёта, а 1 или F1
+    /// возвращают Z80.
     #[test]
     fn f1_opens_and_closes_native_flight() {
         let opts = test_options();
