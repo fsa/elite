@@ -715,6 +715,9 @@ struct App<'a> {
     /// Нативный кокпит (приборная панель) — рисуется в нижней части окна
     /// поверх ZX-кадра, растянут на всю ширину (16:10).
     cockpit: cockpit::Cockpit,
+    /// Показания панели на заставке: пока случайные, но стабильные между
+    /// кадрами, чтобы шкалы не мерцали.
+    splash_values: cockpit::CockpitValues,
     /// Выбранный пункт меню паузы (0 — продолжить, 1 — сохранить, 2 — загрузить,
     /// 3 — выйти). Стрелки двигают выбор, Enter подтверждает.
     menu_sel: usize,
@@ -763,6 +766,7 @@ impl<'a> App<'a> {
             flight: flight::Flight::new(),
             splash: splash::Splash::new(),
             cockpit: cockpit::Cockpit::new(),
+            splash_values: cockpit::CockpitValues::for_splash(),
             menu_sel: 0,
             quit: false,
             buf: vec![0u32; SRC_W * SRC_H],
@@ -1207,11 +1211,17 @@ impl<'a> App<'a> {
             // и тот же кокпит, что на заставке, — внизу.
             let g = cockpit::panel_geometry(size.width, size.height);
             self.flight.draw(&mut self.machine.hd, &g);
-            self.cockpit.draw_themed(
+            let values = cockpit::KLADOV_COCKPIT.read(&self.machine.mem);
+            let style = cockpit::CockpitStyle {
+                line: self.flight.cockpit_color(),
+                bar: self.flight.cockpit_bar_color(),
+            };
+            self.cockpit.draw_with_geom(
                 &mut self.machine.hd,
-                self.flight.cockpit_color(),
-                self.flight.cockpit_bar_color(),
+                &g,
                 &self.font,
+                style,
+                &values,
             );
             if self.menu {
                 draw_pause_menu(&mut self.machine.hd, &self.font, self.menu_sel, false);
@@ -1228,7 +1238,13 @@ impl<'a> App<'a> {
             let g = cockpit::panel_geometry(size.width, size.height);
             self.splash
                 .draw_in(&mut self.machine.hd, &self.font, g.panel_y.max(1));
-            self.cockpit.draw(&mut self.machine.hd, &self.font);
+            self.cockpit.draw_with_geom(
+                &mut self.machine.hd,
+                &g,
+                &self.font,
+                cockpit::CockpitStyle::COBRA_MK3,
+                &self.splash_values,
+            );
             if self.menu {
                 draw_pause_menu(&mut self.machine.hd, &self.font, self.menu_sel, true);
             }
@@ -2038,7 +2054,12 @@ mod intro_tests {
         // Заставка в верхней области, кокпит — вокруг неё и внизу (как в
         // игровом цикле).
         splash::Splash::new().draw_in(&mut hd, font, g.panel_y.max(1));
-        cockpit::Cockpit::new().draw(&mut hd, font);
+        cockpit::Cockpit::new().draw(
+            &mut hd,
+            font,
+            cockpit::CockpitStyle::COBRA_MK3,
+            &cockpit::CockpitValues::for_splash(),
+        );
         // Панель непрозрачна.
         for y in g.panel_y..h as i32 {
             for x in 0..w {
@@ -2176,7 +2197,12 @@ mod intro_tests {
                 "вид залез на панель в строке {y}"
             );
         }
-        cockpit::Cockpit::new().draw(&mut hd, font);
+        cockpit::Cockpit::new().draw(
+            &mut hd,
+            font,
+            cockpit::CockpitStyle::COBRA_MK3,
+            &cockpit::KLADOV_COCKPIT.read(&m.mem),
+        );
         assert!(
             hd.pixels().iter().all(|&p| p >> 24 == 0xFF),
             "на стыке вида и панели осталась прозрачная щель"

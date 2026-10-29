@@ -31,11 +31,15 @@
 //! фиксирована по высоте строки ([`LABEL_WIDTH_PER_ROW_PCT`]) и при смене
 //! соотношения сторон не растягивается.
 //!
+//! Значения панели приходят одним снимком [`CockpitValues`]: кокпит не
+//! читает память Z80 сам. [`CockpitLayout::read`] превращает байты живой
+//! памяти в [`Indicator`] для каждой строки. Статическая часть панели
+//! (`draw_chrome`) и значения (`draw_indicators`) рисуются раздельно, но
+//! вызывающий код делает один вызов [`Cockpit::draw`].
+//!
 //! Геометрия (`CockpitGeom`) отдаёт прямоугольники вида, панели, клеток и
 //! разделителей, чтобы следующие шаги рисовали внутри неё, а не заново
-//! считали отступы. Адреса переменных панели сохранены в [`CockpitLayout`]:
-//! значения читаются из живой памяти Z80 (`mem`) и понадобятся, когда полосы
-//! начнут показывать реальные показания.
+//! считали отступы.
 
 use crate::display::Frame;
 
@@ -69,6 +73,102 @@ pub const LABEL_WIDTH_PER_ROW_PCT: i32 = 225;
 pub const BAR_RED: u32 = 0xFFD7_0000;
 /// Цвет длинных клеток у Cobra Mk IV — фиолетовый (ZX paper 3).
 pub const BAR_MAGENTA: u32 = 0xFFD7_00D7;
+
+/// Количество позиций запаса ракет — четыре, как в оригинале.
+pub const MISSILE_SLOTS: i32 = 4;
+/// Номер строки с запасом ракет (слева внизу).
+pub const MISSILE_ROW: i32 = PANEL_ROWS - 1;
+
+/// Максимум шкалы индикатора (`0xA0` = 100%, как в оригинале).
+pub const GAUGE_MAX: u8 = 0xA0;
+/// Максимальное отклонение стрелки влево/вправо (нейтраль — 0).
+pub const DEFLECTION_MAX: i8 = 15;
+
+/// Значение одной длинной клетки панели.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Indicator {
+    /// Шкала `0..=GAUGE_MAX`.
+    Gauge(u8),
+    /// Отклонение влево/вправо: `-DEFLECTION_MAX..=DEFLECTION_MAX`, 0 — центр.
+    Deflection(i8),
+    /// Запас ракет `0..=MISSILE_SLOTS`.
+    Missiles(u8),
+    /// Пустая клетка.
+    Empty,
+}
+
+/// Снимок показаний панели на один кадр.
+///
+/// Кокпит не читает память Z80 сам: вызывающий код (полёт или заставка)
+/// готовит значения заранее. Индексы строк совпадают с [`LEFT_LABELS`] и
+/// [`RIGHT_LABELS`].
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct CockpitValues {
+    pub left: [Indicator; PANEL_ROWS as usize],
+    pub right: [Indicator; PANEL_ROWS as usize],
+}
+
+impl CockpitValues {
+    /// Псевдослучайные показания для заставки.
+    ///
+    /// Генератор детерминированный: набор не меняется от кадра к кадру,
+    /// поэтому панель на заставке не мерцает.
+    pub fn for_splash() -> Self {
+        let mut seed = 0x5EED_1234u32;
+        let mut next = || {
+            seed = seed.wrapping_mul(1_664_525).wrapping_add(1_013_904_223);
+            (seed >> 16) as u8
+        };
+        let gauge = |v: u8| Indicator::Gauge(v % (GAUGE_MAX + 1));
+        let deflection = |v: u8| Indicator::Deflection((v % 31) as i8 - DEFLECTION_MAX);
+        CockpitValues {
+            left: [
+                gauge(next()),
+                gauge(next()),
+                gauge(next()),
+                gauge(next()),
+                gauge(next()),
+                gauge(next()),
+                Indicator::Missiles(next() % (MISSILE_SLOTS as u8 + 1)),
+            ],
+            right: [
+                gauge(next()),
+                deflection(next()),
+                deflection(next()),
+                gauge(next()),
+                gauge(next()),
+                gauge(next()),
+                gauge(next()),
+            ],
+        }
+    }
+}
+
+/// Цвета кокпита: линии/индикаторы и фон длинных клеток.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct CockpitStyle {
+    pub line: u32,
+    pub bar: u32,
+}
+
+impl CockpitStyle {
+    /// Cobra Mk III и заставка: белые линии, красные полосы.
+    pub const COBRA_MK3: CockpitStyle = CockpitStyle {
+        line: FRAME_COLOR,
+        bar: BAR_RED,
+    };
+    /// Cobra Mk IV: белые линии, фиолетовые полосы.
+    pub const COBRA_MK4: CockpitStyle = CockpitStyle {
+        line: FRAME_COLOR,
+        bar: BAR_MAGENTA,
+    };
+}
+
+impl Default for CockpitStyle {
+    fn default() -> Self {
+        Self::COBRA_MK3
+    }
+}
 
 /// Подписи левой колонки сверху вниз.
 ///
@@ -128,6 +228,12 @@ pub struct CockpitLayout {
     pub speed: u16,
     /// Четыре энергоблока (`ShieldUnit1..4`), идут подряд с шагом 2.
     pub shield_unit1: u16,
+    /// Отклонение влево/вправо (`RotateLR`), нейтраль `0x15`.
+    pub rotate_lr: u16,
+    /// Отклонение вверх/вниз (`RotateDU`), нейтраль `0x15`.
+    pub rotate_du: u16,
+    /// Запас ракет (`PilotMissiles`), 0..4.
+    pub missiles: u16,
     /// Индикатор опасности (`IndDanger`) — задаёт цвет рамки.
     pub ind_danger: u16,
 }
@@ -143,6 +249,9 @@ pub const ELITE_COCKPIT: CockpitLayout = CockpitLayout {
     altitude: 0x7050,
     speed: 0x7052,
     shield_unit1: 0x7054,
+    rotate_lr: 0x705C,
+    rotate_du: 0x705E,
+    missiles: 0xA845,
     ind_danger: 0x7062,
 };
 
@@ -157,8 +266,48 @@ pub const KLADOV_COCKPIT: CockpitLayout = CockpitLayout {
     altitude: 0x70F2,
     speed: 0x70F4,
     shield_unit1: 0x70F6,
+    rotate_lr: 0x70FE,
+    rotate_du: 0x7100,
+    missiles: 0xD083,
     ind_danger: 0x7104,
 };
+
+impl CockpitLayout {
+    /// Прочитать показания панели из живой памяти Z80.
+    ///
+    /// Значения шкал ограничиваются [`GAUGE_MAX`], отклонения приводятся
+    /// к нейтрали `0x15`, запас ракет — к [`MISSILE_SLOTS`].
+    pub fn read(&self, mem: &[u8]) -> CockpitValues {
+        let byte = |addr: u16| mem.get(addr as usize).copied().unwrap_or(0);
+        let gauge = |addr: u16| Indicator::Gauge(byte(addr).min(GAUGE_MAX));
+        let deflection = |addr: u16| {
+            let offset = byte(addr) as i16 - 0x15;
+            Indicator::Deflection(
+                offset.clamp(-(DEFLECTION_MAX as i16), DEFLECTION_MAX as i16) as i8,
+            )
+        };
+        CockpitValues {
+            left: [
+                gauge(self.shield_front),
+                gauge(self.shield_rear),
+                gauge(self.fuel),
+                gauge(self.temperature),
+                gauge(self.laser_temp),
+                gauge(self.altitude),
+                Indicator::Missiles(byte(self.missiles).min(MISSILE_SLOTS as u8)),
+            ],
+            right: [
+                gauge(self.speed),
+                deflection(self.rotate_lr),
+                deflection(self.rotate_du),
+                gauge(self.shield_unit1),
+                gauge(self.shield_unit1 + 2),
+                gauge(self.shield_unit1 + 4),
+                gauge(self.shield_unit1 + 6),
+            ],
+        }
+    }
+}
 
 /// Прямоугольник в пикселях окна.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -352,6 +501,46 @@ impl CockpitGeom {
         }
     }
 
+    /// Ширина одной позиции запаса ракет.
+    ///
+    /// Позиция — это белый прямоугольник ракеты и промежуток до следующей:
+    /// в оригинале иконка шириной в знакоместо чуть шире своей высоты,
+    /// а между иконками остаётся цветной зазор. Поэтому шаг позиции равен
+    /// высоте строки плюс [`LINE`].
+    pub fn missile_slot_width(&self) -> i32 {
+        (self.side_row(MISSILE_ROW).h + LINE).max(1)
+    }
+
+    /// Клетка запаса ракет — левая часть длинной клетки.
+    ///
+    /// Содержит до [`MISSILE_SLOTS`] фиксированных позиций; на узком окне
+    /// ужимается по ширине полосы.
+    pub fn missile_cell(&self, row: i32, right: bool) -> Rect {
+        let bar = self.bar_cell(row, right);
+        let w = (self.missile_slot_width() * MISSILE_SLOTS).min(bar.w);
+        Rect {
+            x: bar.x,
+            y: bar.y,
+            w,
+            h: bar.h,
+        }
+    }
+
+    /// Клетка режима — правая часть длинной клетки после ракет.
+    ///
+    /// Пока всегда чёрная; позже её цвет будет зависеть от режима.
+    pub fn mode_cell(&self, row: i32, right: bool) -> Rect {
+        let bar = self.bar_cell(row, right);
+        let missiles = self.missile_cell(row, right);
+        let x = missiles.x + missiles.w + LINE;
+        Rect {
+            x,
+            y: bar.y,
+            w: (bar.x + bar.w - x).max(0),
+            h: bar.h,
+        }
+    }
+
     /// Большая центральная клетка на всю высоту панели.
     pub fn center_cell(&self) -> Rect {
         let inner = self.panel_inner();
@@ -408,27 +597,19 @@ impl Cockpit {
         Cockpit
     }
 
-    /// Нарисовать кокпит белыми линиями; длинные клетки — красные (Cobra
-    /// Mk III, а также заставка).
+    /// Нарисовать кокпит: рамки, таблицу и текущие показания.
     ///
-    /// `font` — знакогенератор ПЗУ ZX (коды 0x20..0x7F) для подписей.
-    pub fn draw(&self, f: &mut Frame, font: &[u8]) {
-        self.draw_themed(f, FRAME_COLOR, BAR_RED, font);
-    }
-
-    /// Нарисовать кокпит линиями цвета `color` (например, красными при
-    /// попадании по кораблю); длинные клетки остаются красными.
-    pub fn draw_colored(&self, f: &mut Frame, color: u32, font: &[u8]) {
-        self.draw_themed(f, color, BAR_RED, font);
-    }
-
-    /// Нарисовать кокпит с заданными цветом линий и цветом длинных клеток.
-    ///
-    /// `bar_color` — цвет полос по типу корабля игрока: [`BAR_RED`] для
-    /// Cobra Mk III и [`BAR_MAGENTA`] для Cobra Mk IV.
-    pub fn draw_themed(&self, f: &mut Frame, line_color: u32, bar_color: u32, font: &[u8]) {
+    /// `font` — знакогенератор ПЗУ ZX (коды 0x20..0x7F) для подписей,
+    /// `style` — цвета линий и полос, `values` — снимок показаний на кадр.
+    pub fn draw(
+        &self,
+        f: &mut Frame,
+        font: &[u8],
+        style: CockpitStyle,
+        values: &CockpitValues,
+    ) {
         let g = panel_geometry(f.width as u32, f.height as u32);
-        self.draw_with_geom(f, &g, line_color, bar_color, font);
+        self.draw_with_geom(f, &g, font, style, values);
     }
 
     /// Нарисовать кокпит по заранее вычисленной геометрии.
@@ -440,9 +621,9 @@ impl Cockpit {
         &self,
         f: &mut Frame,
         g: &CockpitGeom,
-        line_color: u32,
-        bar_color: u32,
         font: &[u8],
+        style: CockpitStyle,
+        values: &CockpitValues,
     ) {
         // Нижняя часть непрозрачна и закрывает всё, что под ней.
         if g.panel_h > 0 && g.width > 0 {
@@ -456,32 +637,18 @@ impl Cockpit {
         }
         // Главная рамка вокруг вида и отдельная рамка нижней части с
         // отступом от неё.
-        stroke_rect(f, g.main_frame(), LINE, line_color);
-        stroke_rect(f, g.panel_frame(), LINE, line_color);
-        draw_panel(f, g, line_color, bar_color, font);
+        stroke_rect(f, g.main_frame(), LINE, style.line);
+        stroke_rect(f, g.panel_frame(), LINE, style.line);
+        draw_chrome(f, g, font, style);
+        draw_indicators(f, g, style, values);
     }
 }
 
-/// Нарисовать таблицу панели: длинные клетки, разделители и подписи.
-fn draw_panel(f: &mut Frame, g: &CockpitGeom, line_color: u32, bar_color: u32, font: &[u8]) {
+/// Нарисовать статическую часть панели: разделители и подписи.
+fn draw_chrome(f: &mut Frame, g: &CockpitGeom, font: &[u8], style: CockpitStyle) {
     let inner = g.panel_inner();
     if inner.is_empty() {
         return;
-    }
-    // Длинные клетки с будущими индикаторами — цвет типа корабля.
-    for right in [false, true] {
-        for row in 0..PANEL_ROWS {
-            let bar = g.bar_cell(row, right);
-            if !bar.is_empty() {
-                f.fill_rect(
-                    bar.x,
-                    bar.y,
-                    bar.w as usize,
-                    bar.h as usize,
-                    bar_color,
-                );
-            }
-        }
     }
     // Горизонтальные разделители только в боковых колонках: центральная
     // клетка одна на все семь строк.
@@ -495,7 +662,7 @@ fn draw_panel(f: &mut Frame, g: &CockpitGeom, line_color: u32, bar_color: u32, f
                 sep.y,
                 left_w as usize,
                 sep.h as usize,
-                line_color,
+                style.line,
             );
         }
         let right_x = center.x + center.w;
@@ -506,19 +673,225 @@ fn draw_panel(f: &mut Frame, g: &CockpitGeom, line_color: u32, bar_color: u32, f
                 sep.y,
                 right_w as usize,
                 sep.h as usize,
-                line_color,
+                style.line,
             );
         }
     }
     // Вертикальные разделители между всеми клетками таблицы.
     for x in g.column_separators() {
-        f.fill_rect(x, inner.y, LINE as usize, inner.h as usize, line_color);
+        f.fill_rect(x, inner.y, LINE as usize, inner.h as usize, style.line);
     }
     // Подписи/значки на чёрном фоне коротких клеток.
     for right in [false, true] {
         for row in 0..PANEL_ROWS {
-            draw_indicator_label(f, g, row, right, line_color, font);
+            draw_indicator_label(f, g, row, right, style.line, font);
         }
+    }
+}
+
+/// Нарисовать значения всех длинных клеток.
+///
+/// Функция самодостаточна: каждая клетка сначала заливается своим фоном,
+/// поэтому старую шкалу не нужно стирать отдельно.
+fn draw_indicators(f: &mut Frame, g: &CockpitGeom, style: CockpitStyle, values: &CockpitValues) {
+    for right in [false, true] {
+        let cells = if right { &values.right } else { &values.left };
+        for row in 0..PANEL_ROWS {
+            let value = cells[row as usize];
+            if !right && row == MISSILE_ROW {
+                let missiles = match value {
+                    Indicator::Missiles(n) => n,
+                    _ => 0,
+                };
+                draw_missiles(f, g, style, missiles);
+                continue;
+            }
+            draw_indicator(f, g, row, right, value, style);
+        }
+    }
+}
+
+/// Нарисовать значение одной длинной клетки.
+fn draw_indicator(
+    f: &mut Frame,
+    g: &CockpitGeom,
+    row: i32,
+    right: bool,
+    value: Indicator,
+    style: CockpitStyle,
+) {
+    let cell = g.bar_cell(row, right);
+    if cell.is_empty() {
+        return;
+    }
+    match value {
+        Indicator::Gauge(v) => draw_gauge(f, cell, style, v),
+        Indicator::Deflection(v) => draw_deflection(f, cell, style, v),
+        Indicator::Missiles(_) => {
+            // Запас ракет живёт только в нижней левой клетке; в остальных
+            // местах показываем пустую клетку.
+            f.fill_rect(
+                cell.x,
+                cell.y,
+                cell.w as usize,
+                cell.h as usize,
+                BACKGROUND,
+            );
+        }
+        Indicator::Empty => {
+            f.fill_rect(
+                cell.x,
+                cell.y,
+                cell.w as usize,
+                cell.h as usize,
+                BACKGROUND,
+            );
+        }
+    }
+}
+
+/// Шкала: цветной фон и белая заливка слева направо, как в оригинале.
+///
+/// Заливка не касается верхней и нижней границы клетки: сверху и снизу
+/// остаётся цветной отступ толщиной [`LINE`] — столько же, сколько у рамки.
+fn draw_gauge(f: &mut Frame, cell: Rect, style: CockpitStyle, value: u8) {
+    f.fill_rect(
+        cell.x,
+        cell.y,
+        cell.w as usize,
+        cell.h as usize,
+        style.bar,
+    );
+    let inner = indicator_inner(cell);
+    if inner.is_empty() {
+        return;
+    }
+    let filled = inner.w * value.min(GAUGE_MAX) as i32 / GAUGE_MAX as i32;
+    if filled > 0 {
+        f.fill_rect(
+            inner.x,
+            inner.y,
+            filled.min(inner.w) as usize,
+            inner.h as usize,
+            style.line,
+        );
+    }
+}
+
+/// Область значения внутри клетки: без цветного отступа [`LINE`] сверху и
+/// снизу. По горизонтали значение занимает всю ширину клетки, как в
+/// оригинале.
+fn indicator_inner(cell: Rect) -> Rect {
+    let gap = LINE.min((cell.h - 1).max(0) / 2);
+    Rect {
+        x: cell.x,
+        y: cell.y + gap,
+        w: cell.w,
+        h: (cell.h - 2 * gap).max(0),
+    }
+}
+
+/// Индикатор влево/вправо: маркер на цветном фоне, 0 — по центру.
+fn draw_deflection(f: &mut Frame, cell: Rect, style: CockpitStyle, value: i8) {
+    f.fill_rect(
+        cell.x,
+        cell.y,
+        cell.w as usize,
+        cell.h as usize,
+        style.bar,
+    );
+    let inner = indicator_inner(cell);
+    if inner.is_empty() {
+        return;
+    }
+    let marker_w = (LINE * 2).clamp(1, inner.w.max(1));
+    let half = inner.w / 2;
+    let max_shift = (half - marker_w / 2).max(0);
+    let shift = value.clamp(-DEFLECTION_MAX, DEFLECTION_MAX) as i32 * max_shift
+        / DEFLECTION_MAX as i32;
+    let x = (inner.x + half + shift - marker_w / 2)
+        .clamp(inner.x, inner.x + inner.w - marker_w);
+    f.fill_rect(
+        x,
+        inner.y,
+        marker_w as usize,
+        inner.h as usize,
+        style.line,
+    );
+}
+
+/// Прямоугольник одной ракеты внутри ракетной клетки.
+///
+/// Высота совпадает с заливкой индикаторов, ширина чуть больше высоты на
+/// толщину линии. Левый отступ и промежутки между ракетами остаются
+/// цветными — это фон клетки.
+fn missile_icon_rect(cell: Rect, pitch: i32, slot: i32) -> Rect {
+    let inner = indicator_inner(cell);
+    let gap = (inner.y - cell.y).max(0);
+    let icon_h = inner.h;
+    Rect {
+        x: cell.x + gap + slot * pitch,
+        y: inner.y,
+        w: (icon_h + LINE).max(1),
+        h: icon_h,
+    }
+}
+
+/// Нарисовать запас ракет и клетку режима в нижней левой длинной клетке.
+///
+/// Фон ракетной части всегда цвет полосы (в оригинале — красный). Ракеты —
+/// белые прямоугольники с цветной серединой: максимум четыре, слева
+/// направо. Если ракет меньше, правые прямоугольники не рисуются, но фон
+/// остаётся цветным. Прямоугольник чуть шире своей высоты, а по высоте
+/// совпадает с заливкой индикаторов. Справа после разделителя — клетка
+/// режима; пока она всегда чёрная.
+fn draw_missiles(f: &mut Frame, g: &CockpitGeom, style: CockpitStyle, missiles: u8) {
+    let left = g.bar_cell(MISSILE_ROW, false);
+    if left.is_empty() {
+        return;
+    }
+    let cell = g.missile_cell(MISSILE_ROW, false);
+    if cell.is_empty() {
+        return;
+    }
+    f.fill_rect(
+        cell.x,
+        cell.y,
+        cell.w as usize,
+        cell.h as usize,
+        style.bar,
+    );
+    let filled = (missiles as i32).clamp(0, MISSILE_SLOTS);
+    let pitch = g.missile_slot_width();
+    for slot in 0..filled {
+        let icon = missile_icon_rect(cell, pitch, slot);
+        if icon.x + icon.w > cell.x + cell.w {
+            break;
+        }
+        stroke_rect(f, icon, LINE, style.line);
+    }
+    // Разделитель между ракетами и клеткой режима.
+    let sep_x = cell.x + cell.w;
+    let sep_w = (left.x + left.w - sep_x).clamp(0, LINE);
+    if sep_w > 0 {
+        f.fill_rect(
+            sep_x,
+            left.y,
+            sep_w as usize,
+            left.h as usize,
+            style.line,
+        );
+    }
+    // Клетка режима: по умолчанию чёрная.
+    let mode = g.mode_cell(MISSILE_ROW, false);
+    if !mode.is_empty() {
+        f.fill_rect(
+            mode.x,
+            mode.y,
+            mode.w as usize,
+            mode.h as usize,
+            BACKGROUND,
+        );
     }
 }
 
@@ -624,10 +997,31 @@ mod tests {
         vec![0xFFu8; 0x300]
     }
 
+    /// Значения для тестов: пустые шкалы и полный запас ракет.
+    fn values(missiles: u8) -> CockpitValues {
+        CockpitValues {
+            left: [
+                Indicator::Gauge(0),
+                Indicator::Gauge(0),
+                Indicator::Gauge(0),
+                Indicator::Gauge(0),
+                Indicator::Gauge(0),
+                Indicator::Gauge(0),
+                Indicator::Missiles(missiles),
+            ],
+            right: [Indicator::Gauge(0); PANEL_ROWS as usize],
+        }
+    }
+
     fn draw(w: usize, h: usize) -> (Frame, CockpitGeom) {
         let mut f = Frame::new(w, h);
         let font = font();
-        Cockpit::new().draw(&mut f, &font);
+        Cockpit::new().draw(
+            &mut f,
+            &font,
+            CockpitStyle::COBRA_MK3,
+            &values(MISSILE_SLOTS as u8),
+        );
         (f, panel_geometry(w as u32, h as u32))
     }
 
@@ -702,8 +1096,16 @@ mod tests {
             for row in 0..PANEL_ROWS {
                 let bar = g.bar_cell(row, right);
                 assert!(!bar.is_empty(), "пустая клетка {row} (right={right})");
+                // Нижняя левая клетка разделена: центр полосы попадает в
+                // чёрную клетку режима, поэтому проверяем позицию ракеты.
+                let (px_x, px_y) = if !right && row == MISSILE_ROW {
+                    let slot = g.missile_cell(row, right);
+                    (slot.x + slot.w / 2, slot.y + slot.h / 2)
+                } else {
+                    (bar.x + bar.w / 2, bar.y + bar.h / 2)
+                };
                 assert_eq!(
-                    px(bar.x + bar.w / 2, bar.y + bar.h / 2),
+                    px(px_x, px_y),
                     BAR_RED,
                     "клетка {row} (right={right}) не залита"
                 );
@@ -806,6 +1208,298 @@ mod tests {
         assert_eq!(rlabel.x + rlabel.w, inner.x + inner.w);
     }
 
+    /// Нижняя левая клетка: четыре позиции ракет фиксированной ширины,
+    /// разделитель и клетка режима справа.
+    #[test]
+    fn missile_cell_has_four_fixed_slots_and_mode_cell() {
+        let g = panel_geometry(1280, 960);
+        let bar = g.bar_cell(MISSILE_ROW, false);
+        let cell = g.missile_cell(MISSILE_ROW, false);
+        let slot = g.missile_slot_width();
+        assert_eq!(
+            slot,
+            g.side_row(MISSILE_ROW).h + LINE,
+            "неверный шаг позиции ракеты"
+        );
+        assert_eq!(cell.w, slot * MISSILE_SLOTS, "не четыре позиции");
+        assert_eq!(cell.x, bar.x);
+        assert_eq!(cell.y, bar.y);
+        assert_eq!(cell.h, bar.h);
+        let mode = g.mode_cell(MISSILE_ROW, false);
+        assert_eq!(
+            mode.x,
+            cell.x + cell.w + LINE,
+            "клетка режима не сразу за ракетами"
+        );
+        assert_eq!(
+            mode.x + mode.w,
+            bar.x + bar.w,
+            "клетка режима не доходит до края полосы"
+        );
+        assert!(mode.w > 0, "клетка режима пуста");
+    }
+
+    /// Ракеты — белые прямоугольники на красном фоне: максимум четыре,
+    /// слева направо. При уменьшении запаса правые пропадают, а фон остаётся.
+    #[test]
+    fn missiles_are_white_rectangles_on_red_background() {
+        let font = font();
+        let g = panel_geometry(1280, 960);
+        let cell = g.missile_cell(MISSILE_ROW, false);
+        let pitch = g.missile_slot_width();
+        let mode = g.mode_cell(MISSILE_ROW, false);
+        for count in 0..=MISSILE_SLOTS as u8 + 1 {
+            let mut f = Frame::new(1280, 960);
+            Cockpit::new().draw(
+                &mut f,
+                &font,
+                CockpitStyle::COBRA_MK3,
+                &values(count),
+            );
+            let px = |x: i32, y: i32| f.pixels()[y as usize * 1280 + x as usize];
+            let filled = (count as i32).min(MISSILE_SLOTS);
+            let mid_y = cell.y + cell.h / 2;
+            // Фон ракетной части красный, включая пустые позиции.
+            assert_eq!(px(cell.x, mid_y), BAR_RED, "нет фона слева от ракет");
+            assert_eq!(
+                px(cell.x + cell.w - 1, mid_y),
+                BAR_RED,
+                "нет фона справа от ракет"
+            );
+            for i in 0..MISSILE_SLOTS {
+                let icon = missile_icon_rect(cell, pitch, i);
+                let whites = (icon.x..icon.x + icon.w)
+                    .flat_map(|x| (icon.y..icon.y + icon.h).map(move |y| (x, y)))
+                    .filter(|&(x, y)| px(x, y) == FRAME_COLOR)
+                    .count();
+                if i < filled {
+                    assert!(icon.w > icon.h, "ракета не шире своей высоты");
+                    assert_eq!(
+                        icon.h,
+                        cell.h - 2 * LINE,
+                        "высота ракеты не как у индикатора"
+                    );
+                    assert!(whites > 0, "ракета {i} не нарисована");
+                    assert_eq!(
+                        px(icon.x, icon.y),
+                        FRAME_COLOR,
+                        "у ракеты {i} нет белой рамки"
+                    );
+                    assert_eq!(
+                        px(icon.x + icon.w / 2, icon.y + icon.h / 2),
+                        BAR_RED,
+                        "середина ракеты {i} не красная"
+                    );
+                } else {
+                    assert_eq!(whites, 0, "лишняя ракета {i} при запасе {count}");
+                }
+            }
+            // Между ракетами и режимом — белый разделитель.
+            assert_eq!(
+                px(cell.x + cell.w + LINE / 2, mid_y),
+                FRAME_COLOR,
+                "нет разделителя перед клеткой режима"
+            );
+            // Клетка режима чёрная по всей площади.
+            for y in mode.y..mode.y + mode.h {
+                for x in mode.x..mode.x + mode.w {
+                    assert_eq!(
+                        px(x, y),
+                        BACKGROUND,
+                        "клетка режима не чёрная ({x},{y}), ракет {count}"
+                    );
+                }
+            }
+        }
+    }
+
+    /// Шкала заполняется слева направо: пустая — весь фон полосы, полная —
+    /// вся ширина клетки.
+    #[test]
+    fn gauge_fills_bar_from_left() {
+        let font = font();
+        let g = panel_geometry(1280, 960);
+        let cell = g.bar_cell(0, false);
+        let y = cell.y + cell.h / 2;
+        let sample = |f: &Frame, x: i32| f.pixels()[y as usize * 1280 + x as usize];
+
+        let mut v = values(MISSILE_SLOTS as u8);
+        let mut f = Frame::new(1280, 960);
+        Cockpit::new().draw(&mut f, &font, CockpitStyle::COBRA_MK3, &v);
+        assert_eq!(sample(&f, cell.x + cell.w / 2), BAR_RED, "0% не пустая");
+
+        v.left[0] = Indicator::Gauge(GAUGE_MAX / 2);
+        f = Frame::new(1280, 960);
+        Cockpit::new().draw(&mut f, &font, CockpitStyle::COBRA_MK3, &v);
+        assert_eq!(sample(&f, cell.x + cell.w / 4), FRAME_COLOR, "нет заливки 50%");
+        assert_eq!(
+            sample(&f, cell.x + cell.w * 3 / 4),
+            BAR_RED,
+            "заливка 50% ушла дальше середины"
+        );
+
+        v.left[0] = Indicator::Gauge(GAUGE_MAX);
+        f = Frame::new(1280, 960);
+        Cockpit::new().draw(&mut f, &font, CockpitStyle::COBRA_MK3, &v);
+        assert_eq!(
+            sample(&f, cell.x + cell.w - 1),
+            FRAME_COLOR,
+            "100% не заполняет клетку"
+        );
+    }
+
+    /// Значения не касаются верхней и нижней границы клетки: сверху и снизу
+    /// остаётся цветной отступ толщиной [`LINE`], как у рамки.
+    #[test]
+    fn indicators_keep_gap_from_cell_borders() {
+        let font = font();
+        let g = panel_geometry(1280, 960);
+        let mut v = values(MISSILE_SLOTS as u8);
+        v.left[0] = Indicator::Gauge(GAUGE_MAX);
+        v.right[1] = Indicator::Deflection(0);
+        let mut f = Frame::new(1280, 960);
+        Cockpit::new().draw(&mut f, &font, CockpitStyle::COBRA_MK3, &v);
+        let px = |x: i32, y: i32| f.pixels()[y as usize * 1280 + x as usize];
+
+        let gauge = g.bar_cell(0, false);
+        assert!(gauge.h > 2 * LINE, "клетка слишком низкая для отступа");
+        let gx = gauge.x + gauge.w / 2;
+        for d in 0..LINE {
+            assert_eq!(px(gx, gauge.y + d), BAR_RED, "нет отступа сверху шкалы");
+            assert_eq!(
+                px(gx, gauge.y + gauge.h - 1 - d),
+                BAR_RED,
+                "нет отступа снизу шкалы"
+            );
+        }
+        assert_eq!(
+            px(gx, gauge.y + LINE),
+            FRAME_COLOR,
+            "заливка не начинается после отступа"
+        );
+
+        let mark = g.bar_cell(1, true);
+        let mx = mark.x + mark.w / 2;
+        for d in 0..LINE {
+            assert_eq!(px(mx, mark.y + d), BAR_RED, "нет отступа сверху маркера");
+            assert_eq!(
+                px(mx, mark.y + mark.h - 1 - d),
+                BAR_RED,
+                "нет отступа снизу маркера"
+            );
+        }
+        assert_eq!(
+            px(mx, mark.y + LINE),
+            FRAME_COLOR,
+            "маркер не начинается после отступа"
+        );
+        assert_eq!(
+            px(mx, mark.y + mark.h - 1 - LINE),
+            FRAME_COLOR,
+            "маркер не заканчивается до отступа"
+        );
+    }
+
+    /// Индикатор влево/вправо ставит маркер по центру или сдвигает его.
+    #[test]
+    fn deflection_marker_moves_left_and_right() {
+        let font = font();
+        let g = panel_geometry(1280, 960);
+        let cell = g.bar_cell(1, true);
+        let y = cell.y + cell.h / 2;
+        let marker_center = |f: &Frame| {
+            let xs: Vec<i32> = (cell.x..cell.x + cell.w)
+                .filter(|&x| f.pixels()[y as usize * 1280 + x as usize] == FRAME_COLOR)
+                .collect();
+            assert!(!xs.is_empty(), "маркер не нарисован");
+            (xs[0] + xs[xs.len() - 1]) / 2
+        };
+        let draw = |value: i8| {
+            let mut v = values(MISSILE_SLOTS as u8);
+            v.right[1] = Indicator::Deflection(value);
+            let mut f = Frame::new(1280, 960);
+            Cockpit::new().draw(&mut f, &font, CockpitStyle::COBRA_MK3, &v);
+            f
+        };
+        let center = cell.x + cell.w / 2;
+        let neutral = draw(0);
+        assert!(
+            (marker_center(&neutral) - center).abs() <= 1,
+            "нейтральное положение не по центру"
+        );
+        assert!(
+            marker_center(&draw(-DEFLECTION_MAX)) < center,
+            "маркер не ушёл влево"
+        );
+        assert!(
+            marker_center(&draw(DEFLECTION_MAX)) > center,
+            "маркер не ушёл вправо"
+        );
+    }
+
+    /// Раскладка читает все значения из памяти и ограничивает их диапазоны.
+    #[test]
+    fn layout_reads_all_indicators_from_memory() {
+        let l = KLADOV_COCKPIT;
+        let mut mem = vec![0u8; 0x10000];
+        mem[l.shield_front as usize] = 10;
+        mem[l.shield_rear as usize] = 20;
+        mem[l.fuel as usize] = 30;
+        mem[l.temperature as usize] = 40;
+        mem[l.laser_temp as usize] = 50;
+        mem[l.altitude as usize] = 0xFF; // больше максимума — обрезается
+        mem[l.speed as usize] = 65;
+        mem[l.rotate_lr as usize] = 0x15;
+        mem[l.rotate_du as usize] = 0x10;
+        mem[l.shield_unit1 as usize] = 0xA0;
+        mem[l.shield_unit1 as usize + 2] = 0x80;
+        mem[l.shield_unit1 as usize + 4] = 0x40;
+        mem[l.shield_unit1 as usize + 6] = 0;
+        mem[l.missiles as usize] = 9; // больше четырёх — обрезается
+        let v = l.read(&mem);
+        assert_eq!(
+            v.left,
+            [
+                Indicator::Gauge(10),
+                Indicator::Gauge(20),
+                Indicator::Gauge(30),
+                Indicator::Gauge(40),
+                Indicator::Gauge(50),
+                Indicator::Gauge(GAUGE_MAX),
+                Indicator::Missiles(MISSILE_SLOTS as u8),
+            ]
+        );
+        assert_eq!(
+            v.right,
+            [
+                Indicator::Gauge(65),
+                Indicator::Deflection(0),
+                Indicator::Deflection(-5),
+                Indicator::Gauge(0xA0),
+                Indicator::Gauge(0x80),
+                Indicator::Gauge(0x40),
+                Indicator::Gauge(0),
+            ]
+        );
+    }
+
+    /// Случайные значения заставки детерминированы и не выходят из диапазонов.
+    #[test]
+    fn splash_values_are_deterministic_and_in_range() {
+        let a = CockpitValues::for_splash();
+        assert_eq!(a, CockpitValues::for_splash(), "заставка будет мерцать");
+        for indicator in a.left.iter().chain(a.right.iter()) {
+            match *indicator {
+                Indicator::Gauge(v) => assert!(v <= GAUGE_MAX),
+                Indicator::Deflection(v) => {
+                    assert!(v.abs() <= DEFLECTION_MAX)
+                }
+                Indicator::Missiles(v) => assert!(v <= MISSILE_SLOTS as u8),
+                Indicator::Empty => {}
+            }
+        }
+    }
+
     /// При смене соотношения сторон клетка с текстом не меняется, а полосы
     /// и центральная клетка растягиваются по ширине окна.
     #[test]
@@ -884,7 +1578,12 @@ mod tests {
             font[(ch - 0x20) as usize * 8] = 0x80;
         }
         let mut f = Frame::new(1280, 960);
-        Cockpit::new().draw(&mut f, &font);
+        Cockpit::new().draw(
+            &mut f,
+            &font,
+            CockpitStyle::COBRA_MK3,
+            &values(MISSILE_SLOTS as u8),
+        );
         let g = panel_geometry(1280, 960);
         for right in [false, true] {
             for row in 0..PANEL_ROWS {
@@ -932,7 +1631,12 @@ mod tests {
         let g = panel_geometry(1280, 960);
         let bar = g.bar_cell(0, false);
         let mut splash = Frame::new(1280, 960);
-        Cockpit::new().draw(&mut splash, &font);
+        Cockpit::new().draw(
+            &mut splash,
+            &font,
+            CockpitStyle::COBRA_MK3,
+            &values(MISSILE_SLOTS as u8),
+        );
         assert_eq!(
             splash.pixels()[(bar.y + bar.h / 2) as usize * 1280
                 + (bar.x + bar.w / 2) as usize],
@@ -940,7 +1644,12 @@ mod tests {
             "на заставке полосы должны быть красными"
         );
         let mut mk4 = Frame::new(1280, 960);
-        Cockpit::new().draw_themed(&mut mk4, FRAME_COLOR, BAR_MAGENTA, &font);
+        Cockpit::new().draw(
+            &mut mk4,
+            &font,
+            CockpitStyle::COBRA_MK4,
+            &values(MISSILE_SLOTS as u8),
+        );
         assert_eq!(
             mk4.pixels()[(bar.y + bar.h / 2) as usize * 1280 + (bar.x + bar.w / 2) as usize],
             BAR_MAGENTA,
@@ -993,7 +1702,15 @@ mod tests {
     fn cockpit_line_color_can_change() {
         let mut f = Frame::new(1280, 960);
         let font = font();
-        Cockpit::new().draw_colored(&mut f, DANGER_COLOR, &font);
+        Cockpit::new().draw(
+            &mut f,
+            &font,
+            CockpitStyle {
+                line: DANGER_COLOR,
+                bar: BAR_RED,
+            },
+            &values(MISSILE_SLOTS as u8),
+        );
         let g = panel_geometry(1280, 960);
         let main = g.main_frame();
         let panel = g.panel_frame();
