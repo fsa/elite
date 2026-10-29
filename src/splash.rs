@@ -28,14 +28,16 @@
 //! Fer-de-Lance → Targon → Sidewinder → Krait → Viper), старт — Cobra,
 //! смена корабля сбрасывает ракурс на `SKO4Intro` — как `SetShip4Intro`.
 //!
-//! Надписи — как в оригинале: заголовок `---- E L I T E ----` (строка 1,
-//! колонка 5) и приглашение `PRESS SPACE` внизу, шрифтом сетки ZX (то есть
-//! мелким). Других надписей нет.
+//! Надписи — как в оригинале по вертикали: заголовок `---- E L I T E ----`
+//! на одну строку ниже верхней рамки и приглашение `Press Space, Commander`
+//! на одну строку выше панели; по горизонтали обе надписи центрируются в
+//! области вида. Шрифт — сетка ZX (то есть мелкий). Других надписей нет.
 //!
 //! С запуском игры заставка не связана напрямую: `SPACE` переводит Z80 на
 //! ветку переинициализации (см. [`native::start_game`](crate::native)),
 //! а заставка продолжает показываться, пока игра не дойдёт до `GameMain`.
 
+use crate::cockpit::{CockpitGeom, Rect};
 use crate::display::Frame;
 use crate::render3d::{
     self, Rotation, Screen as Proj, INTRO_DIST, INTRO_SHIP_RADIUS, SHIP_COLOR,
@@ -117,60 +119,92 @@ impl Splash {
     /// Нарисовать заставку на слой `frame` во всё окно.
     ///
     /// `font` — знакогенератор ПЗУ ZX (коды 0x20..0x7F), как в меню паузы.
-    /// Координаты задаются в «пикселях ZX» (сетка 256x192), масштабируются
-    /// целым множителем `s` и центрируются в окне по обеим осям — поэтому
-    /// композиция одинакова при любом размере окна и соотношении сторон.
+    /// Используется тестами; в игре — [`Splash::draw_in`] с областью вида
+    /// кокпита.
     #[allow(dead_code)] // используется в тестах; в игре — `draw_in`
     pub fn draw(&self, frame: &mut Frame, font: &[u8]) {
-        frame.fill_rect(0, 0, frame.width, frame.height, 0xFF00_0000);
-        self.draw_in(frame, font, frame.height as i32);
+        let view = Rect {
+            x: 0,
+            y: 0,
+            w: frame.width as i32,
+            h: frame.height as i32,
+        };
+        self.draw_area(frame, font, frame.height as i32, view);
     }
 
-    /// Нарисовать заставку в верхней части слоя высотой `area_h` пикселей.
+    /// Нарисовать заставку внутри области вида кокпита `geom`.
     ///
     /// Композиция повторяет оригинальный титульный экран Elite:
     ///
-    /// * заголовок `---- E L I T E ----` — в первой строке, колонка 5
-    ///   (как `PrnTitTxtY` в оригинале), шрифтом сетки ZX без увеличения;
+    /// * заголовок `---- E L I T E ----` — одной текстовой строкой ниже
+    ///   верхней рамки (в оригинале он стоит в строке 1 сетки 32x24), по
+    ///   центру области вида;
     /// * в середине — вращающийся корабль (на самом широком ракурсе
-    ///   занимает всю свободную полосу между надписями, заметно крупнее
-    ///   прежнего; в остальных ракурсах он естественно сокращается, как
-    ///   в оригинале);
-    /// * внизу — приглашение `PRESS SPACE` (в оригинале на этой строке
-    ///   `Load New Commander (Y/N)?`, а в режиме притяжения — `PRESS SPACE,
-    ///   COMMANDER`).
+    ///   занимает всю свободную полосу между надписями; в остальных
+    ///   ракурсах он естественно сокращается, как в оригинале);
+    /// * внизу — приглашение `Press Space, Commander` — тоже по центру и
+    ///   на одну текстовую строку выше нижней рамки (в оригинале строка 14
+    ///   прижата к панели кокпита).
     ///
+    /// Отступы от рамки заданы в текстовых строках, поэтому их отношение к
+    /// высоте области примерно такое же, как у оригинала (8 из 192 пикселей).
     /// Никаких других надписей нет — ровно как в оригинале.
     ///
-    /// Область `0..area_h` — вся композиция: на заставке снизу может быть
-    /// показана нативная приборная панель (кокпит), и тогда заголовок с
-    /// фигурой не должны под неё заходить.
-    pub fn draw_in(&self, frame: &mut Frame, font: &[u8], area_h: i32) {
+    /// Фон закрашивается до `geom.panel_y`: панель рисуется поверх и сама
+    /// закрывает нижнюю часть, а поля вокруг главной рамки остаются чёрными,
+    /// как и весь титульный экран.
+    pub fn draw_in(&self, frame: &mut Frame, font: &[u8], geom: &CockpitGeom) {
+        self.draw_area(frame, font, geom.panel_y.max(1), geom.view());
+    }
+
+    /// Общая раскладка заставки: `area_h` задаёт масштаб сетки ZX, а `view` —
+    /// прямоугольник внутри рамки кокпита, относительно которого ставятся
+    /// надписи и корабль.
+    fn draw_area(&self, frame: &mut Frame, font: &[u8], area_h: i32, view: Rect) {
         const BG: u32 = 0xFF00_0000; // чёрный фон (непрозрачный)
         const FG: u32 = 0xFFD7_D7D7; // белый — заголовок
         const HINT: u32 = 0xFFD7_D7D7; // белый — приглашение
-        let area_h = area_h.clamp(1, frame.height as i32);
+        let fw = frame.width as i32;
+        let fh = frame.height as i32;
+        let area_h = area_h.clamp(1, fh);
         // Фон области (снизу может быть своя панель — её не трогаем).
         frame.fill_rect(0, 0, frame.width, area_h as usize, BG);
+        // Область вида может быть чуть больше слоя (например, в тестах) —
+        // для раскладки используем её пересечение с кадром.
+        let x0 = view.x.clamp(0, fw);
+        let y0 = view.y.clamp(0, fh);
+        let x1 = (view.x + view.w).clamp(x0, fw);
+        let y1 = (view.y + view.h).clamp(y0, fh);
+        let view = Rect {
+            x: x0,
+            y: y0,
+            w: x1 - x0,
+            h: y1 - y0,
+        };
         // Масштаб сетки ZX 256x192, влезающий в область: им задаётся и размер
-        // шрифта, и положение надписей (сетка оригинала — 32x24 знакоместа).
+        // шрифта, и отступы от рамки (сетка оригинала — 32x24 знакоместа).
         let s = ((frame.width / 256).min(area_h as usize / 192)).max(1) as i32;
-        let ox = (frame.width as i32 - 256 * s) / 2;
-        // Заголовок — как в оригинале: первая строка, колонка 5.
+        // Оригинал отступает от рамки на одну текстовую строку (8 пикселей
+        // сетки ZX): сверху — заголовок (строка 1), снизу — приглашение.
+        let text_center_x = view.x + view.w / 2;
+        let centered_x = |text: &str| text_center_x - text.len() as i32 * 4 * s;
         let title = "---- E L I T E ----";
-        let title_y = 4 * s;
-        frame.draw_text(font, ox + 40 * s, title_y, title, FG, s as usize);
+        let title_y = view.y + 8 * s;
+        frame.draw_text(font, centered_x(title), title_y, title, FG, s as usize);
         // Нижняя строка — приглашение нажать SPACE.
         let hint = "Press Space, Commander";
-        let hint_y = area_h - 12 * s;
-        frame.draw_text(font, ox + 28 * s, hint_y, hint, HINT, s as usize);
+        let hint_y = view.y + view.h - 16 * s;
+        frame.draw_text(font, centered_x(hint), hint_y, hint, HINT, s as usize);
         // Вращающийся корабль (или запасная фигура, если модель не найдена) —
-        // по центру свободной между надписями полосы, крупнее прежнего.
+        // по центру свободной между надписями полосы.
         let top = title_y + 8 * s;
         let band = (hint_y - top).max(0);
-        let cx = ox + 128 * s;
+        let cx = text_center_x;
         let cy = top + band / 2;
-        let r = (band / 2).min(INTRO_SHIP_RADIUS * s).min(frame.width as i32 * 2 / 5);
+        let r = (band / 2)
+            .min(INTRO_SHIP_RADIUS * s)
+            .min(view.w.max(0) * 2 / 5)
+            .max(0);
         if let Some(ship) = self.ship {
             self.draw_ship(frame, ship, cx, cy, r);
         } else {
@@ -467,6 +501,62 @@ mod tests {
                 assert_eq!(f.pixels()[y * 1680 + x], bg, "заставка не по центру справа");
             }
         }
+    }
+
+    /// Надписи заставки внутри новой рамки кокпита: по центру области вида и
+    /// с отступом в одну текстовую строку от верхней и нижней линии рамки —
+    /// как в оригинале (заголовок в строке 1, приглашение над панелью).
+    #[test]
+    fn splash_texts_are_centered_and_inset_from_frame() {
+        let font = vec![0xFFu8; 0x300];
+        let mut f = Frame::new(1280, 960);
+        let g = crate::cockpit::panel_geometry(1280, 960);
+        let view = g.view();
+        Splash::new().draw_in(&mut f, &font, &g);
+
+        // Габарит белых пикселей в полосе `y0..y1` (рамка кокпита здесь не
+        // рисуется, поэтому белым остаются только надписи).
+        let bbox = |y0: i32, y1: i32| {
+            let (mut x0, mut x1, mut ty0, mut ty1) = (i32::MAX, i32::MIN, i32::MAX, i32::MIN);
+            for y in y0..y1 {
+                for x in view.x..view.x + view.w {
+                    if f.pixels()[y as usize * 1280 + x as usize] == 0xFFD7_D7D7 {
+                        x0 = x0.min(x);
+                        x1 = x1.max(x);
+                        ty0 = ty0.min(y);
+                        ty1 = ty1.max(y);
+                    }
+                }
+            }
+            assert!(x1 >= x0, "надпись в полосе {y0}..{y1} не нарисована");
+            (x0, x1, ty0, ty1)
+        };
+        let title = bbox(view.y, view.y + view.h / 2);
+        let hint = bbox(view.y + view.h / 2, view.y + view.h);
+        let center = view.x + view.w / 2;
+        for (name, b) in [("заголовок", title), ("приглашение", hint)] {
+            let mid = (b.0 + b.1) / 2;
+            assert!(
+                (mid - center).abs() <= 2,
+                "{name} не по центру: {mid} вместо {center}"
+            );
+        }
+        // Отступ от рамки — около одной текстовой строки (8*s пикселей).
+        let s = 3; // масштаб сетки при окне 1280x960 и панели 25 %
+        assert!(
+            title.2 >= view.y + 4 * s,
+            "заголовок прижат к верхней рамке: {}",
+            title.2
+        );
+        assert!(
+            hint.3 <= view.y + view.h - 4 * s,
+            "приглашение прижато к нижней рамке: {}",
+            hint.3
+        );
+        assert!(
+            title.0 > view.x && hint.1 < view.x + view.w,
+            "надписи выходят за область вида"
+        );
     }
 
     /// Корабль нарисован каркасом: в области фигуры есть линии, но нет

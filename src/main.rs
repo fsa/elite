@@ -1240,8 +1240,7 @@ impl<'a> App<'a> {
             // Заголовок с фигурой занимают верхнюю область, поэтому не
             // заходят под панель.
             let g = cockpit::panel_geometry(size.width, size.height);
-            self.splash
-                .draw_in(&mut self.machine.hd, &self.font, g.panel_y.max(1));
+            self.splash.draw_in(&mut self.machine.hd, &self.font, &g);
             self.cockpit.draw_with_geom(
                 &mut self.machine.hd,
                 &g,
@@ -2057,7 +2056,7 @@ mod intro_tests {
         let g = cockpit::panel_geometry(w as u32, h as u32);
         // Заставка в верхней области, кокпит — вокруг неё и внизу (как в
         // игровом цикле).
-        splash::Splash::new().draw_in(&mut hd, font, g.panel_y.max(1));
+        splash::Splash::new().draw_in(&mut hd, font, &g);
         cockpit::Cockpit::new().draw(
             &mut hd,
             font,
