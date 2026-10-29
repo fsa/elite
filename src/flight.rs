@@ -6,14 +6,14 @@
 //! [`Flight::sync_from_z80`]. Рендер только рисует то, что уже посчитал Z80,
 //! поэтому полёт совпадает с оригиналом, включая J-драйв и его особенности.
 //!
-//! Экран занимает верхнюю часть окна — вид из кабины. Ниже рисуется нативная
-//! приборная панель [`crate::cockpit`], та же, что на заставке. Заголовков,
-//! подсказок и собственного HUD поверх вида нет: показания приборов берутся
-//! из памяти игры.
+//! Экран занимает верхнюю часть окна — вид из кабины. Ниже и вокруг него
+//! рисуется нативный кокпит [`crate::cockpit`], тот же, что на заставке.
+//! Заголовков, подсказок и собственного HUD поверх вида нет.
 //!
 //! Объекты (корабли, станция, планета, солнце) рисуются общим каркасным
 //! рендером [`crate::render3d`], что и корабль на заставке.
 
+use crate::cockpit::{self, CockpitGeom};
 use crate::display::Frame;
 use crate::render3d::{self, Rotation, Screen};
 use crate::shipdata::{self, Ship};
@@ -119,6 +119,10 @@ const Z80_HIGH_DELTA_SPEED: usize = 0x70E6;
 /// В отличие от `HighDeltaSpeed`, эту ячейку J-драйв не трогает, поэтому
 /// скорость надёжнее брать отсюда.
 const Z80_SPEED_GAUGE: usize = 0x70F4;
+
+/// `byte_D08E`: <>0 — у игрока Cobra Mk IV (в блоке командира `PilotName`).
+/// От типа корабля зависит цвет длинных клеток приборной панели.
+const Z80_COBRA_MK4: usize = 0xD08E;
 /// `ShieldFront` — передний щит, 0..0xA0.
 const Z80_SHIELD_FRONT: usize = 0x70E8;
 /// `TempLaser` — нагрев лазера, 0..0xA0.
@@ -244,6 +248,8 @@ pub struct Flight {
     laser_timer: f32,
     /// Скорость в единицах `HighDeltaSpeed` (`0..=31`) — темп звёзд.
     speed: f32,
+    /// У игрока Cobra Mk IV (`byte_D08E`) — фиолетовые клетки панели.
+    cobra_mk4: bool,
     bodies: Vec<Body>,
     stars: Vec<Star>,
     planet_color: u32,
@@ -264,6 +270,7 @@ impl Flight {
             damage_flash: 0.0,
             laser_timer: 0.0,
             speed: 0.0,
+            cobra_mk4: false,
             bodies: Vec::new(),
             stars: Vec::new(),
             planet_color: PLANET_COLOR,
@@ -287,6 +294,7 @@ impl Flight {
         self.damage_flash = 0.0;
         self.laser_timer = 0.0;
         self.speed = 0.0;
+        self.cobra_mk4 = false;
         self.bodies.clear();
         if planet_color != 0 {
             self.planet_color = planet_green(planet_color);
@@ -328,6 +336,7 @@ impl Flight {
         // и прямой опрос заставлял бы шкалу и звёзды прыгать.
         let gauge = mem[Z80_SPEED_GAUGE];
         self.speed = (gauge.saturating_sub(5) as f32 / 5.0).clamp(0.0, SPEED_MAX);
+        self.cobra_mk4 = mem.get(Z80_COBRA_MK4).is_some_and(|&b| b != 0);
 
         // Оригинал не оставляет флаг выстрела противника в памяти: бит 3
         // сбрасывается сразу после печати луча. Зато попадание уменьшает
@@ -472,11 +481,12 @@ impl Flight {
 
     /// Нарисовать вид из кабины в верхней части кадра.
     ///
-    /// `view_bottom` — экранная Y-координата панели кокпита: ниже неё рендер
-    /// ничего не рисует, там панель. Отдельного HUD нет.
-    pub fn draw(&mut self, frame: &mut Frame, view_bottom: i32) {
+    /// `geom` — геометрия кокпита: рендер заполняет область над панелью и
+    /// рисует сцену только внутри главной рамки, которую потом обводит
+    /// [`crate::cockpit::Cockpit`]. Отдельного HUD нет.
+    pub fn draw(&mut self, frame: &mut Frame, geom: &CockpitGeom) {
         let w = frame.width as i32;
-        let view_bottom = view_bottom.clamp(1, frame.height as i32);
+        let view_bottom = geom.panel_y.clamp(1, frame.height as i32);
         let view_h = view_bottom as usize;
         frame.fill_rect(0, 0, frame.width, view_h, BG);
         // Плотность звёзд зависит от площади вида: на большом разрешении
@@ -501,10 +511,14 @@ impl Flight {
 
         let view_rot = view_rotation(self.view_dir);
 
-        // Ограничиваем отрисовку внутри рамки
-        let inset = 3i32;
-        let thick = 3i32;
-        frame.set_clip(inset + thick, inset + thick, ((frame.width as i32) - 2 * (inset + thick)).max(0) as usize, ((view_bottom as i32) - 2 * (inset + thick)).max(1) as usize);
+        // Ограничиваем отрисовку внутренней областью главной рамки.
+        let view = geom.view();
+        frame.set_clip(
+            view.x,
+            view.y,
+            view.w.max(0) as usize,
+            view.h.max(0) as usize,
+        );
         self.draw_stars_view(frame, &screen, &view_rot);
         self.draw_bodies_view(frame, &screen, &view_rot);
         self.draw_enemy_shots_view(frame, &screen, 0, view_bottom, &view_rot);
@@ -515,31 +529,25 @@ impl Flight {
             self.draw_laser(frame, cx, cy, view_bottom - 1, s);
         }
         frame.clear_clip();
-        // Белая рамка иллюминатора как в оригинале
-        const WHITE: u32 = 0xFFD7_D7D7;
-        // Верхняя рамка
-        for t in 0..thick {
-            frame.hline(inset, inset + t, ((frame.width as i32) - 2 * inset).max(0) as usize, WHITE);
-        }
-        // Нижняя рамка
-        for t in 0..thick {
-            frame.hline(inset, (view_bottom - 1) - t, ((frame.width as i32) - 2 * inset).max(0) as usize, WHITE);
-        }
-        // Левая рамка
-        for t in 0..thick {
-            frame.vline(inset + t, inset, ((view_bottom as i32) - 2 * inset).max(0) as usize, WHITE);
-        }
-        // Правая рамка
-        for t in 0..thick {
-            frame.vline((w - 1) - t, inset, ((view_bottom as i32) - 2 * inset).max(0) as usize, WHITE);
-        }
+    }
+
+    /// Цвет рамки кокпита: белый, при попадании — красный.
+    pub fn cockpit_color(&self) -> u32 {
         if self.damage_flash > 0.0 {
-            for t in 0..thick {
-                frame.hline(inset, inset + t, ((frame.width as i32) - 2 * inset).max(0) as usize, RED);
-                frame.hline(inset, (view_bottom - 1) - t, ((frame.width as i32) - 2 * inset).max(0) as usize, RED);
-                frame.vline(inset + t, inset, ((view_bottom as i32) - 2 * inset).max(0) as usize, RED);
-                frame.vline((w - 1) - t, inset, ((view_bottom as i32) - 2 * inset).max(0) as usize, RED);
-            }
+            cockpit::DANGER_COLOR
+        } else {
+            cockpit::FRAME_COLOR
+        }
+    }
+
+    /// Цвет длинных клеток панели по типу корабля игрока.
+    ///
+    /// Cobra Mk III (`byte_D08E == 0`) — красный, Cobra Mk IV — фиолетовый.
+    pub fn cockpit_bar_color(&self) -> u32 {
+        if self.cobra_mk4 {
+            cockpit::BAR_MAGENTA
+        } else {
+            cockpit::BAR_RED
         }
     }
 
@@ -1385,7 +1393,7 @@ mod tests {
         assert!(!f.enemy_shots.is_empty(), "выстрел противника не создан");
 
         let mut frame = Frame::new(1280, 960);
-        f.draw(&mut frame, 960);
+        f.draw(&mut frame, &cockpit::panel_geometry(1280, 960));
         let beam_pixels = frame
             .pixels()
             .iter()
@@ -1494,8 +1502,9 @@ mod tests {
         let mem = z80_mem_with_flight();
         f.sync_from_z80(&mem);
         let mut frame = Frame::new(1280, 960);
-        let view = 752;
-        f.draw(&mut frame, view);
+        let geom = cockpit::panel_geometry(1280, 960);
+        let view = geom.panel_y;
+        f.draw(&mut frame, &geom);
 
         // Вид полностью непрозрачен, как и положено фону космоса.
         for y in 0..view as usize {

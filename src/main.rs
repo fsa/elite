@@ -341,11 +341,6 @@ fn scene_markers(_kladov: bool) -> (Option<(u16, u16)>, Option<u16>) {
     (Some((0x739E, 0x73FD)), Some(0x7471))
 }
 
-/// Адреса переменных панели кокпита для выбранной версии игры.
-fn cockpit_layout(_opts: &Options) -> cockpit::CockpitLayout {
-    cockpit::KLADOV_COCKPIT
-}
-
 /// Цвет планеты текущей системы из живой памяти Z80 — оттенок планеты на
 /// экране полёта. Если координаты не совпали ни с одной звездой (например,
 /// игра ещё на заставке), берётся первая планета галактики.
@@ -1183,8 +1178,8 @@ impl<'a> App<'a> {
                 self.machine.release_joystick();
             }
         } else {
-            // Игровой режим: HD-слой в разрешении области показа; кокпит
-            // пока рисуется только на заставке (см. ветку интро выше).
+            // Игровой режим: HD-слой в разрешении области показа; нативный
+            // кокпит рисуется на заставке и на экране полёта.
             self.machine
                 .hd
                 .resize(layout.w as usize, layout.h as usize);
@@ -1209,13 +1204,15 @@ impl<'a> App<'a> {
         self.machine.render_rgba(&mut self.buf);
         if self.flight.active {
             // Экран полёта: нативный вид в верхней части окна (по данным Z80)
-            // и та же приборная панель, что на заставке, — внизу.
+            // и тот же кокпит, что на заставке, — внизу.
             let g = cockpit::panel_geometry(size.width, size.height);
-            self.flight
-                .draw(&mut self.machine.hd, g.panel_y.max(1));
-            let cl = cockpit_layout(self.opts);
-            self.cockpit
-                .draw(&mut self.machine.hd, &self.machine.mem, &self.font, cl);
+            self.flight.draw(&mut self.machine.hd, &g);
+            self.cockpit.draw_themed(
+                &mut self.machine.hd,
+                self.flight.cockpit_color(),
+                self.flight.cockpit_bar_color(),
+                &self.font,
+            );
             if self.menu {
                 draw_pause_menu(&mut self.machine.hd, &self.font, self.menu_sel, false);
             }
@@ -1225,19 +1222,15 @@ impl<'a> App<'a> {
             self.shop
                 .draw(&mut self.machine.hd, &self.font, &self.machine.mem);
         } else if self.machine.intro_seen {
-            // Нативная заставка; внизу — демонстрация нативной приборной
-            // панели (кокпит). Заголовок с фигурой занимают верхнюю область,
-            // поэтому не заходят под панель.
+            // Нативная заставка; внизу — тот же кокпит, что в полёте.
+            // Заголовок с фигурой занимают верхнюю область, поэтому не
+            // заходят под панель.
             let g = cockpit::panel_geometry(size.width, size.height);
             self.splash
                 .draw_in(&mut self.machine.hd, &self.font, g.panel_y.max(1));
+            self.cockpit.draw(&mut self.machine.hd, &self.font);
             if self.menu {
                 draw_pause_menu(&mut self.machine.hd, &self.font, self.menu_sel, true);
-            } else {
-                // Показания берутся из памяти Z80 (на заставке они нулевые).
-                let cl = cockpit_layout(self.opts);
-                self.cockpit
-                    .draw(&mut self.machine.hd, &self.machine.mem, &self.font, cl);
             }
         } else if self.menu {
             // Меню паузы — в HD-слой, чтобы текст был чётким в любом окне.
@@ -2042,9 +2035,10 @@ mod intro_tests {
         let (w, h) = (256 * 5, 192 * 5);
         let mut hd = display::Frame::new(w, h);
         let g = cockpit::panel_geometry(w as u32, h as u32);
-        // Заставка в верхней области, панель — внизу (как в игровом цикле).
+        // Заставка в верхней области, кокпит — вокруг неё и внизу (как в
+        // игровом цикле).
         splash::Splash::new().draw_in(&mut hd, font, g.panel_y.max(1));
-        cockpit::Cockpit::new().draw(&mut hd, &m.mem, font, cockpit::KLADOV_COCKPIT);
+        cockpit::Cockpit::new().draw(&mut hd, font);
         // Панель непрозрачна.
         for y in g.panel_y..h as i32 {
             for x in 0..w {
@@ -2159,13 +2153,14 @@ mod intro_tests {
     fn flight_screen_combines_view_and_cockpit() {
         let base = env!("CARGO_MANIFEST_DIR");
         let m = boot();
+        let font = &m.mem[PAUSE_FONT_ADDR..PAUSE_FONT_ADDR + PAUSE_FONT_LEN];
         let mut fl = flight::Flight::new();
         fl.open(current_planet_color(&m.mem));
         fl.sync_from_z80(&m.mem);
         let (w, h) = (1280usize, 960usize);
         let mut hd = display::Frame::new(w, h);
         let g = cockpit::panel_geometry(w as u32, h as u32);
-        fl.draw(&mut hd, g.panel_y.max(1));
+        fl.draw(&mut hd, &g);
         // Выше панели вид непрозрачен, ниже — прозрачен (там панель).
         for y in 0..g.panel_y as usize {
             assert!(
@@ -2181,8 +2176,7 @@ mod intro_tests {
                 "вид залез на панель в строке {y}"
             );
         }
-        let font = &m.mem[PAUSE_FONT_ADDR..PAUSE_FONT_ADDR + PAUSE_FONT_LEN];
-        cockpit::Cockpit::new().draw(&mut hd, &m.mem, font, cockpit_layout(&test_options()));
+        cockpit::Cockpit::new().draw(&mut hd, font);
         assert!(
             hd.pixels().iter().all(|&p| p >> 24 == 0xFF),
             "на стыке вида и панели осталась прозрачная щель"

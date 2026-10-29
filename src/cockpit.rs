@@ -1,40 +1,115 @@
-//! Нативный кокпит (приборная панель) корабля — черновик.
+//! Нативный кокпит (приборная панель) корабля.
+//!
+//! Кокпит используется на двух экранах:
+//!
+//! * в полёте (`F1`) — вокруг вида из кабины и под ним;
+//! * на заставке — вокруг поля с вращающимся кораблём и под ним.
+//!
+//! Раньше рамку вокруг вида рисовал [`crate::flight`], а нижнюю часть —
+//! `Cockpit::draw`; из-за этого кокпит на заставке выглядел иначе (у неё не
+//! было главной рамки). Теперь вся «обвязка» кокпита — главная рамка и рамка
+//! нижней части — живёт здесь, а экраны только рисуют своё содержимое.
 //!
 //! В оригинале панель — статический растр в видеопамяти ZX (`DataCocpit`,
-//! оригинал `0xC800`, Кладов `0xC000`), нижние 64 строки экрана (8 знакомест),
-//! на который поверх допечатываются динамические индикаторы: шесть полос
-//! (щиты, топливо, температура, лазер, высота), скорость и четыре энергоблока,
-//! компас и радиолокатор (`UpdateAllIndicators`, `PrintCompass`,
+//! оригинал `0xC800`, Кладов `0xC000`), нижние 64 строки экрана; индикаторы
+//! уложены в 7 строк по высоте, на которые поверх допечатываются значения:
+//! шесть полос (щиты, топливо, температура, лазер, высота), скорость и четыре
+//! энергоблока, компас и радиолокатор (`UpdateAllIndicators`, `PrintCompass`,
 //! `PrintObjScaner`).
 //!
-//! Эта панель — первая нативная (Rust) отрисовка, но пока черновик: её
-//! показывают на заставке (титульном экране) и на экране полёта (`F1`).
-//! В остальное время экран остаётся родным ZX-кадром целиком: вид из кабины
-//! и исходная растровая панель оригинала. Когда игровой экран станет
-//! полностью нативным, панель переедет в него (и будет доведена до точной
-//! копии оригинала).
+//! Сейчас панель — таблица с рамками: слева и справа по семь строк, в центре
+//! одна большая клетка на всю высоту. В каждой боковой строке две клетки:
+//! короткая подпись/значок на чёрном фоне и длинная клетка-полоса. Полосы
+//! залиты цветом типа корабля игрока: у Cobra Mk III красным, у Cobra Mk IV
+//! фиолетовым; на заставке всегда красным. Подписи повторяют обозначения
+//! оригинала: слева `FS`, `AS`, `FU`, `CT`, `LT`, `AL` и значок скорости,
+//! справа `SP`, `RL`, `DC` и номера энергоблоков `1`..`4`. Они нарисованы
+//! тем же шрифтом ПЗУ ZX, что и заголовок `ELITE` на заставке.
 //!
-//! Раскладка нативной панели пока узнаваема, но повторяет оригинал только
-//! приблизительно (32 знакоместа, столбцы 1..31):
+//! Длинная клетка-полоса задаётся в процентах от ширины панели
+//! ([`BAR_WIDTH_FRAC`]) и растягивается вместе с окном. Клетка подписи
+//! фиксирована по высоте строки ([`LABEL_WIDTH_PER_ROW_PCT`]) и при смене
+//! соотношения сторон не растягивается.
 //!
-//! ```text
-//!   столбцы:  1..3      3..8          8..21        21..24      24..29   29..31
-//!   ┌──────────────────────────────────────────────────────────────────────┐
-//!   │ иконки │ 6 полос │ радиолокатор │ компас │ скорость/  │ подписи      │
-//!   │        │         │              │        │ энергоблоки│              │
-//!   └──────────────────────────────────────────────────────────────────────┘
-//! ```
-//!
-//! Значения читаются из живой памяти Z80 (`mem`) после кадра, поэтому панель
-//! показывает текущее состояние полёта без вмешательства в эмуляцию.
+//! Геометрия (`CockpitGeom`) отдаёт прямоугольники вида, панели, клеток и
+//! разделителей, чтобы следующие шаги рисовали внутри неё, а не заново
+//! считали отступы. Адреса переменных панели сохранены в [`CockpitLayout`]:
+//! значения читаются из живой памяти Z80 (`mem`) и понадобятся, когда полосы
+//! начнут показывать реальные показания.
 
 use crate::display::Frame;
+
+/// Цвет линий кокпита — «белый» ZX (ink 7), как в оригинальном растре.
+pub const FRAME_COLOR: u32 = 0xFFD7_D7D7;
+/// Цвет рамки при попадании (мигание опасности).
+pub const DANGER_COLOR: u32 = 0xFFFF_4040;
+/// Цвет фона кокпита (paper 0).
+pub const BACKGROUND: u32 = 0xFF00_0000;
+
+/// Толщина линий рамки в пикселях окна.
+pub const LINE: i32 = 3;
+/// Доля высоты окна под нижнюю часть (панель).
+///
+/// В оригинале было 64/192 ≈ 33%; 25% оставляют место под заголовок
+/// заставки, но делают все семь строк панели одинаково высокими.
+const PANEL_FRAC: i32 = 25;
+/// Высота нижней части в знакоместах — 7 видимых строк, как в оригинале.
+pub const PANEL_ROWS: i32 = 7;
+
+/// Ширина длинной клетки-полосы в процентах от внутренней ширины панели.
+///
+/// Эта клетка растягивается вместе с шириной окна.
+pub const BAR_WIDTH_FRAC: i32 = 15;
+/// Ширина клетки подписи/значка в процентах от высоты строки.
+///
+/// Клетка с текстом не зависит от ширины окна: при изменении соотношения
+/// сторон растягиваются только длинные клетки-полосы.
+pub const LABEL_WIDTH_PER_ROW_PCT: i32 = 225;
+/// Цвет длинных клеток у Cobra Mk III — красный (ZX paper 2).
+pub const BAR_RED: u32 = 0xFFD7_0000;
+/// Цвет длинных клеток у Cobra Mk IV — фиолетовый (ZX paper 3).
+pub const BAR_MAGENTA: u32 = 0xFFD7_00D7;
+
+/// Подписи левой колонки сверху вниз.
+///
+/// Последняя строка — не текст, а значок скорости ([`SPEED_ICON`]), поэтому
+/// для неё указан `None`.
+pub const LEFT_LABELS: [Option<&str>; PANEL_ROWS as usize] = [
+    Some("FS"),
+    Some("AS"),
+    Some("FU"),
+    Some("CT"),
+    Some("LT"),
+    Some("AL"),
+    None,
+];
+/// Подписи правой колонки сверху вниз: `SP`, `RL`, `DC` и номера энергоблоков.
+pub const RIGHT_LABELS: [Option<&str>; PANEL_ROWS as usize] = [
+    Some("SP"),
+    Some("RL"),
+    Some("DC"),
+    Some("1"),
+    Some("2"),
+    Some("3"),
+    Some("4"),
+];
+/// Растр значка скорости из оригинальной панели: 12×5 пикселей.
+///
+/// Горизонтальная шкала со стрелкой влево; старший бит — левый пиксель.
+const SPEED_ICON: [u16; 5] = [
+    0b011000000000,
+    0b010111111111,
+    0b011111111111,
+    0b010111111111,
+    0b011000000000,
+];
 
 /// Адреса переменных панели в памяти игры (текущее значение показания).
 ///
 /// Каждый индикатор-полоса — байт `0..0xA0` (160 т.е. 100%), полоса занимает
 /// 5x5 «пикселей» ZX от `AdrScrIndicators` (значение сдвигается вправо на 2).
 /// Адреса различаются у версий на постоянный сдвиг (Кладов +0xA2).
+#[allow(dead_code)] // понадобится на следующих шагах заполнения панели
 #[derive(Clone, Copy)]
 pub struct CockpitLayout {
     /// Передний щит (`ShieldFront`).
@@ -58,6 +133,7 @@ pub struct CockpitLayout {
 }
 
 /// Раскладка переменных панели для оригинальной версии (`elite.bin`).
+#[allow(dead_code)] // понадобится на следующих шагах заполнения панели
 pub const ELITE_COCKPIT: CockpitLayout = CockpitLayout {
     shield_front: 0x7046,
     shield_rear: 0x7048,
@@ -71,6 +147,7 @@ pub const ELITE_COCKPIT: CockpitLayout = CockpitLayout {
 };
 
 /// Раскладка переменных панели для версии Кладова (`kladov.bin`), +0xA2.
+#[allow(dead_code)] // понадобится на следующих шагах заполнения панели
 pub const KLADOV_COCKPIT: CockpitLayout = CockpitLayout {
     shield_front: 0x70E8,
     shield_rear: 0x70EA,
@@ -83,318 +160,436 @@ pub const KLADOV_COCKPIT: CockpitLayout = CockpitLayout {
     ind_danger: 0x7104,
 };
 
-/// Нативная приборная панель. Состояния нет — панель целиком читается из
-/// памяти игры на каждый кадр.
-pub struct Cockpit;
-
-/// Геометрия панели для текущего окна.
-///
-/// Панель занимает всю ширину окна; её высота — `PANEL_FRAC` от высоты окна.
-/// Внутри панели координаты считаются в «единицах знакомест» шириной `cell`:
-/// 32 знакоместа по горизонтали, `PANEL_ROWS` по вертикали.
+/// Прямоугольник в пикселях окна.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub struct PanelGeom {
-    /// Экранная Y-координата панели (сверху).
+pub struct Rect {
+    pub x: i32,
+    pub y: i32,
+    pub w: i32,
+    pub h: i32,
+}
+
+impl Rect {
+    /// Прямоугольник, сжатый на `d` пикселей со всех сторон.
+    pub fn inset(&self, d: i32) -> Rect {
+        let d = d.max(0);
+        Rect {
+            x: self.x + d,
+            y: self.y + d,
+            w: (self.w - 2 * d).max(0),
+            h: (self.h - 2 * d).max(0),
+        }
+    }
+
+    /// Координата правого края (включительно).
+    #[allow(dead_code)] // пригодится при раскладке индикаторов
+    pub fn right(&self) -> i32 {
+        self.x + self.w - 1
+    }
+
+    /// Координата нижнего края (включительно).
+    #[allow(dead_code)] // пригодится при раскладке индикаторов
+    pub fn bottom(&self) -> i32 {
+        self.y + self.h - 1
+    }
+
+    /// Пуст ли прямоугольник (рисовать нечего).
+    pub fn is_empty(&self) -> bool {
+        self.w <= 0 || self.h <= 0
+    }
+}
+
+/// Геометрия кокпита для текущего окна.
+///
+/// Кокпит занимает всю ширину окна. Главная рамка окружает область вида
+/// (верхнюю часть окна), нижняя часть (панель) прижата к низу окна.
+/// Внутри панели координаты считаются в «единицах знакомест» шириной `cell`:
+/// 32 знакоместа по горизонтали, [`PANEL_ROWS`] по вертикали — как в ZX-версии.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct CockpitGeom {
+    /// Высота окна.
+    pub height: i32,
+    /// Ширина окна.
+    pub width: i32,
+    /// Экранная Y-координата нижней части (сверху).
     pub panel_y: i32,
-    /// Высота панели в пикселях.
+    /// Высота нижней части в пикселях.
     pub panel_h: i32,
     /// Ширина одного знакоместа (`width / 32`).
     pub cell: i32,
-    /// Ширина окна.
-    pub width: i32,
+    /// Общий отступ: от краёв окна до обеих рамок и между рамками.
+    pub margin: i32,
 }
 
-/// Доля высоты окна под панель (в процентах). В оригинале было 64/192 ≈ 33%;
-/// 22% оставляют место под заголовок заставки, но не делают приборы
-/// нечитаемыми.
-const PANEL_FRAC: i32 = 22;
-/// Высота панели в знакоместах (как в оригинале).
-pub const PANEL_ROWS: i32 = 8;
-
-impl PanelGeom {
+impl CockpitGeom {
     /// Экранная X-координата знакоместа `col` (0..32).
-    fn col_x(&self, col: i32) -> i32 {
+    #[allow(dead_code)] // пригодится при раскладке индикаторов
+    pub fn col_x(&self, col: i32) -> i32 {
         self.cell * col
     }
 
-    /// Экранная Y-координата знакоместной строки `row` (0..8) панели.
-    fn row_y(&self, row: i32) -> i32 {
+    /// Экранная Y-координата знакоместной строки `row` (0..[`PANEL_ROWS`]).
+    #[allow(dead_code)] // пригодится при раскладке индикаторов
+    pub fn row_y(&self, row: i32) -> i32 {
         self.panel_y + self.panel_h * row / PANEL_ROWS
+    }
+
+    /// Внешняя граница главной рамки (вокруг области вида).
+    ///
+    /// Нижняя линия рамки касается верхней границы панели
+    /// (`panel_y - 1`), как в оригинале, где панель продолжает кадр.
+    /// Боковые поля и поле сверху равны [`CockpitGeom::margin`].
+    pub fn main_frame(&self) -> Rect {
+        let m = self.margin.max(LINE);
+        Rect {
+            x: m,
+            y: m,
+            w: (self.width - 2 * m).max(0),
+            h: (self.panel_y - m).max(0),
+        }
+    }
+
+    /// Внутренняя область вида — сюда рисуется 3D-сцена или заставка.
+    pub fn view(&self) -> Rect {
+        self.main_frame().inset(LINE)
+    }
+
+    /// Внешняя граница белой рамки нижней части.
+    ///
+    /// Отступ от краёв окна — тот же [`CockpitGeom::margin`], поэтому и
+    /// зазор до главной рамки получается таким же.
+    pub fn panel_frame(&self) -> Rect {
+        let m = self.margin.max(LINE);
+        let y = self.panel_y + m;
+        Rect {
+            x: m,
+            y,
+            w: (self.width - 2 * m).max(0),
+            h: (self.height - m - y).max(0),
+        }
+    }
+
+    /// Внутренняя область панели — без линий рамки.
+    pub fn panel_inner(&self) -> Rect {
+        self.panel_frame().inset(LINE)
+    }
+
+    /// Высота строки боковой колонки без горизонтального разделителя.
+    ///
+    /// Все семь строк одинаковой высоты (разница не больше пикселя), а
+    /// остаток от деления распределяется по верхним строкам. Последняя
+    /// строка упирается в нижнюю линию рамки панели, поэтому разделителя
+    /// под ней нет.
+    pub fn side_row(&self, row: i32) -> Rect {
+        let inner = self.panel_inner();
+        let row = row.clamp(0, PANEL_ROWS - 1);
+        let available = (inner.h - (PANEL_ROWS - 1) * LINE).max(PANEL_ROWS);
+        let base = available / PANEL_ROWS;
+        let extra = available % PANEL_ROWS;
+        let h = base + if row < extra { 1 } else { 0 };
+        let y = inner.y + row * (base + LINE) + row.min(extra);
+        Rect {
+            x: inner.x,
+            y,
+            w: inner.w,
+            h,
+        }
+    }
+
+    /// Горизонтальный разделитель под строкой `row` (только боковые колонки).
+    pub fn row_separator(&self, row: i32) -> Rect {
+        let row = row.clamp(0, PANEL_ROWS - 2);
+        let band = self.side_row(row);
+        Rect {
+            x: band.x,
+            y: band.y + band.h,
+            w: band.w,
+            h: LINE,
+        }
+    }
+
+    /// Ширина клетки под подпись/значок.
+    ///
+    /// Считается от высоты строки, а не от ширины панели, поэтому при смене
+    /// соотношения сторон клетка с текстом сохраняет размер.
+    pub fn label_width(&self) -> i32 {
+        (self.side_row(0).h * LABEL_WIDTH_PER_ROW_PCT / 100).max(1)
+    }
+
+    /// Ширина длинной клетки-полосы.
+    pub fn bar_width(&self) -> i32 {
+        self.panel_inner().w * BAR_WIDTH_FRAC / 100
+    }
+
+    /// Клетка подписи/значка строки `row` (слева или справа).
+    pub fn label_cell(&self, row: i32, right: bool) -> Rect {
+        let inner = self.panel_inner();
+        let band = self.side_row(row);
+        let w = self.label_width();
+        Rect {
+            x: if right { inner.x + inner.w - w } else { inner.x },
+            y: band.y,
+            w,
+            h: band.h,
+        }
+    }
+
+    /// Длинная клетка-полоса строки `row` (слева или справа).
+    pub fn bar_cell(&self, row: i32, right: bool) -> Rect {
+        let inner = self.panel_inner();
+        let band = self.side_row(row);
+        let lw = self.label_width();
+        let bw = self.bar_width();
+        Rect {
+            x: if right {
+                inner.x + inner.w - lw - LINE - bw
+            } else {
+                inner.x + lw + LINE
+            },
+            y: band.y,
+            w: bw,
+            h: band.h,
+        }
+    }
+
+    /// Большая центральная клетка на всю высоту панели.
+    pub fn center_cell(&self) -> Rect {
+        let inner = self.panel_inner();
+        let side = self.label_width() + LINE + self.bar_width() + LINE;
+        Rect {
+            x: inner.x + side,
+            y: inner.y,
+            w: (inner.w - 2 * side).max(0),
+            h: inner.h,
+        }
+    }
+
+    /// X-координаты четырёх вертикальных разделителей таблицы.
+    pub fn column_separators(&self) -> [i32; 4] {
+        let inner = self.panel_inner();
+        let lw = self.label_width();
+        let bw = self.bar_width();
+        [
+            inner.x + lw,
+            inner.x + lw + LINE + bw,
+            inner.x + inner.w - lw - LINE - bw - LINE,
+            inner.x + inner.w - lw - LINE,
+        ]
     }
 }
 
 /// Разложение виртуальной сетки знакомест по окну `WxH`.
 ///
 /// Панель прижимается к нижнему краю окна и занимает всю его ширину.
-pub fn panel_geometry(w: u32, h: u32) -> PanelGeom {
+pub fn panel_geometry(w: u32, h: u32) -> CockpitGeom {
     let w = w as i32;
     let h = h as i32;
     let panel_h = (h * PANEL_FRAC / 100).clamp(48.min(h), h).max(1);
-    PanelGeom {
+    let cell = (w / 32).max(1);
+    // Один «шаг» отступа — четверть знакоместа: на большом окне обе рамки
+    // заметно отодвинуты от краёв, на маленьком — хотя бы две толщины линии.
+    let margin = (cell / 4).clamp(LINE * 2, 32);
+    CockpitGeom {
+        height: h,
+        width: w,
         panel_y: h - panel_h,
         panel_h,
-        cell: (w / 32).max(1),
-        width: w,
+        cell,
+        margin,
     }
 }
+
+/// Нативное оформление кокпита. Состояния нет — рамки статичны, а экраны
+/// рисуют своё содержимое до вызова [`Cockpit::draw`].
+pub struct Cockpit;
 
 impl Cockpit {
     pub fn new() -> Self {
         Cockpit
     }
 
-    /// Нарисовать панель в нижней части окна.
+    /// Нарисовать кокпит белыми линиями; длинные клетки — красные (Cobra
+    /// Mk III, а также заставка).
     ///
-    /// `mem` — живая память Z80 (читаются показания), `font` — шрифт ПЗУ,
-    /// `layout` — адреса переменных версии игры.
-    pub fn draw(&self, f: &mut Frame, mem: &[u8], font: &[u8], layout: CockpitLayout) {
+    /// `font` — знакогенератор ПЗУ ZX (коды 0x20..0x7F) для подписей.
+    pub fn draw(&self, f: &mut Frame, font: &[u8]) {
+        self.draw_themed(f, FRAME_COLOR, BAR_RED, font);
+    }
+
+    /// Нарисовать кокпит линиями цвета `color` (например, красными при
+    /// попадании по кораблю); длинные клетки остаются красными.
+    pub fn draw_colored(&self, f: &mut Frame, color: u32, font: &[u8]) {
+        self.draw_themed(f, color, BAR_RED, font);
+    }
+
+    /// Нарисовать кокпит с заданными цветом линий и цветом длинных клеток.
+    ///
+    /// `bar_color` — цвет полос по типу корабля игрока: [`BAR_RED`] для
+    /// Cobra Mk III и [`BAR_MAGENTA`] для Cobra Mk IV.
+    pub fn draw_themed(&self, f: &mut Frame, line_color: u32, bar_color: u32, font: &[u8]) {
         let g = panel_geometry(f.width as u32, f.height as u32);
-        if g.panel_h <= 0 {
-            return;
-        }
-        let mk4 = is_cobra_mk4(mem);
-        let c = Colors::danger(read_u8(mem, layout.ind_danger), mk4);
-        self.draw_frame(f, &g, c);
-        self.draw_bars(f, mem, font, layout, &g, c);
-        self.draw_units(f, mem, font, layout, &g, c);
-        self.draw_compass(f, mem, &g, c);
-        self.draw_scanner(f, mem, &g, c);
+        self.draw_with_geom(f, &g, line_color, bar_color, font);
     }
 
-    /// Корпус панели: чёрный фон, рамка и разделители окон — как в
-    /// оригинальном растре `DataCocpit`.
+    /// Нарисовать кокпит по заранее вычисленной геометрии.
     ///
-    /// Оригинальные столбцы: внешние края `1/31`, иконки `1..3`, полосы
-    /// `3..8`, радиолокатор `8..21`, компас `21..24`, правые полосы `24..29`
-    /// и подписи `29..31`.
-    fn draw_frame(&self, f: &mut Frame, g: &PanelGeom, c: Colors) {
-        let h = g.panel_h;
-        // Чёрный фон панели.
-        f.fill_rect(0, g.panel_y, g.width as usize, h as usize, c.body);
-        let x0 = g.col_x(1);
-        let x1 = g.col_x(31);
-        let bw = (x1 - x0).max(1) as usize;
-        // Верхняя и нижняя линии рамки (с чёрными полями до краёв окна).
-        f.hline(x0, g.panel_y, bw, c.frame);
-        f.hline(x0, g.panel_y + h - 1, bw, c.frame);
-        // Вертикальные линии по краям и разделители окон.
-        let lw = 1i32;
-        for col in [1, 3, 8, 21, 24, 29, 31] {
+    /// Содержимое вида (космос, заставка) должно быть уже нарисовано:
+    /// кокпит только заливает фон нижней части, рисует две рамки и таблицу
+    /// с индикаторами в нижней части.
+    pub fn draw_with_geom(
+        &self,
+        f: &mut Frame,
+        g: &CockpitGeom,
+        line_color: u32,
+        bar_color: u32,
+        font: &[u8],
+    ) {
+        // Нижняя часть непрозрачна и закрывает всё, что под ней.
+        if g.panel_h > 0 && g.width > 0 {
             f.fill_rect(
-                g.col_x(col),
-                g.panel_y + 1,
-                lw as usize,
-                (h - 2).max(1) as usize,
-                c.frame,
+                0,
+                g.panel_y,
+                g.width as usize,
+                g.panel_h as usize,
+                BACKGROUND,
+            );
+        }
+        // Главная рамка вокруг вида и отдельная рамка нижней части с
+        // отступом от неё.
+        stroke_rect(f, g.main_frame(), LINE, line_color);
+        stroke_rect(f, g.panel_frame(), LINE, line_color);
+        draw_panel(f, g, line_color, bar_color, font);
+    }
+}
+
+/// Нарисовать таблицу панели: длинные клетки, разделители и подписи.
+fn draw_panel(f: &mut Frame, g: &CockpitGeom, line_color: u32, bar_color: u32, font: &[u8]) {
+    let inner = g.panel_inner();
+    if inner.is_empty() {
+        return;
+    }
+    // Длинные клетки с будущими индикаторами — цвет типа корабля.
+    for right in [false, true] {
+        for row in 0..PANEL_ROWS {
+            let bar = g.bar_cell(row, right);
+            if !bar.is_empty() {
+                f.fill_rect(
+                    bar.x,
+                    bar.y,
+                    bar.w as usize,
+                    bar.h as usize,
+                    bar_color,
+                );
+            }
+        }
+    }
+    // Горизонтальные разделители только в боковых колонках: центральная
+    // клетка одна на все семь строк.
+    let center = g.center_cell();
+    for row in 0..PANEL_ROWS - 1 {
+        let sep = g.row_separator(row);
+        let left_w = (center.x - inner.x).max(0);
+        if left_w > 0 {
+            f.fill_rect(
+                inner.x,
+                sep.y,
+                left_w as usize,
+                sep.h as usize,
+                line_color,
+            );
+        }
+        let right_x = center.x + center.w;
+        let right_w = (inner.x + inner.w - right_x).max(0);
+        if right_w > 0 {
+            f.fill_rect(
+                right_x,
+                sep.y,
+                right_w as usize,
+                sep.h as usize,
+                line_color,
             );
         }
     }
-
-    /// Левое окно (col 3..7): шесть полос — иконка пиктограммы и шкала.
-    ///
-    /// Порядок и переменные — как `AdrScrIndicators` (оригинал
-    /// `elite.asm:3767`): передний щит, задний щит, топливо, температура
-    /// кабины, температура лазера, высота.
-    fn draw_bars(
-        &self,
-        f: &mut Frame,
-        mem: &[u8],
-        font: &[u8],
-        layout: CockpitLayout,
-        g: &PanelGeom,
-        c: Colors,
-    ) {
-        let bars: [(Icon, u8); 6] = [
-            (Icon::ShieldFront, read_u8(mem, layout.shield_front)),
-            (Icon::ShieldRear, read_u8(mem, layout.shield_rear)),
-            (Icon::Fuel, read_u8(mem, layout.fuel)),
-            (Icon::Temp, read_u8(mem, layout.temperature)),
-            (Icon::Laser, read_u8(mem, layout.laser_temp)),
-            (Icon::Altitude, read_u8(mem, layout.altitude)),
-        ];
-        // Полосы занимают знакоместные строки 1..7; каждая — своей высоты.
-        let top = g.row_y(1);
-        let row_h = (g.row_y(7) - top) / 6;
-        let x_icon = g.col_x(1) + 2;
-        let icon_w = (g.col_x(3) - x_icon - 2).max(4);
-        let x_bar = g.col_x(3) + 2;
-        let bar_w = (g.col_x(8) - x_bar - 2).max(4);
-        for (i, (icon, value)) in bars.iter().enumerate() {
-            let y = top + i as i32 * row_h;
-            draw_icon(
-                f,
-                font,
-                *icon,
-                x_icon,
-                y + 1,
-                icon_w.min(row_h - 3),
-                c.frame,
-            );
-            draw_bar(f, *value, x_bar, y + 1, bar_w, row_h - 3, c);
+    // Вертикальные разделители между всеми клетками таблицы.
+    for x in g.column_separators() {
+        f.fill_rect(x, inner.y, LINE as usize, inner.h as usize, line_color);
+    }
+    // Подписи/значки на чёрном фоне коротких клеток.
+    for right in [false, true] {
+        for row in 0..PANEL_ROWS {
+            draw_indicator_label(f, g, row, right, line_color, font);
         }
     }
+}
 
-    /// Правое окно (col 24..31): полосы скорости и четырёх энергоблоков,
-    /// а справа от них — компактные подписи, как в оригинале.
-    fn draw_units(
-        &self,
-        f: &mut Frame,
-        mem: &[u8],
-        font: &[u8],
-        layout: CockpitLayout,
-        g: &PanelGeom,
-        c: Colors,
-    ) {
-        let top = g.row_y(1);
-        let row_h = (g.row_y(7) - top) / 6;
-        let x_bar = g.col_x(24) + 2;
-        let bar_w = (g.col_x(29) - x_bar - 2).max(4);
-        let x_label = g.col_x(29) + 2;
-        let label_w = (g.col_x(31) - x_label - 1).max(4);
-        // Скорость — строка 0 окна (знакоместная строка 1).
-        draw_bar(
-            f,
-            read_u8(mem, layout.speed),
-            x_bar,
-            top + 1,
-            bar_w,
-            row_h - 3,
-            c,
-        );
-        draw_unit_icon(f, x_label, top + 1, label_w.min(row_h - 3), false, c);
-        // Четыре энергоблока — строки 1..5 (первый энергоблок пропускает
-        // строку скорости; в оригинале UNIT1..4 идут ниже).
-        for i in 0..4 {
-            let v = read_u8(mem, layout.shield_unit1 + (i as u16) * 2);
-            let y = top + (i as i32 + 1) * row_h;
-            draw_bar(f, v, x_bar, y + 1, bar_w, row_h - 3, c);
-            draw_unit_icon(f, x_label, y + 1, label_w.min(row_h - 3), v >= 0xA0, c);
-        }
-        // Подпись скорости: маленький треугольник у первой полосы.
-        let s = (row_h / 3).clamp(4, bar_w / 2);
-        f.line(x_label, top + 1, x_label + s, top + row_h / 2, c.needle);
-        f.line(
-            x_label,
-            top + row_h - 2,
-            x_label + s,
-            top + row_h / 2,
-            c.needle,
-        );
-        let _ = font;
+/// Подпись индикатора строки `row` (слева или справа).
+///
+/// `None` означает, что в клетке вместо текста рисуется значок скорости.
+fn indicator_label(row: i32, right: bool) -> Option<&'static str> {
+    let table = if right { &RIGHT_LABELS } else { &LEFT_LABELS };
+    table.get(row as usize).copied().flatten()
+}
+
+/// Нарисовать подпись индикатора (или значок скорости) по центру короткой клетки.
+fn draw_indicator_label(
+    f: &mut Frame,
+    g: &CockpitGeom,
+    row: i32,
+    right: bool,
+    line_color: u32,
+    font: &[u8],
+) {
+    let area = g.label_cell(row, right);
+    if area.is_empty() {
+        return;
     }
-
-    /// Компас (col 21..24): круг с указателем. Угол берётся из памяти игры
-    /// (`PrintCompass`); при отсутствии доступа — указатель на север.
-    fn draw_compass(&self, f: &mut Frame, _mem: &[u8], g: &PanelGeom, c: Colors) {
-        let cx = (g.col_x(21) + g.col_x(24)) / 2;
-        let cy = g.panel_y + g.panel_h / 2;
-        let r = ((g.col_x(24) - g.col_x(21)) / 2 - 2)
-            .min(g.panel_h / 3)
-            .max(6);
-        f.disc(cx, cy, r, c.body);
-        f.circle(cx, cy, r, c.frame);
-        f.circle(cx, cy, r - 2, c.frame);
-        // Указатель на север и перекрестие — как базовый вид оригинала.
-        f.line(cx, cy - r + 2, cx, cy - r / 3, c.needle);
-        f.line(cx - r / 3, cy, cx + r / 3, cy, c.frame);
-        f.line(cx, cy - r / 3, cx, cy + r / 3, c.frame);
+    let Some(label) = indicator_label(row, right) else {
+        draw_speed_icon(f, area, line_color);
+        return;
+    };
+    if font.is_empty() {
+        return;
     }
+    let chars = label.len() as i32;
+    let scale = (area.h / 8).min(area.w / (8 * chars).max(1)).max(1);
+    let text_w = 8 * scale * chars;
+    let text_h = 8 * scale;
+    let x = area.x + (area.w - text_w) / 2;
+    let y = area.y + (area.h - text_h) / 2;
+    // На очень маленьких окнах подпись может не поместиться в клетку —
+    // обрезаем её, чтобы не залезть на соседние строки и полосы.
+    f.set_clip(area.x, area.y, area.w.max(0) as usize, area.h.max(0) as usize);
+    f.draw_text(font, x, y, label, line_color, scale as usize);
+    f.clear_clip();
+}
 
-    /// Радиолокатор (col 8..21): круг с диагональными и прямыми осями и
-    /// отметкой корабля игрока в центре — как сетка оригинала
-    /// (`PrintObjScaner`, база точек `0x558F`). На широком экране радар
-    /// крупнее, чем в ZX-версии.
-    ///
-    /// В версии Кладова есть альтернативный радар (alt radar). При
-    /// активном alt radar рисуем объекты вокруг по координатам.
-    fn draw_scanner(&self, f: &mut Frame, mem: &[u8], g: &PanelGeom, c: Colors) {
-        let cx = (g.col_x(8) + g.col_x(21)) / 2;
-        let cy = g.panel_y + g.panel_h / 2;
-        // Радиус ограничен и высотой панели, и шириной отведённых знакомест.
-        let r = ((g.col_x(21) - g.col_x(8)) / 2 - 2)
-            .min(g.panel_h / 2 - 3)
-            .max(6);
-        f.disc(cx, cy, r, c.body);
-        f.circle(cx, cy, r, c.frame);
-        // Горизонтальная и вертикальная оси.
-        f.line(cx - r, cy, cx + r, cy, c.frame);
-        f.line(cx, cy - r, cx, cy + r, c.frame);
-        // Диагонали (45°) — как в сетке оригинала.
-        let d = (r as f32 * 0.7071) as i32;
-        f.line(cx - d, cy - d, cx + d, cy + d, c.frame);
-        f.line(cx - d, cy + d, cx + d, cy - d, c.frame);
-        // Отметка корабля игрока.
-        f.disc(cx, cy, 2, c.needle);
-        // Альтернативный радар версии Кладова.
-        if is_alt_radar(mem) {
-            self.draw_scanner_alt(f, mem, cx, cy, r, c);
-        }
-    }
-
-    fn draw_scanner_alt(
-        &self,
-        f: &mut Frame,
-        mem: &[u8],
-        cx: i32,
-        cy: i32,
-        r: i32,
-        c: Colors,
-    ) {
-        // Рисуем элементы альтернативного радара - заглушка для отображения
-        // Рисуем точки по кругу и оси для наглядности
-        f.disc(cx, cy - r / 2, 1, c.needle);
-        f.disc(cx + r / 3, cy, 1, c.needle);
-        f.disc(cx - r / 4, cy + r / 3, 1, c.needle);
-        // Также пробуем нарисовать из памяти
-        const Z80_OBJ_CORIOLIS: usize = 0x6048;
-        const Z80_OBJ_SLOT0: usize = 0x606F;
-        const Z80_SLOT_SIZE: usize = 0x27;
-        const Z80_SLOT_OENERG: usize = 0x22;
-        let mut slots = Vec::new();
-        slots.push(Z80_OBJ_CORIOLIS);
-        for i in 0..6 {
-            slots.push(Z80_OBJ_SLOT0 + i * Z80_SLOT_SIZE);
-        }
-        for &base in &slots {
-            if base + Z80_SLOT_SIZE > mem.len() {
-                continue;
+/// Нарисовать значок скорости по центру короткой клетки.
+///
+/// Масштаб тот же, что у подписей: один пиксель растра — [`LINE`] и более
+/// пикселей окна, в зависимости от высоты строки.
+fn draw_speed_icon(f: &mut Frame, area: Rect, color: u32) {
+    const W: i32 = 12;
+    const H: i32 = SPEED_ICON.len() as i32;
+    let scale = (area.h / 8).min(area.w / W).max(1);
+    let w = W * scale;
+    let h = H * scale;
+    let x = area.x + (area.w - w) / 2;
+    let y = area.y + (area.h - h) / 2;
+    f.set_clip(area.x, area.y, area.w.max(0) as usize, area.h.max(0) as usize);
+    for (row, bits) in SPEED_ICON.iter().enumerate() {
+        for col in 0..W {
+            if bits & (1 << (W - 1 - col)) != 0 {
+                f.fill_rect(
+                    x + col * scale,
+                    y + row as i32 * scale,
+                    scale as usize,
+                    scale as usize,
+                    color,
+                );
             }
-            if mem[base + Z80_SLOT_OENERG] == 0 {
-                continue;
-            }
-            let e = mem[base + 0] as i16;
-            let d = mem[base + 1] as i16;
-            let cbyte = mem[base + 3] as i16;
-            let bbyte = mem[base + 4] as i16;
-            let lbyte = mem[base + 6] as i16;
-            let hbyte = mem[base + 7] as i16;
-            let de = ((d as u16) << 8) | (e as u16);
-            let bc = ((bbyte as u16) << 8) | (cbyte as u16);
-            let hlv = ((hbyte as u16) << 8) | (lbyte as u16);
-            let sx = if (mem[base + 2] & 0x80) != 0 { -1i32 } else { 1i32 };
-            let sy = if (mem[base + 5] & 0x80) != 0 { -1i32 } else { 1i32 };
-            let sz = if (mem[base + 8] & 0x80) != 0 { -1i32 } else { 1i32 };
-            let x = (de as i32) * sx;
-            let y = (bc as i32) * sy;
-            let z = (hlv as i32) * sz;
-            if x.abs() > 30000 || y.abs() > 30000 || z.abs() > 30000 {
-                continue;
-            }
-            let dist = ((x as i64) * (x as i64) + (y as i64) * (y as i64) + (z as i64) * (z as i64)) as f64;
-            let dist = dist.sqrt() as i32;
-            if dist == 0 {
-                continue;
-            }
-            let scale = (r as f32) * 0.8;
-            let sxp = (x as f32 / dist as f32 * scale) as i32;
-            let syp = (y as f32 / dist as f32 * scale) as i32;
-            let mx = cx + sxp;
-            let my = cy - syp;
-            f.disc(mx, my, 1, c.needle);
-            f.line(mx - 1, my, mx + 1, my, c.needle);
-            f.line(mx, my - 1, mx, my + 1, c.needle);
         }
     }
+    f.clear_clip();
 }
 
 impl Default for Cockpit {
@@ -403,197 +598,360 @@ impl Default for Cockpit {
     }
 }
 
-/// Пиктограмма левого окна полос.
-#[derive(Clone, Copy)]
-enum Icon {
-    ShieldFront,
-    ShieldRear,
-    Fuel,
-    Temp,
-    Laser,
-    Altitude,
-}
-
-/// Нарисовать пиктограмму индикатора в квадрате `size` (сверху `y`, слева `x`).
-///
-/// Рисуется простыми линиями — стилизация оригинальных значков панели.
-fn draw_icon(f: &mut Frame, font: &[u8], icon: Icon, x: i32, y: i32, size: i32, color: u32) {
-    let s = size.max(4);
-    let (x0, y0, x1, y1) = (x, y, x + s - 1, y + s - 1);
-    let mid = (x0 + x1) / 2;
-    let my = (y0 + y1) / 2;
-    match icon {
-        // Щит: домик-«щит» с крышей.
-        Icon::ShieldFront | Icon::ShieldRear => {
-            f.line(mid, y0, x1, y0 + s / 3, color);
-            f.line(mid, y0, x0, y0 + s / 3, color);
-            f.line(x0, y0 + s / 3, x0, y1, color);
-            f.line(x1, y0 + s / 3, x1, y1, color);
-            f.line(x0, y1, mid, y1, color);
-            f.line(x1, y1, mid, y1, color);
-            if matches!(icon, Icon::ShieldRear) {
-                f.line(x0, my, x1, my, color);
-            }
-        }
-        // Топливо: силуэт бочки/бака.
-        Icon::Fuel => {
-            f.line(x0 + 1, y0, x1 - 1, y0, color);
-            f.line(x0 + 1, y1, x1 - 1, y1, color);
-            f.line(x0, y0 + 1, x0, y1 - 1, color);
-            f.line(x1, y0 + 1, x1, y1 - 1, color);
-            f.line(mid, y0 + 1, mid, y1 - 1, color);
-        }
-        // Температура: термометр.
-        Icon::Temp => {
-            f.line(mid, y0, mid, y1 - 2, color);
-            f.line(mid - 1, y0, mid - 1, y1 - 2, color);
-            f.disc(mid - 1, y1 - 1, 2, color);
-        }
-        // Лазер: молния/луч.
-        Icon::Laser => {
-            f.line(x0, y1, mid, y0, color);
-            f.line(mid, y0, mid, my, color);
-            f.line(mid, my, x1, y0, color);
-        }
-        // Высота: стрелка вверх на подставке.
-        Icon::Altitude => {
-            f.line(mid, y0, mid, y1 - 1, color);
-            f.line(x0, my, mid, y0, color);
-            f.line(x1, my, mid, y0, color);
-            f.line(x0, y1, x1, y1, color);
-        }
-    }
-    let _ = font;
-}
-
-/// Иконка энергоблока: контур, заполненный при полном блоке.
-fn draw_unit_icon(f: &mut Frame, x: i32, y: i32, size: i32, full: bool, c: Colors) {
-    let s = size.max(4);
-    f.fill_rect(x, y, s as usize, s as usize, c.frame);
-    if full {
-        f.fill_rect(
-            x + 1,
-            y + 1,
-            (s - 2).max(0) as usize,
-            (s - 2).max(0) as usize,
-            c.frame,
-        );
-    } else {
-        f.fill_rect(
-            x + 1,
-            y + 1,
-            (s - 2).max(0) as usize,
-            (s - 2).max(0) as usize,
-            c.body,
-        );
-    }
-}
-
-/// Шкала-индикатор: рамка и заполнение слева-направо по значению `0..0xA0`.
-/// Стиль оригинала — белые линии по чёрному.
-fn draw_bar(f: &mut Frame, value: u8, x: i32, y: i32, w: i32, h: i32, c: Colors) {
-    if w <= 2 || h <= 2 {
+/// Обвести прямоугольник `r` рамкой толщиной `t`.
+fn stroke_rect(f: &mut Frame, r: Rect, t: i32, color: u32) {
+    if r.is_empty() {
         return;
     }
-    f.fill_rect(x, y, w as usize, h as usize, c.frame);
-    f.fill_rect(x + 1, y + 1, (w - 2) as usize, (h - 2) as usize, c.body);
-    let frac = (value as i32).clamp(0, 0xA0);
-    let fill_w = ((w - 2) * frac) / 0xA0;
-    let fc = if frac <= 0x20 {
-        c.bar_low
-    } else if frac <= 0x50 {
-        c.bar_warn
-    } else {
-        c.bar_ok
-    };
-    f.fill_rect(x + 1, y + 1, fill_w.max(0) as usize, (h - 2) as usize, fc);
-}
-
-/// Цвета панели в стиле оригинала: чёрный фон, белые линии (ink 7 по paper 0).
-///
-/// Рамка меняет цвет по уровню опасности (`IndDanger`) — как `PrintIndDanger`.
-/// Для Cobra MK4 используется фиолетовый цвет.
-#[derive(Clone, Copy)]
-struct Colors {
-    body: u32,
-    frame: u32,
-    needle: u32,
-    bar_ok: u32,
-    bar_warn: u32,
-    bar_low: u32,
-}
-
-fn is_cobra_mk4(mem: &[u8]) -> bool {
-    mem.get(0xD08E).copied().unwrap_or(0) != 0
-}
-
-impl Colors {
-    fn danger(ind: u8, mk4: bool) -> Self {
-        let frame = if mk4 {
-            // Фиолетовый для Cobra Mk4
-            match ind & 0x7F {
-                0x02 => 0xFFD0_3030, // красный — щит пуст
-                0x06 => 0xFFD0_C040, // жёлтый — объект рядом
-                0x63 => 0xFFFF_4040, // мигающий красный
-                0x04 => 0xFFB0_60FF, // фиолетовый — в полёте
-                _ => 0xFFB0_60FF,    // фиолетовый — базовый цвет Mk4
-            }
-        } else {
-            // Красный для Cobra Mk3
-            match ind & 0x7F {
-                0x02 => 0xFFD0_3030, // красный — щит пуст
-                0x06 => 0xFFD0_C040, // жёлтый — объект рядом
-                0x63 => 0xFFFF_4040, // мигающий красный
-                0x04 => 0xFFFF_4040, // красный — в полёте
-                _ => 0xFFFF_4040,    // красный — базовый цвет Mk3
-            }
-        };
-        Colors {
-            // Оригинал: чёрный фон панели, белая графика.
-            body: 0xFF00_0000,
-            frame,
-            needle: 0xFFFF_FF00,
-            bar_ok: 0xFFD7_D7D7,
-            bar_warn: 0xFFFF_E000,
-            bar_low: 0xFFFF_4040,
-        }
+    let t = t.min(r.w).min(r.h).max(1);
+    // Верхняя и нижняя полосы.
+    f.fill_rect(r.x, r.y, r.w as usize, t as usize, color);
+    f.fill_rect(r.x, r.y + r.h - t, r.w as usize, t as usize, color);
+    // Боковые полосы между ними.
+    let mid_h = (r.h - 2 * t).max(0) as usize;
+    if mid_h > 0 {
+        f.fill_rect(r.x, r.y + t, t as usize, mid_h, color);
+        f.fill_rect(r.x + r.w - t, r.y + t, t as usize, mid_h, color);
     }
-}
-
-/// Проверка включён ли альтернативный радар Кладова.
-fn is_alt_radar(_mem: &[u8]) -> bool {
-    true
-}
-
-/// Читать байт памяти игры (0, если адрес вне памяти).
-fn read_u8(mem: &[u8], addr: u16) -> u8 {
-    mem.get(addr as usize).copied().unwrap_or(0)
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
 
-    fn test_font() -> Vec<u8> {
+    /// Шрифт-заглушка: все знаки — сплошной прямоугольник.
+    fn font() -> Vec<u8> {
         vec![0xFFu8; 0x300]
     }
 
-    fn mem_with(l: CockpitLayout, fuel: u8, speed: u8, ind: u8) -> Vec<u8> {
-        let mut m = vec![0u8; 0x10000];
-        m[l.fuel as usize] = fuel;
-        m[l.speed as usize] = speed;
-        m[l.ind_danger as usize] = ind;
-        m
+    fn draw(w: usize, h: usize) -> (Frame, CockpitGeom) {
+        let mut f = Frame::new(w, h);
+        let font = font();
+        Cockpit::new().draw(&mut f, &font);
+        (f, panel_geometry(w as u32, h as u32))
     }
 
-    /// Панель рисуется и непрозрачна по всей своей области.
+    /// Кокпит рисует главную рамку и рамку нижней части.
+    #[test]
+    fn cockpit_draws_main_and_panel_frames() {
+        let (f, g) = draw(1280, 960);
+        let main = g.main_frame();
+        let panel = g.panel_frame();
+        let px = |x: i32, y: i32| f.pixels()[y as usize * 1280 + x as usize];
+
+        assert_eq!(px(main.x, main.y), FRAME_COLOR, "главная рамка не нарисована");
+        assert_eq!(
+            px(main.x + main.w / 2, main.bottom()),
+            FRAME_COLOR,
+            "нижняя линия главной рамки не нарисована"
+        );
+        assert_eq!(
+            px(panel.x, panel.y),
+            FRAME_COLOR,
+            "рамка нижней части не нарисована"
+        );
+        assert_eq!(
+            px(panel.right(), panel.bottom()),
+            FRAME_COLOR,
+            "правый нижний угол нижней рамки не нарисован"
+        );
+    }
+
+    /// Все отступы одинаковые: от краёв окна и между рамками.
+    #[test]
+    fn all_margins_are_equal() {
+        let g = panel_geometry(1280, 960);
+        let main = g.main_frame();
+        let panel = g.panel_frame();
+        // Отступ от краёв окна у обеих рамок.
+        assert_eq!(main.x, g.margin, "главная рамка не на общем отступе слева");
+        assert_eq!(main.y, g.margin, "главная рамка не на общем отступе сверху");
+        assert_eq!(panel.x, g.margin, "нижняя рамка не на общем отступе слева");
+        assert_eq!(
+            g.width - 1 - panel.right(),
+            g.margin,
+            "нижняя рамка не на общем отступе справа"
+        );
+        assert_eq!(
+            g.height - 1 - panel.bottom(),
+            g.margin,
+            "нижняя рамка не на общем отступе снизу"
+        );
+        // Зазор между главной рамкой и нижней — тот же отступ.
+        let gap_rows = panel.y - main.bottom() - 1;
+        assert_eq!(gap_rows, g.margin, "зазор между рамками не равен отступу");
+        // И этот зазор действительно чёрный, а не общая линия.
+        let (f, _) = draw(1280, 960);
+        let mid_x = g.width / 2;
+        for y in main.bottom() + 1..panel.y {
+            assert_eq!(
+                f.pixels()[y as usize * g.width as usize + mid_x as usize],
+                BACKGROUND,
+                "зазор между рамками не чёрный в строке {y}"
+            );
+        }
+    }
+
+    /// В панели по семь строк слева и справа: длинные клетки залиты, между
+    /// строками — белые разделители, у нижней строки разделитель — сама рамка.
+    #[test]
+    fn panel_has_seven_indicator_rows_on_both_sides() {
+        let (f, g) = draw(1280, 960);
+        let px = |x: i32, y: i32| f.pixels()[y as usize * 1280 + x as usize];
+        for right in [false, true] {
+            for row in 0..PANEL_ROWS {
+                let bar = g.bar_cell(row, right);
+                assert!(!bar.is_empty(), "пустая клетка {row} (right={right})");
+                assert_eq!(
+                    px(bar.x + bar.w / 2, bar.y + bar.h / 2),
+                    BAR_RED,
+                    "клетка {row} (right={right}) не залита"
+                );
+                // Между строками — белая линия шириной с рамку.
+                if row + 1 < PANEL_ROWS {
+                    let sep = g.row_separator(row);
+                    assert_eq!(
+                        px(bar.x + bar.w / 2, sep.y + LINE / 2),
+                        FRAME_COLOR,
+                        "нет линии под строкой {row} (right={right})"
+                    );
+                }
+            }
+        }
+        // Нижняя строка опирается на нижнюю линию рамки панели.
+        let inner = g.panel_inner();
+        let last = g.side_row(PANEL_ROWS - 1);
+        assert_eq!(
+            last.y + last.h,
+            inner.y + inner.h,
+            "нижняя строка не доходит до рамки панели"
+        );
+    }
+
+    /// Все семь строк боковых колонок одинаковой высоты, включая нижнюю.
+    #[test]
+    fn side_rows_have_equal_height() {
+        let g = panel_geometry(1280, 960);
+        let heights: Vec<i32> = (0..PANEL_ROWS).map(|r| g.side_row(r).h).collect();
+        let min = *heights.iter().min().unwrap();
+        let max = *heights.iter().max().unwrap();
+        assert!(max - min <= 1, "строки разной высоты: {heights:?}");
+        let inner = g.panel_inner();
+        assert_eq!(g.side_row(0).y, inner.y, "первая строка не сверху панели");
+        let last = g.side_row(PANEL_ROWS - 1);
+        assert_eq!(
+            last.y + last.h,
+            inner.y + inner.h,
+            "нижняя строка не доходит до рамки панели"
+        );
+        // Разделители стоят ровно между строками.
+        for row in 0..PANEL_ROWS - 1 {
+            let sep = g.row_separator(row);
+            let next = g.side_row(row + 1);
+            assert_eq!(sep.y, g.side_row(row).y + g.side_row(row).h);
+            assert_eq!(sep.y + sep.h, next.y, "разрыв перед строкой {}", row + 1);
+        }
+    }
+
+    /// Таблица с рамками: вертикальные разделители между всеми клетками,
+    /// горизонтальные — только в боковых колонках, центр — одна большая клетка.
+    #[test]
+    fn panel_is_a_table_with_borders() {
+        let (f, g) = draw(1280, 960);
+        let px = |x: i32, y: i32| f.pixels()[y as usize * 1280 + x as usize];
+        let inner = g.panel_inner();
+        let center = g.center_cell();
+        assert!(!center.is_empty(), "центральная клетка пуста");
+        assert_eq!(center.y, inner.y, "центр не начинается сверху панели");
+        assert_eq!(
+            center.y + center.h,
+            inner.y + inner.h,
+            "центр не занимает всю высоту панели"
+        );
+        // Вертикальные линии отделяют подпись, полосу и центр.
+        for x in g.column_separators() {
+            assert_eq!(
+                px(x + LINE / 2, center.y + center.h / 2),
+                FRAME_COLOR,
+                "нет вертикального разделителя в x={x}"
+            );
+        }
+        // В центре горизонтальных линий нет.
+        for row in 0..PANEL_ROWS - 1 {
+            let sep = g.row_separator(row);
+            assert_eq!(
+                px(center.x + center.w / 2, sep.y + LINE / 2),
+                BACKGROUND,
+                "горизонтальная линия пересекает центр (строка {row})"
+            );
+        }
+    }
+
+    /// Ширина и высота клеток задаются долями панели и легко меняются.
+    #[test]
+    fn indicator_size_follows_panel_fractions() {
+        let g = panel_geometry(1280, 960);
+        let inner = g.panel_inner();
+        let bar = g.bar_cell(0, false);
+        let label = g.label_cell(0, false);
+        assert_eq!(bar.w, inner.w * BAR_WIDTH_FRAC / 100);
+        assert_eq!(label.w, g.side_row(0).h * LABEL_WIDTH_PER_ROW_PCT / 100);
+        assert!(bar.h > 0 && bar.h == g.side_row(0).h);
+        // Клетки разделены вертикальной линией.
+        assert_eq!(bar.x, label.x + label.w + LINE);
+        // Справа — зеркально: подпись правее полосы.
+        let rbar = g.bar_cell(0, true);
+        let rlabel = g.label_cell(0, true);
+        assert_eq!(rlabel.x, rbar.x + rbar.w + LINE);
+        assert_eq!(rlabel.x + rlabel.w, inner.x + inner.w);
+    }
+
+    /// При смене соотношения сторон клетка с текстом не меняется, а полосы
+    /// и центральная клетка растягиваются по ширине окна.
+    #[test]
+    fn label_cell_width_does_not_follow_aspect_ratio() {
+        let narrow = panel_geometry(1280, 960);
+        let wide = panel_geometry(1706, 960);
+        assert_eq!(
+            narrow.label_width(),
+            wide.label_width(),
+            "клетка с текстом растянулась вместе с окном"
+        );
+        assert!(
+            wide.bar_width() > narrow.bar_width(),
+            "длинная клетка-полоса не растянулась"
+        );
+        assert!(
+            wide.center_cell().w > narrow.center_cell().w,
+            "центральная клетка не растянулась"
+        );
+        // При изменении высоты окна клетка с текстом масштабируется вместе
+        // со строками.
+        let taller = panel_geometry(1280, 1080);
+        assert!(taller.label_width() > narrow.label_width());
+    }
+
+    /// Подписи повторяют оригинальную панель: слева шесть обозначений и
+    /// значок скорости, справа `SP`, `RL`, `DC` и номера энергоблоков.
+    #[test]
+    fn indicator_labels_match_original() {
+        assert_eq!(
+            LEFT_LABELS,
+            [
+                Some("FS"),
+                Some("AS"),
+                Some("FU"),
+                Some("CT"),
+                Some("LT"),
+                Some("AL"),
+                None
+            ]
+        );
+        assert_eq!(
+            RIGHT_LABELS,
+            [
+                Some("SP"),
+                Some("RL"),
+                Some("DC"),
+                Some("1"),
+                Some("2"),
+                Some("3"),
+                Some("4")
+            ]
+        );
+        assert_eq!(
+            indicator_label(PANEL_ROWS - 1, false),
+            None,
+            "слева снизу должен быть значок скорости"
+        );
+        assert!(
+            !LEFT_LABELS
+                .iter()
+                .flatten()
+                .chain(RIGHT_LABELS.iter().flatten())
+                .any(|s| *s == "XX"),
+            "в панели осталась заглушка XX"
+        );
+    }
+
+    /// Подписи и значок скорости рисуются белым по чёрному фону, а не по полосе.
+    #[test]
+    fn indicator_labels_are_on_black_background() {
+        // Шрифт с единственным горящим пикселем в каждом знаке: так легко
+        // посчитать, сколько пикселей занимает каждая подпись.
+        let mut font = vec![0u8; 0x300];
+        for ch in 0x20..0x80u8 {
+            font[(ch - 0x20) as usize * 8] = 0x80;
+        }
+        let mut f = Frame::new(1280, 960);
+        Cockpit::new().draw(&mut f, &font);
+        let g = panel_geometry(1280, 960);
+        for right in [false, true] {
+            for row in 0..PANEL_ROWS {
+                let area = g.label_cell(row, right);
+                let mut lit = 0;
+                for y in area.y..area.y + area.h {
+                    for x in area.x..area.x + area.w {
+                        let p = f.pixels()[y as usize * 1280 + x as usize];
+                        if p == FRAME_COLOR {
+                            lit += 1;
+                        } else {
+                            assert_eq!(p, BACKGROUND, "подпись не на чёрном фоне");
+                        }
+                    }
+                }
+                match indicator_label(row, right) {
+                    Some(label) => {
+                        let chars = label.len() as i32;
+                        let scale = (area.h / 8).min(area.w / (8 * chars).max(1)).max(1);
+                        assert_eq!(
+                            lit as i32,
+                            chars * scale * scale,
+                            "подпись {label} не нарисована (right={right}, row={row})"
+                        );
+                    }
+                    None => {
+                        let scale = (area.h / 8).min(area.w / 12).max(1);
+                        let ink: i32 = SPEED_ICON.iter().map(|b| b.count_ones() as i32).sum();
+                        assert_eq!(
+                            lit as i32,
+                            ink * scale * scale,
+                            "значок скорости не нарисован (right={right}, row={row})"
+                        );
+                    }
+                }
+            }
+        }
+    }
+
+    /// Цвет длинных клеток — по типу корабля: заставка (Cobra Mk III) красная,
+    /// Cobra Mk IV — фиолетовая.
+    #[test]
+    fn bar_color_follows_ship_type() {
+        let font = font();
+        let g = panel_geometry(1280, 960);
+        let bar = g.bar_cell(0, false);
+        let mut splash = Frame::new(1280, 960);
+        Cockpit::new().draw(&mut splash, &font);
+        assert_eq!(
+            splash.pixels()[(bar.y + bar.h / 2) as usize * 1280
+                + (bar.x + bar.w / 2) as usize],
+            BAR_RED,
+            "на заставке полосы должны быть красными"
+        );
+        let mut mk4 = Frame::new(1280, 960);
+        Cockpit::new().draw_themed(&mut mk4, FRAME_COLOR, BAR_MAGENTA, &font);
+        assert_eq!(
+            mk4.pixels()[(bar.y + bar.h / 2) as usize * 1280 + (bar.x + bar.w / 2) as usize],
+            BAR_MAGENTA,
+            "у Cobra Mk IV полосы должны быть фиолетовыми"
+        );
+    }
+
+    /// Нижняя часть непрозрачна по всей своей площади (закрывает подложку).
     #[test]
     fn cockpit_is_drawn_and_opaque() {
-        let font = test_font();
-        let mut f = Frame::new(1680, 1050);
-        let mem = mem_with(ELITE_COCKPIT, 0xA0, 0x50, 0x04);
-        Cockpit::new().draw(&mut f, &mem, &font, ELITE_COCKPIT);
-        let g = panel_geometry(1680, 1050);
+        let (f, g) = draw(1680, 1050);
         for y in g.panel_y..1050 {
             for x in 0..1680 {
                 assert_ne!(
@@ -605,21 +963,20 @@ mod tests {
         }
     }
 
-    /// Панель растянута на всю ширину окна (16:10) и прижата к нижнему
-    /// краю, оставляя место под заголовок заставки.
+    /// Кокпит растянут на всю ширину окна и прижат к нижнему краю.
     #[test]
     fn cockpit_spans_full_width_but_is_compact() {
-        let font = test_font();
-        let mut f = Frame::new(1680, 1050);
-        let mem = mem_with(ELITE_COCKPIT, 0xA0, 0x50, 0x04);
-        Cockpit::new().draw(&mut f, &mem, &font, ELITE_COCKPIT);
-        let g = panel_geometry(1680, 1050);
+        let (f, g) = draw(1680, 1050);
         let mid = (g.panel_y + g.panel_h / 2) as usize * 1680;
         assert_ne!(f.pixels()[mid], 0, "левый край панели пуст");
         assert_ne!(f.pixels()[mid + 1679], 0, "правый край панели пуст");
         assert!(g.panel_h < 1050 / 3, "панель всё ещё занимает треть экрана");
         assert!(g.panel_h > 0);
-        assert_eq!(g.panel_y + g.panel_h, 1050, "панель не прижата к низу окна");
+        assert_eq!(
+            g.panel_y + g.panel_h,
+            1050,
+            "панель не прижата к низу окна"
+        );
     }
 
     /// Панель занимает только часть окна: над ней остаётся область заставки.
@@ -631,73 +988,57 @@ mod tests {
         assert!(g.cell >= 1, "знакомест должен быть не нулевым");
     }
 
-    /// Значение индикатора влияет на длину заливки: пусто и полно различны.
+    /// Цвет линий можно переопределить (красная рамка при попадании).
     #[test]
-    fn cockpit_bar_length_follows_value() {
-        let font = test_font();
-        let empty = mem_with(ELITE_COCKPIT, 0x00, 0x00, 0x04);
-        let full = mem_with(ELITE_COCKPIT, 0xA0, 0xA0, 0x04);
-        let mut a = Frame::new(1680, 1050);
-        let mut b = Frame::new(1680, 1050);
-        Cockpit::new().draw(&mut a, &empty, &font, ELITE_COCKPIT);
-        Cockpit::new().draw(&mut b, &full, &font, ELITE_COCKPIT);
-        assert!(a.pixels() != b.pixels(), "показания не влияют на панель");
+    fn cockpit_line_color_can_change() {
+        let mut f = Frame::new(1280, 960);
+        let font = font();
+        Cockpit::new().draw_colored(&mut f, DANGER_COLOR, &font);
+        let g = panel_geometry(1280, 960);
+        let main = g.main_frame();
+        let panel = g.panel_frame();
+        assert_eq!(
+            f.pixels()[main.y as usize * 1280 + main.x as usize],
+            DANGER_COLOR
+        );
+        assert_eq!(
+            f.pixels()[panel.y as usize * 1280 + panel.x as usize],
+            DANGER_COLOR
+        );
     }
 
-    /// Цвет рамки зависит от `IndDanger`.
-    #[test]
-    fn cockpit_frame_color_follows_danger() {
-        let calm = Colors::danger(0x00, false).frame;
-        let warn = Colors::danger(0x02, false).frame;
-        assert_ne!(calm, warn, "цвет рамки не зависит от опасности");
-    }
-
-    /// Стиль оригинала: фон панели чёрный, графика — светлые линии поверх.
+    /// Стиль оригинала: фон панели чёрный, линии светлые, длинные клетки
+    /// красные (заставка и Cobra Mk III).
     #[test]
     fn cockpit_style_matches_original() {
-        let font = test_font();
-        let mut f = Frame::new(1280, 960);
-        let mem = mem_with(ELITE_COCKPIT, 0xA0, 0x50, 0x00);
-        Cockpit::new().draw(&mut f, &mem, &font, ELITE_COCKPIT);
-        let g = panel_geometry(1280, 960);
-        let mut black = 0usize;
-        let mut light = 0usize;
-        let mut total = 0usize;
+        let (f, g) = draw(1280, 960);
+        let (mut black, mut light, mut red) = (0usize, 0usize, 0usize);
         for y in g.panel_y..960 {
             for x in 0..1280 {
-                total += 1;
                 match f.pixels()[y as usize * 1280 + x as usize] {
-                    0xFF00_0000 => black += 1,
-                    0 => {}
-                    _ => light += 1,
+                    BACKGROUND => black += 1,
+                    FRAME_COLOR => light += 1,
+                    BAR_RED => red += 1,
+                    _ => {}
                 }
             }
         }
         assert!(black > 0, "нет чёрного фона панели");
-        assert!(light > 0, "панель не содержит графики поверх фона");
-        assert!(black * 100 / total < 99, "панель без графики поверх фона");
+        assert!(light > 0, "панель не содержит белых линий");
+        assert!(red > 0, "нет красных клеток");
+        assert!(black > light + red, "панель слишком заполнена");
     }
 
-    /// Радар на широком экране больше, чем на узком (в пределах знакомест).
-    #[test]
-    fn scanner_is_larger_on_wide_screen() {
-        let narrow = panel_geometry(1024, 768);
-        let wide = panel_geometry(1920, 1200);
-        let r_narrow = ((narrow.col_x(21) - narrow.col_x(8)) / 2 - 2).min(narrow.panel_h / 2 - 3);
-        let r_wide = ((wide.col_x(21) - wide.col_x(8)) / 2 - 2).min(wide.panel_h / 2 - 3);
-        assert!(
-            r_wide > r_narrow,
-            "радар на широком экране не крупнее ({r_wide} <= {r_narrow})"
-        );
-    }
-
-    /// Панель не выходит за пределы окна: она рисуется целиком в нижней
-    /// части и не задевает область заставки.
+    /// Геометрия не выходит за пределы окна.
     #[test]
     fn cockpit_panel_fits_window() {
         let g = panel_geometry(1920, 1080);
         assert!(g.panel_y >= 0, "панель начинается выше окна");
         assert!(g.panel_y + g.panel_h <= 1080, "панель выходит за окно");
         assert_eq!(g.width, 1920);
+        let view = g.view();
+        assert!(!view.is_empty(), "область вида пуста");
+        assert_eq!(view.x, g.margin + LINE);
+        assert_eq!(view.bottom(), g.main_frame().bottom() - LINE);
     }
 }
