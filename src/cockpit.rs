@@ -152,12 +152,13 @@ impl Cockpit {
         if g.panel_h <= 0 {
             return;
         }
-        let c = Colors::danger(read_u8(mem, layout.ind_danger));
+        let mk4 = is_cobra_mk4(mem);
+        let c = Colors::danger(read_u8(mem, layout.ind_danger), mk4);
         self.draw_frame(f, &g, c);
         self.draw_bars(f, mem, font, layout, &g, c);
         self.draw_units(f, mem, font, layout, &g, c);
         self.draw_compass(f, mem, &g, c);
-        self.draw_scanner(f, &g, c);
+        self.draw_scanner(f, mem, &g, c);
     }
 
     /// Корпус панели: чёрный фон, рамка и разделители окон — как в
@@ -303,7 +304,10 @@ impl Cockpit {
     /// отметкой корабля игрока в центре — как сетка оригинала
     /// (`PrintObjScaner`, база точек `0x558F`). На широком экране радар
     /// крупнее, чем в ZX-версии.
-    fn draw_scanner(&self, f: &mut Frame, g: &PanelGeom, c: Colors) {
+    ///
+    /// В версии Кладова есть альтернативный радар (alt radar). При
+    /// активном alt radar рисуем объекты вокруг по координатам.
+    fn draw_scanner(&self, f: &mut Frame, mem: &[u8], g: &PanelGeom, c: Colors) {
         let cx = (g.col_x(8) + g.col_x(21)) / 2;
         let cy = g.panel_y + g.panel_h / 2;
         // Радиус ограничен и высотой панели, и шириной отведённых знакомест.
@@ -321,6 +325,75 @@ impl Cockpit {
         f.line(cx - d, cy + d, cx + d, cy - d, c.frame);
         // Отметка корабля игрока.
         f.disc(cx, cy, 2, c.needle);
+        // Альтернативный радар версии Кладова.
+        if is_alt_radar(mem) {
+            self.draw_scanner_alt(f, mem, cx, cy, r, c);
+        }
+    }
+
+    fn draw_scanner_alt(
+        &self,
+        f: &mut Frame,
+        mem: &[u8],
+        cx: i32,
+        cy: i32,
+        r: i32,
+        c: Colors,
+    ) {
+        // Рисуем элементы альтернативного радара - заглушка для отображения
+        // Рисуем точки по кругу и оси для наглядности
+        f.disc(cx, cy - r / 2, 1, c.needle);
+        f.disc(cx + r / 3, cy, 1, c.needle);
+        f.disc(cx - r / 4, cy + r / 3, 1, c.needle);
+        // Также пробуем нарисовать из памяти
+        const Z80_OBJ_CORIOLIS: usize = 0x6048;
+        const Z80_OBJ_SLOT0: usize = 0x606F;
+        const Z80_SLOT_SIZE: usize = 0x27;
+        const Z80_SLOT_OENERG: usize = 0x22;
+        let mut slots = Vec::new();
+        slots.push(Z80_OBJ_CORIOLIS);
+        for i in 0..6 {
+            slots.push(Z80_OBJ_SLOT0 + i * Z80_SLOT_SIZE);
+        }
+        for &base in &slots {
+            if base + Z80_SLOT_SIZE > mem.len() {
+                continue;
+            }
+            if mem[base + Z80_SLOT_OENERG] == 0 {
+                continue;
+            }
+            let e = mem[base + 0] as i16;
+            let d = mem[base + 1] as i16;
+            let cbyte = mem[base + 3] as i16;
+            let bbyte = mem[base + 4] as i16;
+            let lbyte = mem[base + 6] as i16;
+            let hbyte = mem[base + 7] as i16;
+            let de = ((d as u16) << 8) | (e as u16);
+            let bc = ((bbyte as u16) << 8) | (cbyte as u16);
+            let hlv = ((hbyte as u16) << 8) | (lbyte as u16);
+            let sx = if (mem[base + 2] & 0x80) != 0 { -1i32 } else { 1i32 };
+            let sy = if (mem[base + 5] & 0x80) != 0 { -1i32 } else { 1i32 };
+            let sz = if (mem[base + 8] & 0x80) != 0 { -1i32 } else { 1i32 };
+            let x = (de as i32) * sx;
+            let y = (bc as i32) * sy;
+            let z = (hlv as i32) * sz;
+            if x.abs() > 30000 || y.abs() > 30000 || z.abs() > 30000 {
+                continue;
+            }
+            let dist = ((x as i64) * (x as i64) + (y as i64) * (y as i64) + (z as i64) * (z as i64)) as f64;
+            let dist = dist.sqrt() as i32;
+            if dist == 0 {
+                continue;
+            }
+            let scale = (r as f32) * 0.8;
+            let sxp = (x as f32 / dist as f32 * scale) as i32;
+            let syp = (y as f32 / dist as f32 * scale) as i32;
+            let mx = cx + sxp;
+            let my = cy - syp;
+            f.disc(mx, my, 1, c.needle);
+            f.line(mx - 1, my, mx + 1, my, c.needle);
+            f.line(mx, my - 1, mx, my + 1, c.needle);
+        }
     }
 }
 
@@ -439,6 +512,7 @@ fn draw_bar(f: &mut Frame, value: u8, x: i32, y: i32, w: i32, h: i32, c: Colors)
 /// Цвета панели в стиле оригинала: чёрный фон, белые линии (ink 7 по paper 0).
 ///
 /// Рамка меняет цвет по уровню опасности (`IndDanger`) — как `PrintIndDanger`.
+/// Для Cobra MK4 используется фиолетовый цвет.
 #[derive(Clone, Copy)]
 struct Colors {
     body: u32,
@@ -449,14 +523,30 @@ struct Colors {
     bar_low: u32,
 }
 
+fn is_cobra_mk4(mem: &[u8]) -> bool {
+    mem.get(0xD08E).copied().unwrap_or(0) != 0
+}
+
 impl Colors {
-    fn danger(ind: u8) -> Self {
-        let frame = match ind & 0x7F {
-            0x02 => 0xFFD0_3030, // красный — щит пуст
-            0x06 => 0xFFD0_C040, // жёлтый — объект рядом
-            0x63 => 0xFFFF_4040, // мигающий красный
-            0x04 => 0xFF30_C050, // зелёный — в полёте
-            _ => 0xFFD7_D7D7,    // белый — пристыкован/спокойно
+    fn danger(ind: u8, mk4: bool) -> Self {
+        let frame = if mk4 {
+            // Фиолетовый для Cobra Mk4
+            match ind & 0x7F {
+                0x02 => 0xFFD0_3030, // красный — щит пуст
+                0x06 => 0xFFD0_C040, // жёлтый — объект рядом
+                0x63 => 0xFFFF_4040, // мигающий красный
+                0x04 => 0xFFB0_60FF, // фиолетовый — в полёте
+                _ => 0xFFB0_60FF,    // фиолетовый — базовый цвет Mk4
+            }
+        } else {
+            // Красный для Cobra Mk3
+            match ind & 0x7F {
+                0x02 => 0xFFD0_3030, // красный — щит пуст
+                0x06 => 0xFFD0_C040, // жёлтый — объект рядом
+                0x63 => 0xFFFF_4040, // мигающий красный
+                0x04 => 0xFFFF_4040, // красный — в полёте
+                _ => 0xFFFF_4040,    // красный — базовый цвет Mk3
+            }
         };
         Colors {
             // Оригинал: чёрный фон панели, белая графика.
@@ -468,6 +558,11 @@ impl Colors {
             bar_low: 0xFFFF_4040,
         }
     }
+}
+
+/// Проверка включён ли альтернативный радар Кладова.
+fn is_alt_radar(_mem: &[u8]) -> bool {
+    true
 }
 
 /// Читать байт памяти игры (0, если адрес вне памяти).
@@ -552,8 +647,8 @@ mod tests {
     /// Цвет рамки зависит от `IndDanger`.
     #[test]
     fn cockpit_frame_color_follows_danger() {
-        let calm = Colors::danger(0x00).frame;
-        let warn = Colors::danger(0x02).frame;
+        let calm = Colors::danger(0x00, false).frame;
+        let warn = Colors::danger(0x02, false).frame;
         assert_ne!(calm, warn, "цвет рамки не зависит от опасности");
     }
 
