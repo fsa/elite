@@ -45,8 +45,12 @@ use crate::display::Frame;
 
 /// Цвет линий кокпита — «белый» ZX (ink 7), как в оригинальном растре.
 pub const FRAME_COLOR: u32 = 0xFFD7_D7D7;
-/// Цвет рамки при попадании (мигание опасности).
+/// Красный индикатор опасности и цвет рамки при попадании.
 pub const DANGER_COLOR: u32 = 0xFFFF_4040;
+/// Зелёный индикатор опасности (`IndDanger = 0x04`).
+pub const DANGER_GREEN: u32 = 0xFF00_D700;
+/// Жёлтый индикатор опасности (`IndDanger = 0x06`).
+pub const DANGER_YELLOW: u32 = 0xFFD7_D700;
 /// Цвет фона кокпита (paper 0).
 pub const BACKGROUND: u32 = 0xFF00_0000;
 
@@ -97,6 +101,73 @@ pub enum Indicator {
     Empty,
 }
 
+/// Цвет индикатора опасности.
+///
+/// Значения взяты из оригинала (`IndDanger`): `0x04` — зелёный, `0x06` —
+/// жёлтый, `0x02` — красный, `0x63` — мигающий красный. `0` — не рисовать.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Danger {
+    Off,
+    Green,
+    Yellow,
+    Red,
+    BlinkingRed,
+}
+
+impl Danger {
+    /// Разобрать байт `IndDanger`.
+    pub fn from_byte(value: u8) -> Danger {
+        match value {
+            0x04 => Danger::Green,
+            0x06 => Danger::Yellow,
+            0x02 => Danger::Red,
+            0x63 => Danger::BlinkingRed,
+            _ => Danger::Off,
+        }
+    }
+
+    /// Цвет для текущей фазы мигания; `None` — кружок не рисуется.
+    fn color(self, blink_on: bool) -> Option<u32> {
+        match self {
+            Danger::Off => None,
+            Danger::Green => Some(DANGER_GREEN),
+            Danger::Yellow => Some(DANGER_YELLOW),
+            Danger::Red => Some(DANGER_COLOR),
+            Danger::BlinkingRed => blink_on.then_some(DANGER_COLOR),
+        }
+    }
+}
+
+/// Положение указателя компаса.
+///
+/// `x` и `y` — смещение от центра в «пикселях» оригинального компаса:
+/// `-8..=8`, положительный `y` — вверх (как в `CompasPointerCrdY`).
+/// `filled` — цель впереди (`CompasPointerType == 0`), иначе указатель
+/// рисуется полым.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct Compass {
+    pub x: i8,
+    pub y: i8,
+    pub filled: bool,
+}
+
+impl Compass {
+    /// Указатель в центре — цель отсутствует или совпадает с игроком.
+    pub const fn centered() -> Compass {
+        Compass {
+            x: 0,
+            y: 0,
+            filled: true,
+        }
+    }
+}
+
+impl Default for Compass {
+    fn default() -> Self {
+        Self::centered()
+    }
+}
+
 /// Снимок показаний панели на один кадр.
 ///
 /// Кокпит не читает память Z80 сам: вызывающий код (полёт или заставка)
@@ -106,6 +177,12 @@ pub enum Indicator {
 pub struct CockpitValues {
     pub left: [Indicator; PANEL_ROWS as usize],
     pub right: [Indicator; PANEL_ROWS as usize],
+    /// Индикатор опасности в верхнем левом кружке.
+    pub danger: Danger,
+    /// Указатель компаса в верхнем правом кружке.
+    pub compass: Compass,
+    /// Фаза мигания для [`Danger::BlinkingRed`].
+    pub blink: bool,
 }
 
 impl CockpitValues {
@@ -140,6 +217,9 @@ impl CockpitValues {
                 gauge(next()),
                 gauge(next()),
             ],
+            danger: Danger::Green,
+            compass: Compass::centered(),
+            blink: true,
         }
     }
 }
@@ -236,6 +316,16 @@ pub struct CockpitLayout {
     pub missiles: u16,
     /// Индикатор опасности (`IndDanger`) — задаёт цвет рамки.
     pub ind_danger: u16,
+    /// Признак межпланетного пространства (`InFreeSpace`).
+    pub in_free_space: u16,
+    /// Координаты планеты (`PlanetCrd`, 9 байт знак-величина).
+    pub planet_crd: u16,
+    /// Фиктивные координаты планеты вне системы (`fsPlCrdXl`, 9 байт).
+    pub fake_planet_crd: u16,
+    /// Слот станции (`objCoriolis`).
+    pub coriolis_slot: u16,
+    /// Флаг доступности J-драйва у станции (`J_Drive_Coriolis`).
+    pub j_drive_coriolis: u16,
 }
 
 /// Раскладка переменных панели для оригинальной версии (`elite.bin`).
@@ -253,6 +343,12 @@ pub const ELITE_COCKPIT: CockpitLayout = CockpitLayout {
     rotate_du: 0x705E,
     missiles: 0xA845,
     ind_danger: 0x7062,
+    in_free_space: 0x7061,
+    planet_crd: 0x706E,
+    // Для оригинальной версии адрес фиктивных координат пока не найден.
+    fake_planet_crd: 0,
+    coriolis_slot: 0x5FA6,
+    j_drive_coriolis: 0x707B,
 };
 
 /// Раскладка переменных панели для версии Кладова (`kladov.bin`), +0xA2.
@@ -270,6 +366,11 @@ pub const KLADOV_COCKPIT: CockpitLayout = CockpitLayout {
     rotate_du: 0x7100,
     missiles: 0xD083,
     ind_danger: 0x7104,
+    in_free_space: 0x7103,
+    planet_crd: 0x7110,
+    fake_planet_crd: 0x8AC3,
+    coriolis_slot: 0x6048,
+    j_drive_coriolis: 0x711D,
 };
 
 impl CockpitLayout {
@@ -305,7 +406,86 @@ impl CockpitLayout {
                 gauge(self.shield_unit1 + 4),
                 gauge(self.shield_unit1 + 6),
             ],
+            danger: Danger::from_byte(byte(self.ind_danger)),
+            compass: self.read_compass(mem),
+            blink: true,
         }
+    }
+
+    /// Прочитать указатель компаса.
+    ///
+    /// Цель выбирается как в `PrintCompass`:
+    ///
+    /// * вне системы — фиктивные координаты `fsPlCrd`;
+    /// * рядом с планетой — станция (`objCoriolis`), если J-драйв у неё
+    ///   доступен, иначе планета;
+    /// * в остальных случаях — планета.
+    fn read_compass(&self, mem: &[u8]) -> Compass {
+        let byte = |addr: u16| mem.get(addr as usize).copied().unwrap_or(0);
+        let target = if self.in_free_space != 0 && byte(self.in_free_space) != 0 {
+            (self.fake_planet_crd != 0).then_some(self.fake_planet_crd)
+        } else if self.planet_crd != 0 {
+            let high = (byte(self.planet_crd + 2)
+                | byte(self.planet_crd + 5)
+                | byte(self.planet_crd + 8))
+                & 0x7F;
+            let station = self.coriolis_slot != 0
+                && self.j_drive_coriolis != 0
+                && byte(self.j_drive_coriolis) != 0xFF;
+            if high < 2 && station {
+                Some(self.coriolis_slot)
+            } else {
+                Some(self.planet_crd)
+            }
+        } else {
+            None
+        };
+        let Some(target) = target else {
+            return Compass::centered();
+        };
+        let crd = |offset: u16| {
+            read_coordinate(
+                mem.get(target as usize + offset as usize..)
+                    .unwrap_or(&[]),
+            )
+        };
+        let x = crd(0);
+        let y = crd(3);
+        let z = crd(6);
+        let len = (x * x + y * y + z * z).sqrt();
+        let offset = |v: f32| {
+            if len < 0.5 {
+                0
+            } else {
+                (v * COMPASS_POINTER_MAX as f32 / len)
+                    .round()
+                    .clamp(-(COMPASS_POINTER_MAX as f32), COMPASS_POINTER_MAX as f32)
+                    as i8
+            }
+        };
+        Compass {
+            x: offset(x),
+            y: offset(y),
+            filled: z >= 0.0,
+        }
+    }
+}
+
+/// Максимальное смещение указателя компаса от центра, как в оригинале:
+/// `CompasPointerCrdX/Y` лежат в диапазоне `-8..=8`.
+const COMPASS_POINTER_MAX: i8 = 8;
+
+/// Прочитать 24-битную координату в формате знак-величина.
+fn read_coordinate(b: &[u8]) -> f32 {
+    if b.len() < 3 {
+        return 0.0;
+    }
+    let mag = (((b[2] & 0x7F) as u32) << 16) | ((b[1] as u32) << 8) | b[0] as u32;
+    let value = mag as f32;
+    if b[2] & 0x80 != 0 {
+        -value
+    } else {
+        value
     }
 }
 
@@ -553,6 +733,47 @@ impl CockpitGeom {
         }
     }
 
+    /// Квадрат кружка в верхней части центральной клетки.
+    ///
+    /// `diameter` — желаемый диаметр; он ужимается, чтобы два кружка
+    /// поместились в центральную клетку. Кружки прижаты к верхнему краю и
+    /// разнесены к левому и правому краям, как в оригинале.
+    fn top_circle(&self, right: bool, diameter: i32) -> Rect {
+        let center = self.center_cell();
+        if center.is_empty() {
+            return Rect {
+                x: center.x,
+                y: center.y,
+                w: 0,
+                h: 0,
+            };
+        }
+        let gap = (self.side_row(0).h / 2).max(LINE);
+        let d = diameter.min(center.w / 3).min(center.h / 2).max(0);
+        Rect {
+            x: if right {
+                center.x + center.w - gap - d
+            } else {
+                center.x + gap
+            },
+            y: center.y + gap,
+            w: d,
+            h: d,
+        }
+    }
+
+    /// Кружок индикатора опасности (верхний левый в центральной клетке).
+    pub fn danger_cell(&self) -> Rect {
+        self.top_circle(false, (self.side_row(0).h * 2).max(1))
+    }
+
+    /// Кружок компаса (верхний правый в центральной клетке).
+    pub fn compass_cell(&self) -> Rect {
+        // В оригинале компас чуть больше индикатора опасности: 20x20 против
+        // 16x16 «пикселей» ZX.
+        self.top_circle(true, (self.side_row(0).h * 5 / 2).max(1))
+    }
+
     /// X-координаты четырёх вертикальных разделителей таблицы.
     pub fn column_separators(&self) -> [i32; 4] {
         let inner = self.panel_inner();
@@ -641,6 +862,8 @@ impl Cockpit {
         stroke_rect(f, g.panel_frame(), LINE, style.line);
         draw_chrome(f, g, font, style);
         draw_indicators(f, g, style, values);
+        draw_danger(f, g, values);
+        draw_compass(f, g, style, values);
     }
 }
 
@@ -707,6 +930,79 @@ fn draw_indicators(f: &mut Frame, g: &CockpitGeom, style: CockpitStyle, values: 
                 continue;
             }
             draw_indicator(f, g, row, right, value, style);
+        }
+    }
+}
+
+/// Нарисовать индикатор опасности: залитый круг цвета `IndDanger`.
+///
+/// В оригинале это 2x2 знакоместа с кругом радиусом около 7 пикселей ZX.
+/// Мигающий красный (`0x63`) в выключенной фазе не рисуется — фон панели
+/// уже залит чёрным.
+fn draw_danger(f: &mut Frame, g: &CockpitGeom, values: &CockpitValues) {
+    let cell = g.danger_cell();
+    if cell.is_empty() {
+        return;
+    }
+    let Some(color) = values.danger.color(values.blink) else {
+        return;
+    };
+    let d = cell.w.min(cell.h);
+    let radius = (d / 2 - (d / 16).max(1)).max(0);
+    f.disc(cell.x + cell.w / 2, cell.y + cell.h / 2, radius, color);
+}
+
+/// Растр указателя компаса: заполненный ромб 4x4.
+const COMPASS_POINTER_FILLED: [u8; 4] = [0x18, 0x3C, 0x3C, 0x18];
+/// Растр указателя компаса: полый квадрат 4x4.
+const COMPASS_POINTER_EMPTY: [u8; 4] = [0x3C, 0x24, 0x24, 0x3C];
+
+/// Нарисовать компас: окружность и указатель на цель.
+///
+/// Размеры повторяют оригинал: круг 20x20 «пикселей» ZX и указатель 4x4,
+/// смещённый от центра на `-8..=8`. При увеличении окна один пиксель ZX
+/// превращается в [`COMPASS_POINTER_MAX`]-ю часть диаметра.
+fn draw_compass(
+    f: &mut Frame,
+    g: &CockpitGeom,
+    style: CockpitStyle,
+    values: &CockpitValues,
+) {
+    let cell = g.compass_cell();
+    if cell.is_empty() {
+        return;
+    }
+    let d = cell.w.min(cell.h);
+    if d <= 0 {
+        return;
+    }
+    let unit = (d / 20).max(1);
+    let cx = cell.x + cell.w / 2;
+    let cy = cell.y + cell.h / 2;
+    let radius = (d / 2 - 1).max(1);
+    // Толщина кольца — один пиксель оригинала.
+    for k in 0..unit {
+        f.circle(cx, cy, (radius - k).max(0), style.line);
+    }
+    // Указатель: положительный `y` — вверх, как `CompasPointerCrdY`.
+    let x0 = cx + values.compass.x as i32 * unit - 2 * unit;
+    let y0 = cy - values.compass.y as i32 * unit - 2 * unit;
+    let sprite = if values.compass.filled {
+        &COMPASS_POINTER_FILLED
+    } else {
+        &COMPASS_POINTER_EMPTY
+    };
+    for (row, bits) in sprite.iter().enumerate() {
+        for col in 0..4 {
+            if bits & (0x20 >> col) != 0 {
+                f.fill_rect(
+                    x0 + col * unit,
+                    y0 + row as i32 * unit,
+                    unit as usize,
+                    unit as usize,
+                    style.line,
+                );
+            }
         }
     }
 }
@@ -1010,6 +1306,9 @@ mod tests {
                 Indicator::Missiles(missiles),
             ],
             right: [Indicator::Gauge(0); PANEL_ROWS as usize],
+            danger: Danger::Off,
+            compass: Compass::centered(),
+            blink: true,
         }
     }
 
@@ -1481,6 +1780,188 @@ mod tests {
                 Indicator::Gauge(0),
             ]
         );
+    }
+
+    /// Верхние кружки стоят в центральной клетке: опасность слева, компас
+    /// справа, оба прижаты к верхнему краю.
+    #[test]
+    fn danger_and_compass_are_in_top_corners_of_center() {
+        let g = panel_geometry(1280, 960);
+        let center = g.center_cell();
+        let danger = g.danger_cell();
+        let compass = g.compass_cell();
+        for (name, cell) in [("опасность", danger), ("компас", compass)] {
+            assert!(!cell.is_empty(), "{name}: пустая клетка");
+            assert_eq!(cell.w, cell.h, "{name}: клетка не квадратная");
+            assert!(cell.x >= center.x, "{name}: левее центра");
+            assert!(cell.x + cell.w <= center.x + center.w, "{name}: правее центра");
+            assert!(cell.y >= center.y, "{name}: выше центра");
+        }
+        assert!(
+            danger.x + danger.w < compass.x,
+            "кружки перекрываются или стоят не по краям"
+        );
+    }
+
+    /// Индикатор опасности — залитый круг цвета `IndDanger`; мигающий
+    /// красный пропадает в выключенной фазе.
+    #[test]
+    fn danger_indicator_uses_original_colors() {
+        let font = font();
+        let g = panel_geometry(1280, 960);
+        let cell = g.danger_cell();
+        let sample = |f: &Frame| {
+            f.pixels()[(cell.y + cell.h / 2) as usize * 1280
+                + (cell.x + cell.w / 2) as usize]
+        };
+        let draw = |danger: Danger, blink: bool| {
+            let mut v = values(MISSILE_SLOTS as u8);
+            v.danger = danger;
+            v.blink = blink;
+            let mut f = Frame::new(1280, 960);
+            Cockpit::new().draw(&mut f, &font, CockpitStyle::COBRA_MK3, &v);
+            f
+        };
+        assert_eq!(sample(&draw(Danger::Off, true)), BACKGROUND);
+        assert_eq!(sample(&draw(Danger::Green, true)), DANGER_GREEN);
+        assert_eq!(sample(&draw(Danger::Yellow, true)), DANGER_YELLOW);
+        assert_eq!(sample(&draw(Danger::Red, true)), DANGER_COLOR);
+        assert_eq!(sample(&draw(Danger::BlinkingRed, true)), DANGER_COLOR);
+        assert_eq!(
+            sample(&draw(Danger::BlinkingRed, false)),
+            BACKGROUND,
+            "мигающий красный не погас"
+        );
+    }
+
+    /// Компас: кольцо и указатель, который смещается по координатам цели.
+    #[test]
+    fn compass_ring_and_pointer_follow_target() {
+        let font = font();
+        let g = panel_geometry(1280, 960);
+        let cell = g.compass_cell();
+        let unit = (cell.w.min(cell.h) / 20).max(1);
+        let cx = cell.x + cell.w / 2;
+        let cy = cell.y + cell.h / 2;
+        let radius = (cell.w.min(cell.h) / 2 - 1).max(1);
+        let draw = |compass: Compass| {
+            let mut v = values(MISSILE_SLOTS as u8);
+            v.compass = compass;
+            let mut f = Frame::new(1280, 960);
+            Cockpit::new().draw(&mut f, &font, CockpitStyle::COBRA_MK3, &v);
+            f
+        };
+        let px = |f: &Frame, x: i32, y: i32| {
+            f.pixels()[y as usize * 1280 + x as usize]
+        };
+
+        // Кольцо нарисовано по краям кружка.
+        let ring = draw(Compass::centered());
+        assert_eq!(px(&ring, cx + radius, cy), FRAME_COLOR, "нет кольца");
+        assert_eq!(px(&ring, cx - radius, cy), FRAME_COLOR, "нет кольца");
+
+        // Заполненный указатель: в центре белый ромб.
+        let filled = draw(Compass::centered());
+        assert_eq!(
+            px(&filled, cx, cy),
+            FRAME_COLOR,
+            "заполненный указатель не нарисован"
+        );
+        // Полый указатель: в центре дырка.
+        let empty = draw(Compass {
+            x: 0,
+            y: 0,
+            filled: false,
+        });
+        assert_eq!(
+            px(&empty, cx, cy),
+            BACKGROUND,
+            "полый указатель не имеет дырки"
+        );
+
+        // Смещение вправо/влево и вверх.
+        let right = draw(Compass {
+            x: 4,
+            y: 0,
+            filled: true,
+        });
+        assert_eq!(px(&right, cx + 4 * unit, cy), FRAME_COLOR);
+        assert_eq!(
+            px(&right, cx - 4 * unit, cy),
+            BACKGROUND,
+            "указатель не ушёл вправо"
+        );
+        let left = draw(Compass {
+            x: -4,
+            y: 0,
+            filled: true,
+        });
+        assert_eq!(px(&left, cx - 4 * unit, cy), FRAME_COLOR);
+        let up = draw(Compass {
+            x: 0,
+            y: 4,
+            filled: true,
+        });
+        assert_eq!(
+            px(&up, cx, cy - 4 * unit),
+            FRAME_COLOR,
+            "положительный y должен уводить указатель вверх"
+        );
+        assert_eq!(px(&up, cx, cy + 4 * unit), BACKGROUND);
+    }
+
+    /// Компас читает цель по логике оригинала: вне системы — фиктивные
+    /// координаты, рядом с планетой — станция, иначе планета.
+    #[test]
+    fn compass_reads_target_from_memory() {
+        let l = KLADOV_COCKPIT;
+        let mut mem = vec![0u8; 0x10000];
+        let crd = |mem: &mut [u8], addr: u16, x: i32, y: i32, z: i32| {
+            let put = |mem: &mut [u8], at: u16, v: i32| {
+                let sign = if v < 0 { 0x80 } else { 0 };
+                let mag = v.unsigned_abs();
+                mem[at as usize] = mag as u8;
+                mem[at as usize + 1] = (mag >> 8) as u8;
+                mem[at as usize + 2] = ((mag >> 16) as u8 & 0x7F) | sign;
+            };
+            put(mem, addr, x);
+            put(mem, addr + 3, y);
+            put(mem, addr + 6, z);
+        };
+
+        // Планета впереди справа: указатель сдвинут вправо и заполнен.
+        // J-драйв у станции недоступен, поэтому цель — сама планета.
+        mem[l.j_drive_coriolis as usize] = 0xFF;
+        crd(&mut mem, l.planet_crd, 1000, 0, 1000);
+        let v = l.read(&mem);
+        assert_eq!(v.compass.x, 6);
+        assert_eq!(v.compass.y, 0);
+        assert!(v.compass.filled);
+
+        // Планета за спиной: указатель полый.
+        crd(&mut mem, l.planet_crd, 1000, 0, -1000);
+        assert!(!l.read(&mem).compass.filled);
+
+        // Рядом с планетой цель — станция.
+        mem[l.in_free_space as usize] = 0;
+        mem[l.j_drive_coriolis as usize] = 0;
+        mem[l.planet_crd as usize + 2] = 0;
+        mem[l.planet_crd as usize + 5] = 0;
+        mem[l.planet_crd as usize + 8] = 0;
+        crd(&mut mem, l.coriolis_slot, 0, 1000, 1000);
+        let v = l.read(&mem);
+        assert_eq!(v.compass.y, 6, "компас не переключился на станцию");
+
+        // Вне системы — фиктивные координаты, а не планета.
+        mem[l.in_free_space as usize] = 1;
+        crd(&mut mem, l.fake_planet_crd, 0, -1000, 1000);
+        let v = l.read(&mem);
+        assert_eq!(v.compass.x, 0);
+        assert_eq!(v.compass.y, -6);
+
+        // `IndDanger` разбирается в цвет индикатора.
+        mem[l.ind_danger as usize] = 0x63;
+        assert_eq!(l.read(&mem).danger, Danger::BlinkingRed);
     }
 
     /// Случайные значения заставки детерминированы и не выходят из диапазонов.

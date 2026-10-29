@@ -1211,7 +1211,11 @@ impl<'a> App<'a> {
             // и тот же кокпит, что на заставке, — внизу.
             let g = cockpit::panel_geometry(size.width, size.height);
             self.flight.draw(&mut self.machine.hd, &g);
-            let values = cockpit::KLADOV_COCKPIT.read(&self.machine.mem);
+            let values = {
+                let mut values = cockpit::KLADOV_COCKPIT.read(&self.machine.mem);
+                values.blink = (self.machine.frames / 16) % 2 == 0;
+                values
+            };
             let style = cockpit::CockpitStyle {
                 line: self.flight.cockpit_color(),
                 bar: self.flight.cockpit_bar_color(),
