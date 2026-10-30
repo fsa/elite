@@ -104,6 +104,13 @@ fn view_rotation(dir: ViewDir) -> Rotation {
     }
 }
 
+/// Идёт ли сейчас анимация вылета, прыжка или стыковки. В это время оригинал
+/// игнорирует клавиши `1`-`4`, а нативный вид не должен закрывать ролик.
+pub fn z80_in_transition(mem: &[u8]) -> bool {
+    mem.get(Z80_JUMP_DOCKING).copied().unwrap_or(0) != 0
+        || mem.get(Z80_FLG_JUMP_DOCKING).copied().unwrap_or(0) != 0
+}
+
 /// Показывает ли Z80 сейчас настоящий вид из кабины, а не переход.
 ///
 /// Одного `WhatOnScreen < 4` мало: во время вылета со станции и прыжка игра
@@ -114,9 +121,7 @@ pub fn z80_in_cockpit(mem: &[u8]) -> bool {
     let Some(&screen) = mem.get(Z80_WHAT_ON_SCREEN) else {
         return false;
     };
-    screen < 4
-        && mem.get(Z80_JUMP_DOCKING).copied().unwrap_or(1) == 0
-        && mem.get(Z80_FLG_JUMP_DOCKING).copied().unwrap_or(1) == 0
+    screen < 4 && !z80_in_transition(mem)
 }
 
 /// Пристыкован ли корабль к станции (`IndDanger == 0`).

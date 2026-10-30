@@ -121,9 +121,9 @@ fn parse_args() -> Options {
                 println!("  --save FILE фиксированный файл командира вместо диалога");
                 println!("  --fullscreen запуск в полноэкранном режиме (borderless)");
                 println!("В игре: F1-F4 — оригинальные клавиши 1-4 (F1 включает");
-                println!("        нативный вид полёта, F4 — нативную закупку),");
-                println!("        F10 — карта галактики, Esc — меню паузы,");
-                println!("        F11 — полный экран.");
+                println!("        нативный вид полёта после вылета, F4 на станции —");
+                println!("        нативную закупку), F10 — карта галактики,");
+                println!("        Esc — меню паузы, F11 — полный экран.");
                 println!();
                 println!("Заставка нативная: [SPACE] — начать игру, [Esc] — меню");
                 println!("  паузы (на заставке только загрузка, сохранение без игры");
@@ -136,7 +136,8 @@ fn parse_args() -> Options {
                 println!("Управление:");
                 println!("  Esc        меню паузы (продолжить/сохранить/загрузить/выход)");
                 println!("  F1-F4      клавиши 1-4 оригинала; F1 включает нативный");
-                println!("             вид полёта, F4 на станции — нативную закупку");
+                println!("             вид полёта (на станции — после вылета), F4 на");
+                println!("             станции — нативную закупку");
                 println!("  F10        нативная карта галактики");
                 println!("  F11, Alt+Enter полный экран");
                 println!("  Ctrl+Q     выход из игры");
@@ -886,6 +887,23 @@ impl<'a> App<'a> {
         self.pending_flight = None;
     }
 
+    /// Следить за экраном Z80 под нативным видом и закрывать его, когда игра
+    /// уходит с вида из кабины.
+    ///
+    /// Если это переход (вылет/прыжок/стыковка), выбранный вид запоминается:
+    /// [`Self::open_pending_flight`] вернёт его, как только Z80 снова окажется
+    /// в кабине. Так ролик оригинала остаётся видимым, а нативный полёт не
+    /// теряется после прыжка.
+    fn follow_flight_screen(&mut self) {
+        if !self.flight.active {
+            return;
+        }
+        self.flight.follow_z80_screen(&self.machine.mem);
+        if !self.flight.active && flight::z80_in_transition(&self.machine.mem) {
+            self.pending_flight = Some(self.flight.view_dir);
+        }
+    }
+
     /// Открыть нативный вид, отложенный до настоящего полёта (см.
     /// `pending_flight`). Пока оригинал играет вылет/прыжок или находится на
     /// станции, рендер не включается — ZX-кадр показывает всё как в игре.
@@ -893,8 +911,18 @@ impl<'a> App<'a> {
         let Some(dir) = self.pending_flight else {
             return;
         };
-        if !self.flight.active && flight::z80_in_cockpit(&self.machine.mem) {
-            self.open_flight(dir);
+        let mem = &self.machine.mem;
+        if flight::z80_in_cockpit(mem) {
+            if !self.flight.active {
+                self.open_flight(dir);
+            }
+            return;
+        }
+        // Переход закончился, но полёт так и не начался (например, стыковка
+        // привела на станцию): запрос больше не нужен. Во время анимации
+        // вылета/прыжка/стыковки продолжаем ждать.
+        if flight::z80_is_docked(mem) && !flight::z80_in_transition(mem) {
+            self.pending_flight = None;
         }
     }
 
@@ -912,10 +940,10 @@ impl<'a> App<'a> {
         let Some(dir) = function_view(code) else {
             return;
         };
-        let docked = flight::z80_is_docked(&self.machine.mem);
-        let in_cockpit = flight::z80_in_cockpit(&self.machine.mem);
-        let in_transition = self.machine.mem.get(flight::Z80_JUMP_DOCKING).copied().unwrap_or(0) != 0
-            || self.machine.mem.get(flight::Z80_FLG_JUMP_DOCKING).copied().unwrap_or(0) != 0;
+        let mem = &self.machine.mem;
+        let docked = flight::z80_is_docked(mem);
+        let in_cockpit = flight::z80_in_cockpit(mem);
+        let in_transition = flight::z80_in_transition(mem);
 
         self.hdmap.close();
         self.shop.close();
@@ -1267,7 +1295,7 @@ impl<'a> App<'a> {
                 if !self.menu {
                     self.forward_input();
                     self.machine.run_frame();
-                    self.flight.follow_z80_screen(&self.machine.mem);
+                    self.follow_flight_screen();
                     self.flight.sync_from_z80(&self.machine.mem);
                     self.flight.tick(1.0 / 50.0);
                     self.play_frame_audio();
@@ -1888,10 +1916,6 @@ mod intro_tests {
             "F4 не передал игре клавишу 4"
         );
         app.machine.run_frame();
-        println!(
-            "probe F4 screen=0x{:02X}",
-            app.machine.mem[flight::Z80_WHAT_ON_SCREEN]
-        );
         app.open_pending_shop();
         assert!(app.shop.active, "F4 не открыл экран закупки");
         assert!(!app.hdmap.active, "карта галактики не должна открыться");
@@ -2050,29 +2074,246 @@ mod intro_tests {
     fn flight_closes_when_z80_leaves_cockpit_view() {
         let opts = test_options();
         let mut app = App::new(boot(), &opts);
+        // Ставим игру «в полёт»: на станции `F1` — это команда вылета, и
+        // нативный вид включается только после её анимации.
+        app.machine.mem[flight::Z80_IND_DANGER] = 1;
         app.key_event(KeyCode::F1, true, false);
         assert!(app.flight.active);
         // Экран станции до первого полётного вида не закрывает нативный вид:
         // так идёт анимация вылета после запуска.
         app.machine.mem[flight::Z80_WHAT_ON_SCREEN] = 0x0B;
-        app.flight.follow_z80_screen(&app.machine.mem);
+        app.follow_flight_screen();
         assert!(app.flight.active, "станция закрыла вид во время вылета");
         // Любой другой неполётный экран закрывает сразу, даже если полётный
         // вид ещё не успел появиться.
         app.machine.mem[flight::Z80_WHAT_ON_SCREEN] = 4;
-        app.flight.follow_z80_screen(&app.machine.mem);
+        app.follow_flight_screen();
         assert!(!app.flight.active, "меню покупки осталось под нативным видом");
 
         // Первый полётный экран взводит «нативный вид уже видел полёт».
+        app.machine.mem[flight::Z80_WHAT_ON_SCREEN] = 0;
         app.key_event(KeyCode::F1, true, false);
         assert!(app.flight.active);
         app.machine.mem[flight::Z80_WHAT_ON_SCREEN] = 0;
-        app.flight.follow_z80_screen(&app.machine.mem);
+        app.follow_flight_screen();
         assert!(app.flight.active);
         // Карта/инвентарь оригинала — нативный вид больше не нужен.
         app.machine.mem[flight::Z80_WHAT_ON_SCREEN] = 8;
-        app.flight.follow_z80_screen(&app.machine.mem);
+        app.follow_flight_screen();
         assert!(!app.flight.active, "карта открылась под нативным видом");
+    }
+
+    /// `F1` на станции — родная команда вылета. Нативный вид включается не
+    /// сразу, а только когда Z80 закончит анимацию вылета; анимация остаётся
+    /// видимой.
+    #[test]
+    fn f1_at_station_waits_for_launch_animation() {
+        let opts = test_options();
+        let mut app = App::new(boot(), &opts);
+        // Станционный экран оригинала.
+        app.machine.mem[flight::Z80_WHAT_ON_SCREEN] = 0x0B;
+        app.machine.mem[flight::Z80_IND_DANGER] = 0;
+        app.machine.mem[flight::Z80_JUMP_DOCKING] = 0;
+        app.machine.mem[flight::Z80_FLG_JUMP_DOCKING] = 0;
+
+        app.key_event(KeyCode::F1, true, false);
+        assert!(!app.flight.active, "F1 включил вид до анимации вылета");
+        app.apply_input();
+        let (row, bit) = matrix_pos(KeyCode::Digit1).expect("1 в матрице");
+        assert_eq!(
+            app.machine.keyboard[row] & (1 << bit),
+            0,
+            "F1 на станции не передал игре клавишу 1"
+        );
+
+        // Идёт вылет: Z80 уже в полёте, но рисует тоннель и держит флаги.
+        app.machine.mem[flight::Z80_WHAT_ON_SCREEN] = 0;
+        app.machine.mem[flight::Z80_IND_DANGER] = 4;
+        app.machine.mem[flight::Z80_JUMP_DOCKING] = 1;
+        app.machine.mem[flight::Z80_FLG_JUMP_DOCKING] = 1;
+        app.open_pending_flight();
+        assert!(!app.flight.active, "вид закрыл анимацию вылета");
+
+        // Анимация закончилась — теперь можно показать нативный вид.
+        app.machine.mem[flight::Z80_JUMP_DOCKING] = 0;
+        app.machine.mem[flight::Z80_FLG_JUMP_DOCKING] = 0;
+        app.open_pending_flight();
+        assert!(app.flight.active, "F1 не включил вид после вылета");
+        assert_eq!(app.flight.view_dir, flight::ViewDir::Forward);
+    }
+
+    /// `F1` во время прыжка/стыковки не заслоняет анимацию: нативный вид
+    /// появляется только после перехода.
+    #[test]
+    fn f1_during_jump_waits_for_transition() {
+        let opts = test_options();
+        let mut app = App::new(boot(), &opts);
+        app.machine.mem[flight::Z80_WHAT_ON_SCREEN] = 0;
+        app.machine.mem[flight::Z80_IND_DANGER] = 1;
+        app.machine.mem[flight::Z80_JUMP_DOCKING] = 1;
+        app.machine.mem[flight::Z80_FLG_JUMP_DOCKING] = 1;
+
+        app.key_event(KeyCode::F1, true, false);
+        assert!(!app.flight.active, "F1 включил вид во время прыжка");
+        app.open_pending_flight();
+        assert!(!app.flight.active, "вид не дождался конца прыжка");
+
+        app.machine.mem[flight::Z80_JUMP_DOCKING] = 0;
+        app.machine.mem[flight::Z80_FLG_JUMP_DOCKING] = 0;
+        app.open_pending_flight();
+        assert!(app.flight.active, "вид не включился после прыжка");
+    }
+
+    /// Если прыжок начался при открытом нативном виде, рендер прячется на
+    /// время анимации и сам возвращается после неё — с тем же направлением.
+    #[test]
+    fn flight_reopens_after_jump_transition() {
+        let opts = test_options();
+        let mut app = App::new(boot(), &opts);
+        app.machine.mem[flight::Z80_WHAT_ON_SCREEN] = 0;
+        app.machine.mem[flight::Z80_IND_DANGER] = 1;
+        app.machine.mem[flight::Z80_JUMP_DOCKING] = 0;
+        app.machine.mem[flight::Z80_FLG_JUMP_DOCKING] = 0;
+
+        app.key_event(KeyCode::F4, true, false);
+        assert!(app.flight.active);
+        assert_eq!(app.flight.view_dir, flight::ViewDir::Right);
+
+        // Начался прыжок: оригинал рисует тоннель и держит флаги.
+        app.machine.mem[flight::Z80_JUMP_DOCKING] = 1;
+        app.machine.mem[flight::Z80_FLG_JUMP_DOCKING] = 1;
+        app.follow_flight_screen();
+        assert!(!app.flight.active, "вид остался поверх анимации прыжка");
+        app.open_pending_flight();
+        assert!(!app.flight.active, "вид вернулся до конца прыжка");
+
+        // Прыжок закончился — нативный вид возвращается сам.
+        app.machine.mem[flight::Z80_JUMP_DOCKING] = 0;
+        app.machine.mem[flight::Z80_FLG_JUMP_DOCKING] = 0;
+        app.open_pending_flight();
+        assert!(app.flight.active, "вид не вернулся после прыжка");
+        assert_eq!(app.flight.view_dir, flight::ViewDir::Right);
+    }
+
+    /// После стыковки запрос нативного вида не переживает посадку: игра
+    /// оказывается на станции, и рендер не должен включиться сам.
+    #[test]
+    fn flight_request_cleared_after_docking() {
+        let opts = test_options();
+        let mut app = App::new(boot(), &opts);
+        app.machine.mem[flight::Z80_WHAT_ON_SCREEN] = 0;
+        app.machine.mem[flight::Z80_IND_DANGER] = 1;
+        app.machine.mem[flight::Z80_JUMP_DOCKING] = 0;
+        app.machine.mem[flight::Z80_FLG_JUMP_DOCKING] = 0;
+
+        app.key_event(KeyCode::F1, true, false);
+        assert!(app.flight.active);
+
+        // Стыковка: тоннель, затем станционный экран.
+        app.machine.mem[flight::Z80_JUMP_DOCKING] = 1;
+        app.machine.mem[flight::Z80_FLG_JUMP_DOCKING] = 1;
+        app.follow_flight_screen();
+        assert!(!app.flight.active);
+        assert!(app.pending_flight.is_some(), "вид не запомнен на время стыковки");
+
+        app.machine.mem[flight::Z80_IND_DANGER] = 0;
+        app.machine.mem[flight::Z80_JUMP_DOCKING] = 0;
+        app.machine.mem[flight::Z80_FLG_JUMP_DOCKING] = 0;
+        app.machine.mem[flight::Z80_WHAT_ON_SCREEN] = 0x0B;
+        app.open_pending_flight();
+        assert!(!app.flight.active, "вид включился на станции");
+        assert!(app.pending_flight.is_none(), "запрос вида пережил стыковку");
+    }
+
+    /// Реальная игра: `F1` на станции запускает вылет, нативный рендер ждёт
+    /// окончания анимации и включается только в настоящем полёте.
+    #[test]
+    fn real_launch_defers_native_flight() {
+        let opts = kladov_options();
+        let mut m = boot_kladov();
+        let (intro, game) = scene_markers(true);
+        m.intro_range = intro;
+        m.game_marker = game;
+        for _ in 0..30 {
+            m.run_frame();
+        }
+        native::start_game(&mut m, save_layout_kladov());
+        // Даём игре дойти до станции.
+        for _ in 0..1500 {
+            m.run_frame();
+        }
+        assert_eq!(
+            m.mem[flight::Z80_IND_DANGER], 0,
+            "игра не оказалась на станции"
+        );
+        assert_eq!(
+            m.mem[flight::Z80_WHAT_ON_SCREEN], 0x0B,
+            "игра не на станционном экране"
+        );
+
+        let mut app = App::new(m, &opts);
+        app.key_event(KeyCode::F1, true, false);
+        assert!(!app.flight.active, "F1 включил вид до вылета");
+        app.apply_input();
+        app.machine.run_frame();
+        app.open_pending_flight();
+        assert!(!app.flight.active, "вид включился в начале вылета");
+
+        let mut frames = 0;
+        while frames < 1500 && !app.flight.active {
+            app.machine.run_frame();
+            app.open_pending_flight();
+            frames += 1;
+        }
+        assert!(app.flight.active, "F1 не включил вид после вылета");
+        assert!(frames > 0, "вид включился без ожидания анимации");
+        assert_eq!(app.flight.view_dir, flight::ViewDir::Forward);
+    }
+
+    /// В настоящем полёте `F4` — это оригинальный вид вправо, а не закупка.
+    #[test]
+    fn f4_in_flight_does_not_open_shop() {
+        let opts = test_options();
+        let mut app = App::new(boot(), &opts);
+        app.machine.mem[flight::Z80_WHAT_ON_SCREEN] = 0;
+        app.machine.mem[flight::Z80_IND_DANGER] = 1;
+        app.machine.mem[flight::Z80_JUMP_DOCKING] = 0;
+        app.machine.mem[flight::Z80_FLG_JUMP_DOCKING] = 0;
+
+        app.key_event(KeyCode::F4, true, false);
+        assert!(app.flight.active, "F4 не включил нативный вид");
+        assert!(!app.shop.active, "F4 открыл закупку в полёте");
+        assert_eq!(app.flight.view_dir, flight::ViewDir::Right);
+        app.apply_input();
+        let (row, bit) = matrix_pos(KeyCode::Digit4).expect("4 в матрице");
+        assert_eq!(
+            app.machine.keyboard[row] & (1 << bit),
+            0,
+            "F4 в полёте не передал игре клавишу 4"
+        );
+    }
+
+    /// `F2`-`F4` в полёте переключают нативные виды назад/влево/вправо.
+    #[test]
+    fn f2_f4_in_flight_switch_views() {
+        let opts = test_options();
+        let mut app = App::new(boot(), &opts);
+        app.machine.mem[flight::Z80_WHAT_ON_SCREEN] = 0;
+        app.machine.mem[flight::Z80_IND_DANGER] = 1;
+        app.machine.mem[flight::Z80_JUMP_DOCKING] = 0;
+        app.machine.mem[flight::Z80_FLG_JUMP_DOCKING] = 0;
+
+        for (fkey, view) in [
+            (KeyCode::F1, flight::ViewDir::Forward),
+            (KeyCode::F2, flight::ViewDir::Back),
+            (KeyCode::F3, flight::ViewDir::Left),
+            (KeyCode::F4, flight::ViewDir::Right),
+        ] {
+            app.key_event(fkey, true, false);
+            assert!(app.flight.active, "{fkey:?} не открыл нативный вид");
+            assert_eq!(app.flight.view_dir, view, "{fkey:?}: не тот вид");
+            assert!(!app.shop.active, "{fkey:?} открыл закупку");
+        }
     }
 
     /// Под экраном полёта эмулятор продолжает работать, поэтому ввод
