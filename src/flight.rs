@@ -31,6 +31,16 @@ const ENEMY_BEAM: u32 = 0xFFFF_A020;
 const SUN_COLOR: u32 = 0xFFFF_FF00;
 /// Планета по умолчанию — тёмно-зелёный диск.
 const PLANET_COLOR: u32 = 0xFF00_5800;
+/// Сколько секунд длится нативная анимация вылета со станции.
+///
+/// Оригинал проигрывает тоннель примерно 1.2 с (36 + 11 кадров), поэтому
+/// к моменту, когда Z80 сбросит `JumpDocking`, станция успевает уйти, а
+/// звёзды — разогнаться.
+const LAUNCH_TIME: f32 = 1.2;
+/// Цвет надписей в переходе: приглушённый циан, чтобы не спорить с HUD.
+const TRANSITION_TEXT: u32 = 0xFF80_FFFF;
+/// Цвет тоннеля гиперпрыжка.
+const WARP_RING_COLOR: u32 = 0xFF40_A0FF;
 /// Максимальная скорость в единицах `HighDeltaSpeed` (0..=31).
 ///
 /// В оригинале `DeltaSpeed` — 16-битное слово с шагом `0xA0` на кадр, а его
@@ -145,6 +155,12 @@ pub const Z80_JUMP_DOCKING: usize = 0xD03F;
 /// `FlgJumpDocking`: `1`, пока идёт анимация прыжка/стыковки/вылета. В это
 /// время оригинал игнорирует клавиши `1`-`4`.
 pub const Z80_FLG_JUMP_DOCKING: usize = 0xD040;
+/// `JumpCountdown` — обратный отсчёт до гиперпрыжка (`0x15` в начале).
+///
+/// Оригинал уменьшает его на единицу за кадр и показывает `>> 1`, то есть
+/// на экране идут числа `10..1`. Ноль означает, что началась сама анимация
+/// перехода.
+pub const Z80_JUMP_COUNTDOWN: usize = 0xDBA1;
 /// `HighAngleLR` — угловая скорость крена (знак-величина).
 const Z80_HIGH_ANGLE_LR: usize = 0x70E4;
 /// `HighAngleDU` — угловая скорость тангажа (знак-величина).
@@ -261,6 +277,47 @@ impl Default for ViewDir {
     }
 }
 
+/// Какой переход сейчас показывает нативный рендер.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum TransitionKind {
+    /// Вылет со станции: станция уходит назад, звёзды разгоняются.
+    Launch,
+    /// Гиперпрыжок: сначала отсчёт, затем тоннель и полосы звёзд.
+    Hyperspace,
+    /// Стыковка: тот же тоннель оригинала, но без отсчёта.
+    Docking,
+}
+
+/// Состояние нативной анимации перехода.
+#[derive(Clone, Copy, Debug)]
+struct Transition {
+    kind: TransitionKind,
+    /// Время с начала перехода.
+    elapsed: f32,
+    /// Последнее значение `JumpCountdown` из памяти игры.
+    countdown: u8,
+    /// Отсчёт закончился, рисуем сам прыжок (тоннель).
+    warp: bool,
+    /// Время с начала тоннеля (для гиперпрыжка — после отсчёта).
+    warp_elapsed: f32,
+}
+
+impl Transition {
+    fn new(kind: TransitionKind, countdown: u8) -> Self {
+        // Вылет начинается сразу со станции, стыковка — сразу с тоннеля.
+        // Гиперпрыжок сначала показывает обычный полёт и отсчёт.
+        let warp =
+            kind != TransitionKind::Launch && (kind == TransitionKind::Docking || countdown == 0);
+        Transition {
+            kind,
+            elapsed: 0.0,
+            countdown,
+            warp,
+            warp_elapsed: 0.0,
+        }
+    }
+}
+
 /// Экран полёта по данным Z80.
 pub struct Flight {
     /// Показывать ли вид из кабины вместо ZX-кадра.
@@ -297,6 +354,8 @@ pub struct Flight {
     stars: Vec<Star>,
     planet_color: u32,
     rng: u32,
+    /// Нативная анимация вылета/прыжка/стыковки вместо ZX-ролика.
+    transition: Option<Transition>,
 }
 
 impl Flight {
@@ -319,6 +378,7 @@ impl Flight {
             stars: Vec::new(),
             planet_color: PLANET_COLOR,
             rng: 0x1234_5678,
+            transition: None,
         };
         f.stars = make_stars(&mut f.rng, STAR_COUNT);
         f
@@ -341,10 +401,42 @@ impl Flight {
         self.speed = 0.0;
         self.cobra_mk4 = false;
         self.bodies.clear();
+        self.transition = None;
         if planet_color != 0 {
             self.planet_color = planet_green(planet_color);
         }
         self.stars = make_stars(&mut self.rng, STAR_COUNT);
+    }
+
+    /// Начать нативную анимацию перехода.
+    ///
+    /// `launch` передаётся из `F1` на станции: по памяти игры вылет и стыковку
+    /// не отличить (оба взводят `JumpDocking = 1`), а вид должен знать, что
+    /// показывать — уход станции или тоннель.
+    pub fn start_transition(&mut self, launch: bool, mem: &[u8]) {
+        if self.transition.is_some() {
+            return;
+        }
+        let countdown = mem.get(Z80_JUMP_COUNTDOWN).copied().unwrap_or(0);
+        let intergalactic = mem.get(Z80_JUMP_DOCKING).copied() == Some(2);
+        let kind = if launch {
+            TransitionKind::Launch
+        } else if countdown > 0 || intergalactic {
+            TransitionKind::Hyperspace
+        } else {
+            TransitionKind::Docking
+        };
+        self.transition = Some(Transition::new(kind, countdown));
+    }
+
+    /// Идёт ли сейчас нативный переход (вылет, прыжок или стыковка).
+    pub fn in_transition(&self) -> bool {
+        self.transition.is_some()
+    }
+
+    /// Какой переход сейчас идёт (для тестов и отладки).
+    pub fn transition_kind(&self) -> Option<TransitionKind> {
+        self.transition.map(|t| t.kind)
     }
 
     /// Переключить вид по сторонам (F1-F4 в нативном полёте): те же клавиши
@@ -370,8 +462,8 @@ impl Flight {
     /// Игровые клавиши (`O`, `I`, `Enter` и т.п.) всегда уходят в эмулятор,
     /// поэтому оригинал сам переключает `WhatOnScreen`. Без этой проверки
     /// нативный вид оставался поверх ZX-кадра, и карта/инвентарь открывались
-    /// «в фоне». Анимации вылета/прыжка/стыковки тоже показывает Z80: нативный
-    /// вид на это время закрывается, иначе ролик был бы не виден.
+    /// «в фоне». Переходы вылета/прыжка/стыковки не закрывают вид: он сам
+    /// рисует их анимацию, а Z80 в это время ведёт отсчёт и логику игры.
     pub fn follow_z80_screen(&mut self, mem: &[u8]) {
         if !self.active {
             return;
@@ -382,6 +474,16 @@ impl Flight {
         if screen < 4 {
             self.seen_flight_screen = true;
         }
+        if z80_in_transition(mem) {
+            // Ролик теперь рисуем сами: нативный вид остаётся открытым и
+            // получает состояние перехода. Вылет/прыжок/стыковку по флагам
+            // различает `start_transition` (для вылета признак передаёт App).
+            if self.transition.is_none() {
+                self.start_transition(false, mem);
+            }
+            return;
+        }
+        self.transition = None;
         if !z80_in_cockpit(mem) {
             // `0x0B` — экран станции. После запуска со станции Z80 держит его
             // несколько кадров, пока идёт анимация вылета; уже открытый экран
@@ -413,13 +515,23 @@ impl Flight {
         self.speed = (gauge.saturating_sub(5) as f32 / 5.0).clamp(0.0, SPEED_MAX);
         self.cobra_mk4 = mem.get(Z80_COBRA_MK4).is_some_and(|&b| b != 0);
 
+        // Отсчёт гиперпрыжка ведёт Z80. Читаем его каждый кадр: пока число
+        // больше нуля, нативный рендер показывает обычный полёт и цифру, а
+        // после нуля переключается на тоннель.
+        if let Some(t) = &mut self.transition {
+            if t.kind == TransitionKind::Hyperspace {
+                t.countdown = mem.get(Z80_JUMP_COUNTDOWN).copied().unwrap_or(0);
+                if t.countdown == 0 {
+                    t.warp = true;
+                }
+            }
+        }
+
         // Оригинал не оставляет флаг выстрела противника в памяти: бит 3
         // сбрасывается сразу после печати луча. Зато попадание уменьшает
         // `ShieldFront` — по этому падению и показываем ответный луч.
         let shield_raw = mem[Z80_SHIELD_FRONT];
-        let shield_dropped = self
-            .prev_z80_shield
-            .is_some_and(|prev| shield_raw < prev);
+        let shield_dropped = self.prev_z80_shield.is_some_and(|prev| shield_raw < prev);
         self.prev_z80_shield = Some(shield_raw);
         if shield_dropped {
             self.damage_flash = 0.25;
@@ -516,6 +628,12 @@ impl Flight {
         self.laser_timer = (self.laser_timer - dt).max(0.0);
         self.decay_enemy_shots(dt);
         self.damage_flash = (self.damage_flash - dt).max(0.0);
+        if let Some(t) = &mut self.transition {
+            t.elapsed += dt;
+            if t.warp {
+                t.warp_elapsed += dt;
+            }
+        }
         self.advance_stars(dt);
     }
 
@@ -558,8 +676,9 @@ impl Flight {
     ///
     /// `geom` — геометрия кокпита: рендер заполняет область над панелью и
     /// рисует сцену только внутри главной рамки, которую потом обводит
-    /// [`crate::cockpit::Cockpit`]. Отдельного HUD нет.
-    pub fn draw(&mut self, frame: &mut Frame, geom: &CockpitGeom) {
+    /// [`crate::cockpit::Cockpit`]. `font` — знакогенератор ZX для подписей
+    /// вида и обратного отсчёта.
+    pub fn draw(&mut self, frame: &mut Frame, geom: &CockpitGeom, font: &[u8]) {
         let w = frame.width as i32;
         let view_bottom = geom.panel_y.clamp(1, frame.height as i32);
         let view_h = view_bottom as usize;
@@ -588,22 +707,282 @@ impl Flight {
 
         // Ограничиваем отрисовку внутренней областью главной рамки.
         let view = geom.view();
-        frame.set_clip(
-            view.x,
-            view.y,
-            view.w.max(0) as usize,
-            view.h.max(0) as usize,
-        );
-        self.draw_stars_view(frame, &screen, &view_rot);
-        self.draw_bodies_view(frame, &screen, &view_rot);
-        self.draw_enemy_shots_view(frame, &screen, 0, view_bottom, &view_rot);
-        if self.view_dir == ViewDir::Forward {
-            self.draw_crosshair(frame, cx, cy, s);
-        }
-        if self.laser_timer > 0.0 && self.view_dir == ViewDir::Forward {
-            self.draw_laser(frame, cx, cy, view_bottom - 1, s);
+        let (vx, vy, vw, vh) = (view.x, view.y, view.w.max(0), view.h.max(0));
+        frame.set_clip(vx, vy, vw as usize, vh as usize);
+
+        let transition = self.transition;
+        match transition {
+            Some(t) if t.kind == TransitionKind::Launch => {
+                self.draw_launch(frame, font, &screen, vx, vy, vw, vh, s, t.elapsed);
+            }
+            Some(t) if t.kind == TransitionKind::Hyperspace && !t.warp => {
+                // До нуля отсчёта показываем обычный полёт: игрок ещё может
+                // осмотреться, а цифра говорит, сколько осталось.
+                self.draw_flight_scene(frame, &screen, &view_rot, view_bottom, s);
+                self.draw_view_label(frame, font, vx, vy, vw, s);
+                self.draw_jump_countdown(frame, font, vx, vy, vw, vh, s, t.countdown);
+            }
+            Some(t) => {
+                let title = if t.kind == TransitionKind::Hyperspace {
+                    "HYPERSPACE"
+                } else {
+                    "DOCKING"
+                };
+                self.draw_warp(
+                    frame,
+                    font,
+                    &screen,
+                    vx,
+                    vy,
+                    vw,
+                    vh,
+                    s,
+                    t.warp_elapsed,
+                    title,
+                );
+            }
+            None => {
+                self.draw_flight_scene(frame, &screen, &view_rot, view_bottom, s);
+                self.draw_view_label(frame, font, vx, vy, vw, s);
+            }
         }
         frame.clear_clip();
+    }
+
+    /// Обычный вид из кабины: звёзды, объекты, выстрелы и перекрестие.
+    fn draw_flight_scene(
+        &self,
+        frame: &mut Frame,
+        screen: &Screen,
+        view_rot: &Rotation,
+        view_bottom: i32,
+        s: i32,
+    ) {
+        self.draw_stars_view(frame, screen, view_rot);
+        self.draw_bodies_view(frame, screen, view_rot);
+        self.draw_enemy_shots_view(frame, screen, 0, view_bottom, view_rot);
+        if self.view_dir == ViewDir::Forward {
+            self.draw_crosshair(frame, screen.cx, screen.cy, s);
+        }
+        if self.laser_timer > 0.0 && self.view_dir == ViewDir::Forward {
+            self.draw_laser(frame, screen.cx, screen.cy, view_bottom - 1, s);
+        }
+    }
+
+    /// Подпись текущего направления вида в верхней части окна.
+    fn draw_view_label(&self, frame: &mut Frame, font: &[u8], vx: i32, vy: i32, vw: i32, s: i32) {
+        let scale = s.max(1) as usize;
+        draw_centered_text(
+            frame,
+            font,
+            vx,
+            vy + 4 * s,
+            vw,
+            view_label(self.view_dir),
+            TRANSITION_TEXT,
+            scale,
+        );
+    }
+
+    /// Обратный отсчёт гиперпрыжка поверх обычного полёта.
+    fn draw_jump_countdown(
+        &self,
+        frame: &mut Frame,
+        font: &[u8],
+        vx: i32,
+        vy: i32,
+        vw: i32,
+        vh: i32,
+        s: i32,
+        raw: u8,
+    ) {
+        let title_scale = (s * 2).max(1) as usize;
+        draw_centered_text(
+            frame,
+            font,
+            vx,
+            vy + 4 * s,
+            vw,
+            "HYPERSPACE",
+            TRANSITION_TEXT,
+            title_scale,
+        );
+        let number = countdown_number(raw).to_string();
+        let scale = (s * 4).max(2) as usize;
+        let y = vy + vh / 2 - 4 * scale as i32;
+        draw_centered_text(frame, font, vx, y, vw, &number, SUN_COLOR, scale);
+    }
+
+    /// Анимация вылета: станция уходит назад, звёзды и кольца разгоняются.
+    #[allow(clippy::too_many_arguments)]
+    fn draw_launch(
+        &self,
+        frame: &mut Frame,
+        font: &[u8],
+        screen: &Screen,
+        vx: i32,
+        vy: i32,
+        vw: i32,
+        vh: i32,
+        s: i32,
+        elapsed: f32,
+    ) {
+        let t = (elapsed / LAUNCH_TIME).clamp(0.0, 1.0);
+        let forward = view_rotation(ViewDir::Forward);
+        self.draw_star_streaks(frame, screen, &forward, vx, vy, vw, vh, 60.0 + t * 520.0);
+        self.draw_tunnel_rings(frame, vx, vy, vw, vh, (t * 1.8).fract(), 4, 0xFF20_5060);
+        // Станция видна только в начале: потом она уже далеко за кормой.
+        if t < 0.7 {
+            if let Some(model) = coriolis_model() {
+                let k = (t / 0.7).clamp(0.0, 1.0);
+                let z = 260.0 + k * k * 5200.0;
+                let rot = Rotation::axis_angle([0.0, 1.0, 0.0], 0.35 + t * 1.1)
+                    .mul(&Rotation::axis_angle([1.0, 0.0, 0.0], 0.15));
+                render3d::draw_ship(
+                    frame,
+                    model,
+                    &rot,
+                    [0.0, 0.0, z],
+                    screen,
+                    render3d::SHIP_COLOR,
+                );
+            }
+        }
+        let scale = (s * 2).max(1) as usize;
+        draw_centered_text(
+            frame,
+            font,
+            vx,
+            vy + 4 * s,
+            vw,
+            "LAUNCH",
+            TRANSITION_TEXT,
+            scale,
+        );
+    }
+
+    /// Тоннель гиперпрыжка/стыковки: полосы звёзд и расходящиеся кольца.
+    #[allow(clippy::too_many_arguments)]
+    fn draw_warp(
+        &self,
+        frame: &mut Frame,
+        font: &[u8],
+        screen: &Screen,
+        vx: i32,
+        vy: i32,
+        vw: i32,
+        vh: i32,
+        s: i32,
+        elapsed: f32,
+        title: &str,
+    ) {
+        let view_rot = view_rotation(self.view_dir);
+        self.draw_star_streaks(
+            frame,
+            screen,
+            &view_rot,
+            vx,
+            vy,
+            vw,
+            vh,
+            300.0 + elapsed * 1400.0,
+        );
+        self.draw_tunnel_rings(
+            frame,
+            vx,
+            vy,
+            vw,
+            vh,
+            (elapsed * 1.7).fract(),
+            6,
+            WARP_RING_COLOR,
+        );
+        let scale = (s * 2).max(1) as usize;
+        draw_centered_text(
+            frame,
+            font,
+            vx,
+            vy + 4 * s,
+            vw,
+            title,
+            TRANSITION_TEXT,
+            scale,
+        );
+    }
+
+    /// Полосы звёзд, летящих на камеру.
+    ///
+    /// Для каждой звезды строим отрезок из её чуть более далёкого положения в
+    /// текущее: в перспективе он расходится от центра, как след разгона.
+    #[allow(clippy::too_many_arguments)]
+    fn draw_star_streaks(
+        &self,
+        frame: &mut Frame,
+        screen: &Screen,
+        view_rot: &Rotation,
+        vx: i32,
+        vy: i32,
+        vw: i32,
+        vh: i32,
+        streak: f32,
+    ) {
+        if vw <= 0 || vh <= 0 {
+            return;
+        }
+        let cam = view_rot.transpose();
+        let (xmin, ymin) = (vx as f32, vy as f32);
+        let (xmax, ymax) = ((vx + vw - 1) as f32, (vy + vh - 1) as f32);
+        for star in &self.stars {
+            let v = cam.apply(star.pos);
+            if v[2] <= NEAR {
+                continue;
+            }
+            let near = v[2];
+            let far = near + streak.max(1.0);
+            let x1 = screen.cx + v[0] / near * screen.k;
+            let y1 = screen.cy - v[1] / near * screen.k;
+            let x0 = screen.cx + v[0] / far * screen.k;
+            let y0 = screen.cy - v[1] / far * screen.k;
+            let Some((ax, ay, bx, by)) = clip_segment_2d(x0, y0, x1, y1, xmin, ymin, xmax, ymax)
+            else {
+                continue;
+            };
+            let bright = 0.35 + star.mag as f32 / 255.0 * 0.65;
+            let c = 0xFF00_0000
+                | ((bright * 210.0) as u32) << 16
+                | ((bright * 235.0) as u32) << 8
+                | (bright * 255.0) as u32;
+            frame.line(ax, ay, bx, by, c);
+        }
+    }
+
+    /// Расходящиеся кольца тоннеля. `phase` — 0..1, сдвиг между кольцами.
+    #[allow(clippy::too_many_arguments)]
+    fn draw_tunnel_rings(
+        &self,
+        frame: &mut Frame,
+        vx: i32,
+        vy: i32,
+        vw: i32,
+        vh: i32,
+        phase: f32,
+        count: usize,
+        color: u32,
+    ) {
+        if vw <= 0 || vh <= 0 || count == 0 {
+            return;
+        }
+        let cx = vx + vw / 2;
+        let cy = vy + vh / 2;
+        let max_r = ((vw * vw + vh * vh) as f32).sqrt() * 0.5;
+        for i in 0..count {
+            let t = (i as f32 / count as f32 + phase).fract();
+            // В перспективе кольцо ускоряется по мере приближения к камере.
+            let r = (t * t * max_r).round() as i32;
+            if r > 1 {
+                frame.circle(cx, cy, r, color);
+            }
+        }
     }
 
     /// Цвет рамки кокпита: белый, при попадании — красный.
@@ -766,7 +1145,14 @@ impl Flight {
     }
 
     /// Нарисовать лучи выстрелов противников.
-    fn draw_enemy_shots_view(&self, frame: &mut Frame, screen: &Screen, top: i32, bottom: i32, view_rot: &Rotation) {
+    fn draw_enemy_shots_view(
+        &self,
+        frame: &mut Frame,
+        screen: &Screen,
+        top: i32,
+        bottom: i32,
+        view_rot: &Rotation,
+    ) {
         let cam = view_rot.transpose();
         let (xmin, ymin) = (0.0, top as f32);
         let (xmax, ymax) = (frame.width as f32 - 1.0, bottom as f32 - 1.0);
@@ -858,7 +1244,12 @@ impl Flight {
     }
 
     /// Проекция центра объекта: экранные координаты и радиус диска.
-    fn project_view(&self, b: &Body, screen: &Screen, view_rot: &Rotation) -> Option<(f32, f32, f32, f32)> {
+    fn project_view(
+        &self,
+        b: &Body,
+        screen: &Screen,
+        view_rot: &Rotation,
+    ) -> Option<(f32, f32, f32, f32)> {
         let v = view_rot.apply(b.pos);
         if v[2] <= NEAR {
             return None;
@@ -995,18 +1386,10 @@ fn clip_segment_near(mut a: [f32; 3], mut b: [f32; 3]) -> Option<([f32; 3], [f32
     let t = |a: [f32; 3], b: [f32; 3]| (NEAR - a[2]) / (b[2] - a[2]);
     if a[2] <= NEAR {
         let t = t(a, b);
-        a = [
-            a[0] + (b[0] - a[0]) * t,
-            a[1] + (b[1] - a[1]) * t,
-            NEAR,
-        ];
+        a = [a[0] + (b[0] - a[0]) * t, a[1] + (b[1] - a[1]) * t, NEAR];
     } else if b[2] <= NEAR {
         let t = t(b, a);
-        b = [
-            b[0] + (a[0] - b[0]) * t,
-            b[1] + (a[1] - b[1]) * t,
-            NEAR,
-        ];
+        b = [b[0] + (a[0] - b[0]) * t, b[1] + (a[1] - b[1]) * t, NEAR];
     }
     Some((a, b))
 }
@@ -1093,21 +1476,13 @@ fn read_signed24(b: &[u8]) -> f32 {
     }
     let mag = (((b[2] & 0x7F) as u32) << 16) | ((b[1] as u32) << 8) | (b[0] as u32);
     let v = mag as f32;
-    if (b[2] & 0x80) != 0 {
-        -v
-    } else {
-        v
-    }
+    if (b[2] & 0x80) != 0 { -v } else { v }
 }
 
 /// Прочитать знаковый байт в формате знак-величина (оси объекта).
 fn read_signed8(b: u8) -> f32 {
     let mag = (b & 0x7F) as f32;
-    if (b & 0x80) != 0 {
-        -mag
-    } else {
-        mag
-    }
+    if (b & 0x80) != 0 { -mag } else { mag }
 }
 
 /// Зелёный оттенок планеты с небольшой вариацией яркости по системе.
@@ -1117,6 +1492,50 @@ fn read_signed8(b: u8) -> f32 {
 fn planet_green(seed: u32) -> u32 {
     let g = 0x58 + ((seed >> 8) & 0x1F);
     0xFF00_0000 | (g << 8)
+}
+
+/// Подпись направления вида, как в оригинале (`FRONT`, `REAR`, ...).
+fn view_label(dir: ViewDir) -> &'static str {
+    match dir {
+        ViewDir::Forward => "FRONT VIEW",
+        ViewDir::Back => "REAR VIEW",
+        ViewDir::Left => "LEFT VIEW",
+        ViewDir::Right => "RIGHT VIEW",
+    }
+}
+
+/// Число на экране во время отсчёта гиперпрыжка.
+///
+/// Z80 показывает `JumpCountdown >> 1` после уменьшения, поэтому сырым
+/// значениям `0x15..1` соответствуют `10..1`. Здесь то же самое, но без
+/// «прыжка» на первом кадре: `(raw + 1) / 2` даёт 10 уже при `0x15`.
+fn countdown_number(raw: u8) -> u32 {
+    if raw == 0 {
+        0
+    } else {
+        ((raw as u32 + 1) / 2).min(10)
+    }
+}
+
+/// Нарисовать строку по центру области `(x, y, w)`.
+fn draw_centered_text(
+    frame: &mut Frame,
+    font: &[u8],
+    x: i32,
+    y: i32,
+    w: i32,
+    text: &str,
+    color: u32,
+    scale: usize,
+) {
+    let text_w = text.len() as i32 * 8 * scale.max(1) as i32;
+    let tx = x + (w - text_w) / 2;
+    frame.draw_text(font, tx, y, text, color, scale);
+}
+
+/// Модель станции для анимации вылета.
+fn coriolis_model() -> Option<&'static Ship> {
+    shipdata::SHIPS.iter().find(|s| s.name == "d_Coriolis")
 }
 
 /// Модель по адресу блока данных объекта из памяти Z80.
@@ -1276,7 +1695,10 @@ mod tests {
         tick(&mut f, &mut mem);
         let p = f.stars[0].pos;
         let roll_angle = p[1].atan2(p[0]);
-        assert!(p[1] > 0.0, "положительный крен должен крутить поле против часовой");
+        assert!(
+            p[1] > 0.0,
+            "положительный крен должен крутить поле против часовой"
+        );
         // Масштаб из CalcNewCrdObj_Pl: крен *2/256.
         assert!(
             (roll_angle - 4.0 * 2.0 / 256.0).abs() < 1e-3,
@@ -1393,7 +1815,10 @@ mod tests {
             f.tick(1.0 / 50.0);
         }
         for s in &f.stars {
-            assert!(s.pos.iter().all(|v| v.is_finite()), "координата звезды не число");
+            assert!(
+                s.pos.iter().all(|v| v.is_finite()),
+                "координата звезды не число"
+            );
             assert!(
                 s.pos.iter().all(|v| v.abs() < 20_000.0),
                 "звезда улетела слишком далеко: {:?}",
@@ -1429,7 +1854,10 @@ mod tests {
         let color = planet_green(0xFF40_80C0);
         assert_eq!(color & 0x00FF_00FF, 0, "у планеты не зелёный цвет");
         assert!((color >> 8) & 0xFF > 0, "планета слишком тёмная");
-        assert!(PLANET_RADIUS < SUN_RADIUS, "планета не должна быть больше солнца");
+        assert!(
+            PLANET_RADIUS < SUN_RADIUS,
+            "планета не должна быть больше солнца"
+        );
     }
 
     #[test]
@@ -1443,10 +1871,7 @@ mod tests {
         // Оригинал поднял TempLaser выстрелом: показываем луч.
         mem[Z80_TEMP_LASER] = 0x08;
         f.sync_from_z80(&mem);
-        assert!(
-            f.laser_timer > 0.0,
-            "выстрел не превратился в видимый луч"
-        );
+        assert!(f.laser_timer > 0.0, "выстрел не превратился в видимый луч");
 
         // Остывание не должно само включать лазер.
         f.laser_timer = 0.0;
@@ -1468,12 +1893,8 @@ mod tests {
         assert!(!f.enemy_shots.is_empty(), "выстрел противника не создан");
 
         let mut frame = Frame::new(1280, 960);
-        f.draw(&mut frame, &cockpit::panel_geometry(1280, 960));
-        let beam_pixels = frame
-            .pixels()
-            .iter()
-            .filter(|&&p| p == ENEMY_BEAM)
-            .count();
+        f.draw(&mut frame, &cockpit::panel_geometry(1280, 960), &[]);
+        let beam_pixels = frame.pixels().iter().filter(|&&p| p == ENEMY_BEAM).count();
         assert!(
             beam_pixels > 50,
             "луч противника не попал в кадр или оборвался у перекрестия: {beam_pixels} px"
@@ -1490,10 +1911,7 @@ mod tests {
         // Оригинал обработал попадание: передний щит уменьшился.
         mem[Z80_SHIELD_FRONT] = 0x40;
         f.sync_from_z80(&mem);
-        assert!(
-            !f.enemy_shots.is_empty(),
-            "падение щита не показано лучом"
-        );
+        assert!(!f.enemy_shots.is_empty(), "падение щита не показано лучом");
         let shot = &f.enemy_shots[0];
         assert!(
             shot.from[2] > NEAR,
@@ -1523,7 +1941,10 @@ mod tests {
             fast_step > slow_step * 2.0,
             "скорость слабо влияет на звёзды: {slow_step} -> {fast_step}"
         );
-        assert!(fast.stars[0].pos[2] > 0.0, "звезда должна оставаться впереди");
+        assert!(
+            fast.stars[0].pos[2] > 0.0,
+            "звезда должна оставаться впереди"
+        );
     }
 
     #[test]
@@ -1543,7 +1964,10 @@ mod tests {
         let small = star_count_for(640, 480);
         let large = star_count_for(1280, 750);
         assert!(small < large, "плотность звёзд не растёт с разрешением");
-        assert!(large >= 150, "на большом экране звёзд всё ещё мало: {large}");
+        assert!(
+            large >= 150,
+            "на большом экране звёзд всё ещё мало: {large}"
+        );
         assert!(star_count_for(4000, 3000) <= STAR_COUNT_MAX);
     }
 
@@ -1579,7 +2003,7 @@ mod tests {
         let mut frame = Frame::new(1280, 960);
         let geom = cockpit::panel_geometry(1280, 960);
         let view = geom.panel_y;
-        f.draw(&mut frame, &geom);
+        f.draw(&mut frame, &geom, &[]);
 
         // Вид полностью непрозрачен, как и положено фону космоса.
         for y in 0..view as usize {
@@ -1901,5 +2325,69 @@ mod tests {
             before,
             after
         );
+    }
+
+    #[test]
+    fn view_labels_match_directions() {
+        assert_eq!(view_label(ViewDir::Forward), "FRONT VIEW");
+        assert_eq!(view_label(ViewDir::Back), "REAR VIEW");
+        assert_eq!(view_label(ViewDir::Left), "LEFT VIEW");
+        assert_eq!(view_label(ViewDir::Right), "RIGHT VIEW");
+    }
+
+    #[test]
+    fn jump_countdown_shows_ten_to_one() {
+        // Z80 стартует с 0x15 и показывает `>> 1`; нативный отсчёт должен
+        // начинаться с 10 и заканчиваться единицей перед тоннелем.
+        assert_eq!(countdown_number(0x15), 10);
+        assert_eq!(countdown_number(0x14), 10);
+        assert_eq!(countdown_number(0x13), 10);
+        assert_eq!(countdown_number(3), 2);
+        assert_eq!(countdown_number(2), 1);
+        assert_eq!(countdown_number(1), 1);
+        assert_eq!(countdown_number(0), 0);
+    }
+
+    #[test]
+    fn transitions_draw_their_animations() {
+        let mut f = open();
+        let geom = cockpit::panel_geometry(640, 480);
+        let font = vec![0xFFu8; 0x300];
+
+        for (kind, elapsed) in [
+            (TransitionKind::Launch, 0.4),
+            (TransitionKind::Hyperspace, 0.2),
+            (TransitionKind::Docking, 0.2),
+        ] {
+            let mut t = Transition::new(kind, 0);
+            t.warp = true;
+            t.warp_elapsed = elapsed;
+            t.elapsed = elapsed;
+            f.transition = Some(t);
+
+            let mut frame = Frame::new(640, 480);
+            f.draw(&mut frame, &geom, &font);
+            let lit = frame.pixels()[..geom.panel_y as usize * frame.width]
+                .iter()
+                .filter(|&&p| p != 0)
+                .count();
+            assert!(lit > 0, "{kind:?}: анимация ничего не нарисовала");
+        }
+    }
+
+    #[test]
+    fn hyperspace_countdown_keeps_normal_flight_until_zero() {
+        let mut f = open();
+        let mut mem = vec![0u8; Z80_JUMP_COUNTDOWN + 1];
+        mem[Z80_JUMP_DOCKING] = 1;
+        mem[Z80_FLG_JUMP_DOCKING] = 1;
+        mem[Z80_JUMP_COUNTDOWN] = 0x15;
+        f.start_transition(false, &mem);
+        assert_eq!(f.transition_kind(), Some(TransitionKind::Hyperspace));
+        assert!(!f.transition.expect("переход не создан").warp);
+
+        mem[Z80_JUMP_COUNTDOWN] = 0;
+        f.sync_from_z80(&mem);
+        assert!(f.transition.expect("переход пропал").warp);
     }
 }

@@ -470,8 +470,14 @@ fn run_headless(machine: &mut Spectrum, opts: &Options) {
             println!(
                 "frame {:3} kb=[{:02X} {:02X} {:02X} {:02X} {:02X} {:02X} {:02X} {:02X}] presskey=0x{:02X}",
                 f,
-                machine.keyboard[0], machine.keyboard[1], machine.keyboard[2], machine.keyboard[3],
-                machine.keyboard[4], machine.keyboard[5], machine.keyboard[6], machine.keyboard[7],
+                machine.keyboard[0],
+                machine.keyboard[1],
+                machine.keyboard[2],
+                machine.keyboard[3],
+                machine.keyboard[4],
+                machine.keyboard[5],
+                machine.keyboard[6],
+                machine.keyboard[7],
                 machine.mem[0xFC13]
             );
         }
@@ -486,10 +492,7 @@ fn run_headless(machine: &mut Spectrum, opts: &Options) {
         machine.run_frame();
         if machine.save_requested {
             machine.save_requested = false;
-            let path = opts
-                .save
-                .clone()
-                .unwrap_or_else(default_save_name);
+            let path = opts.save.clone().unwrap_or_else(default_save_name);
             match native::commander_save(&mut *machine, &path, save_layout_kladov()) {
                 Ok(()) => println!("Сохранено в {}", path),
                 Err(e) => eprintln!("Ошибка сохранения: {e}"),
@@ -563,12 +566,19 @@ fn run_headless(machine: &mut Spectrum, opts: &Options) {
         println!("wrote {}", path);
     }
     if let Ok(dir) = env::var("ELITE_MEM") {
-        let dir = if dir.is_empty() { "tmp".to_string() } else { dir };
+        let dir = if dir.is_empty() {
+            "tmp".to_string()
+        } else {
+            dir
+        };
         let _ = fs::create_dir_all(&dir);
         let _ = fs::write(format!("{dir}/screen.bin"), &machine.mem[0x4000..0x5B00]);
         let _ = fs::write(format!("{dir}/buf.bin"), &machine.mem[0xC000..0xD000]);
         let _ = fs::write(format!("{dir}/buf800.bin"), &machine.mem[0xC800..0xD800]);
-        let _ = fs::write(format!("{dir}/font.bin"), &machine.mem[0x5D70..0x5D70 + 0x2D8]);
+        let _ = fs::write(
+            format!("{dir}/font.bin"),
+            &machine.mem[0x5D70..0x5D70 + 0x2D8],
+        );
         let _ = fs::write(format!("{dir}/mem.bin"), &machine.mem);
         println!("wrote {dir}/screen.bin buf.bin buf800.bin font.bin mem.bin");
     }
@@ -599,7 +609,10 @@ fn save_dialog(last: &str) -> Option<PathBuf> {
     let mut d = rfd::FileDialog::new()
         .add_filter("Elite (ZX)", &["zxelite"])
         .set_file_name(default_save_name());
-    if let Some(dir) = Path::new(last).parent().filter(|p| !p.as_os_str().is_empty()) {
+    if let Some(dir) = Path::new(last)
+        .parent()
+        .filter(|p| !p.as_os_str().is_empty())
+    {
         d = d.set_directory(dir);
     }
     d.save_file()
@@ -630,7 +643,10 @@ fn do_save(machine: &mut Spectrum, opts: &Options, last: &mut String) {
 /// Диалог открытия файла командира. `last` — прошлый путь (задаёт каталог).
 fn load_dialog(last: &str) -> Option<PathBuf> {
     let mut d = rfd::FileDialog::new().add_filter("Elite (ZX)", &["zxelite"]);
-    if let Some(dir) = Path::new(last).parent().filter(|p| !p.as_os_str().is_empty()) {
+    if let Some(dir) = Path::new(last)
+        .parent()
+        .filter(|p| !p.as_os_str().is_empty())
+    {
         d = d.set_directory(dir);
     }
     d.pick_file()
@@ -741,9 +757,12 @@ struct App<'a> {
     /// нативный экран встаёт на паузу.
     pending_shop: bool,
     /// Нативный вид, который нужно включить, как только Z80 окажется в
-    /// настоящем полёте. Нужен для `F1` на станции: сначала идёт родная
-    /// анимация вылета, и только после неё показывается нативный рендер.
+    /// полёте или начнёт переход. Нужен для `F1` на станции и во время
+    /// прыжка/стыковки.
     pending_flight: Option<flight::ViewDir>,
+    /// Запрос пришёл с `F1` на станции: открыть нативный вид сразу с
+    /// анимацией вылета, а не ждать, пока Z80 закончит переход.
+    pending_launch: bool,
     /// Состояние джойстика Kempston (5 бит).
     kempston: [bool; 5],
     ctrl: bool,
@@ -789,6 +808,7 @@ impl<'a> App<'a> {
             pending_key: None,
             pending_shop: false,
             pending_flight: None,
+            pending_launch: false,
             kempston: [false; 5],
             ctrl: false,
             alt: false,
@@ -857,6 +877,7 @@ impl<'a> App<'a> {
         self.menu = false;
         self.pending_key = None;
         self.pending_flight = None;
+        self.pending_launch = false;
     }
 
     /// Открыть закупку, отложенную до конца кадра (см. `pending_shop`).
@@ -885,43 +906,61 @@ impl<'a> App<'a> {
         self.pending_key = None;
         self.pending_shop = false;
         self.pending_flight = None;
+        self.pending_launch = false;
+    }
+
+    /// Показать нативный вид: уже открытый экран только меняет направление,
+    /// чтобы не сбрасывать звёздное поле и начатый переход.
+    fn show_flight(&mut self, dir: flight::ViewDir) {
+        if self.flight.active {
+            self.flight.set_view_dir(dir);
+            self.pending_flight = None;
+            self.pending_launch = false;
+        } else {
+            self.open_flight(dir);
+        }
     }
 
     /// Следить за экраном Z80 под нативным видом и закрывать его, когда игра
     /// уходит с вида из кабины.
     ///
-    /// Если это переход (вылет/прыжок/стыковка), выбранный вид запоминается:
-    /// [`Self::open_pending_flight`] вернёт его, как только Z80 снова окажется
-    /// в кабине. Так ролик оригинала остаётся видимым, а нативный полёт не
-    /// теряется после прыжка.
+    /// Переходы (вылет/прыжок/стыковка) больше не отдают экран Z80: нативный
+    /// вид остаётся открытым и рисует собственную анимацию. Закрывается он
+    /// только когда оригинал уходит на другой экран (станция, карта,
+    /// инвентарь).
     fn follow_flight_screen(&mut self) {
         if !self.flight.active {
             return;
         }
         self.flight.follow_z80_screen(&self.machine.mem);
-        if !self.flight.active && flight::z80_in_transition(&self.machine.mem) {
-            self.pending_flight = Some(self.flight.view_dir);
-        }
     }
 
-    /// Открыть нативный вид, отложенный до настоящего полёта (см.
-    /// `pending_flight`). Пока оригинал играет вылет/прыжок или находится на
-    /// станции, рендер не включается — ZX-кадр показывает всё как в игре.
+    /// Открыть нативный вид, отложенный до полёта или перехода (см.
+    /// `pending_flight`). Если оригинал уже начал вылет/прыжок/стыковку,
+    /// рендер включается сразу и проигрывает нативную анимацию.
     fn open_pending_flight(&mut self) {
         let Some(dir) = self.pending_flight else {
             return;
         };
-        let mem = &self.machine.mem;
-        if flight::z80_in_cockpit(mem) {
+        let in_transition = flight::z80_in_transition(&self.machine.mem);
+        if flight::z80_in_cockpit(&self.machine.mem) || in_transition {
             if !self.flight.active {
+                let launch = self.pending_launch;
                 self.open_flight(dir);
+                if in_transition {
+                    self.flight.start_transition(launch, &self.machine.mem);
+                }
+            } else {
+                self.flight.set_view_dir(dir);
+                self.pending_flight = None;
+                self.pending_launch = false;
             }
             return;
         }
         // Переход закончился, но полёт так и не начался (например, стыковка
-        // привела на станцию): запрос больше не нужен. Во время анимации
-        // вылета/прыжка/стыковки продолжаем ждать.
-        if flight::z80_is_docked(mem) && !flight::z80_in_transition(mem) {
+        // привела на станцию): запрос больше не нужен. Запрос на вылет
+        // (`F1` на станции) ждёт, пока игра действительно начнёт переход.
+        if flight::z80_is_docked(&self.machine.mem) && !self.pending_launch {
             self.pending_flight = None;
         }
     }
@@ -930,9 +969,9 @@ impl<'a> App<'a> {
     /// соответствующий нативный вид, если игра уже в полёте.
     ///
     /// На станции это родные команды (вылет/покупка/продажа/оборудование):
-    /// нативный вид включается не сразу после нажатия, а когда эмулятор
-    /// действительно перейдёт в полёт. В прыжке и анимациях вид ждёт их
-    /// окончания, чтобы не заслонять ZX-кадр.
+    /// `F1` сразу открывает нативный вид и запускает анимацию вылета. В
+    /// прыжке и стыковке уже открытый вид сам показывает переход, а закрытый —
+    /// открывается с нативной анимацией.
     fn function_key(&mut self, code: KeyCode) {
         let Some(key) = function_game_key(code) else {
             return;
@@ -951,23 +990,31 @@ impl<'a> App<'a> {
         self.pending_shop = false;
         if docked {
             // На станции `F1`-`F4` — родные команды. `F1` (вылет) включает
-            // нативный вид после анимации; `F4` — нативную закупку после
-            // кадра игры; `F2`/`F3` остаются родными экранами покупки/продажи.
+            // нативный вид сразу с анимацией вылета; `F4` — нативную закупку
+            // после кадра игры; `F2`/`F3` остаются родными экранами
+            // покупки/продажи.
             self.pending_shop = code == KeyCode::F4;
-            self.pending_flight = if code == KeyCode::F1 && in_cockpit {
+            if code == KeyCode::F1 && in_cockpit {
                 // Снимок/переход, где станция уже отдала полётный экран.
-                self.open_flight(dir);
-                None
+                self.show_flight(dir);
             } else if code == KeyCode::F1 {
-                Some(dir)
+                self.pending_flight = Some(dir);
+                self.pending_launch = true;
             } else {
-                None
-            };
+                self.pending_flight = None;
+                self.pending_launch = false;
+            }
         } else if in_cockpit {
-            self.open_flight(dir);
+            self.show_flight(dir);
         } else if in_transition {
-            // В полёте, но идёт прыжок/стыковка: включим вид после перехода.
-            self.pending_flight = Some(dir);
+            // В полёте, но идёт прыжок/стыковка. Если рендер уже открыт, он
+            // сам показывает переход; иначе включим его с анимацией.
+            if self.flight.active {
+                self.show_flight(dir);
+            } else {
+                self.pending_flight = Some(dir);
+                self.pending_launch = false;
+            }
         } else {
             // Оригинал на своём экране (карта, инвентарь, статус). Клавиши
             // `1`-`4` возвращают его в кабину, поэтому запоминаем вид и
@@ -975,6 +1022,7 @@ impl<'a> App<'a> {
             // первый `F1` только закрывал бы Z80-экран, а нативный вид
             // требовал бы второго нажатия.
             self.pending_flight = Some(dir);
+            self.pending_launch = false;
         }
         self.pending_key = matrix_pos(key);
     }
@@ -1004,6 +1052,7 @@ impl<'a> App<'a> {
                 self.menu = false;
                 self.pending_key = None;
                 self.pending_flight = None;
+                self.pending_launch = false;
             }
             return;
         }
@@ -1281,16 +1330,14 @@ impl<'a> App<'a> {
         // во время эмуляции, показ накладывает слой поверх ZX-кадра.
         let size = window.inner_size();
         let layout = display::layout(size.width, size.height);
-        if self.hdmap.active
-            || self.shop.active
-            || self.machine.intro_seen
-            || self.flight.active
-        {
+        if self.hdmap.active || self.shop.active || self.machine.intro_seen || self.flight.active {
             // Отдельный нативный экран (карта/закупка/заставка/полёт): HD-слой
             // во всё окно. Карта, закупка и заставка ставят игру на паузу; под
             // экраном полёта эмулятор продолжает работать. Слой непрозрачный и
             // покрывает окно целиком, поэтому композитится в угол (0, 0).
-            self.machine.hd.resize(size.width as usize, size.height as usize);
+            self.machine
+                .hd
+                .resize(size.width as usize, size.height as usize);
             self.machine.hd.clear(display::TRANSPARENT);
             if self.flight.active {
                 // Экран полёта: рисует то, что посчитал Z80, поэтому эмулятор
@@ -1324,9 +1371,7 @@ impl<'a> App<'a> {
         } else {
             // Игровой режим: HD-слой в разрешении области показа; нативный
             // кокпит рисуется на заставке и на экране полёта.
-            self.machine
-                .hd
-                .resize(layout.w as usize, layout.h as usize);
+            self.machine.hd.resize(layout.w as usize, layout.h as usize);
             self.machine.hd.clear(display::TRANSPARENT);
             if self.menu {
                 // В меню игра не выполняется, клавиши не попадают в эмулятор.
@@ -1352,7 +1397,7 @@ impl<'a> App<'a> {
             // Экран полёта: нативный вид в верхней части окна (по данным Z80)
             // и тот же кокпит, что на заставке, — внизу.
             let g = cockpit::panel_geometry(size.width, size.height);
-            self.flight.draw(&mut self.machine.hd, &g);
+            self.flight.draw(&mut self.machine.hd, &g, &self.font);
             let values = {
                 let mut values = cockpit::KLADOV_COCKPIT.read(&self.machine.mem);
                 values.blink = (self.machine.frames / 16) % 2 == 0;
@@ -1362,13 +1407,8 @@ impl<'a> App<'a> {
                 line: self.flight.cockpit_color(),
                 bar: self.flight.cockpit_bar_color(),
             };
-            self.cockpit.draw_with_geom(
-                &mut self.machine.hd,
-                &g,
-                &self.font,
-                style,
-                &values,
-            );
+            self.cockpit
+                .draw_with_geom(&mut self.machine.hd, &g, &self.font, style, &values);
             if self.menu {
                 draw_pause_menu(&mut self.machine.hd, &self.font, self.menu_sel, false);
             }
@@ -1426,11 +1466,7 @@ impl<'a> App<'a> {
         out.fill(0);
         // Отдельный нативный экран (карта/закупка/заставка/полёт)
         // показывается вместо ZX-кадра: слой непрозрачный и покрывает всё окно.
-        if self.hdmap.active
-            || self.shop.active
-            || self.machine.intro_seen
-            || self.flight.active
-        {
+        if self.hdmap.active || self.shop.active || self.machine.intro_seen || self.flight.active {
             self.machine.hd.composite_onto(&mut out, ow, oh, 0, 0);
             window.pre_present_notify();
             let _ = out.present();
@@ -1640,14 +1676,46 @@ fn draw_pause_menu(frame: &mut display::Frame, font: &[u8], sel: usize, intro: b
 /// Клавиши берутся по физической позиции (`physical_key`), поэтому активная
 /// раскладка (например русская) на управление не влияет.
 const MATRIX_MAP: &[(KeyCode, usize, u8)] = &[
-    (KeyCode::ShiftLeft, 0, 0), (KeyCode::KeyZ, 0, 1), (KeyCode::KeyX, 0, 2), (KeyCode::KeyC, 0, 3), (KeyCode::KeyV, 0, 4),
-    (KeyCode::KeyA, 1, 0), (KeyCode::KeyS, 1, 1), (KeyCode::KeyD, 1, 2), (KeyCode::KeyF, 1, 3), (KeyCode::KeyG, 1, 4),
-    (KeyCode::KeyQ, 2, 0), (KeyCode::KeyW, 2, 1), (KeyCode::KeyE, 2, 2), (KeyCode::KeyR, 2, 3), (KeyCode::KeyT, 2, 4),
-    (KeyCode::Digit1, 3, 0), (KeyCode::Digit2, 3, 1), (KeyCode::Digit3, 3, 2), (KeyCode::Digit4, 3, 3), (KeyCode::Digit5, 3, 4),
-    (KeyCode::Digit0, 4, 0), (KeyCode::Digit9, 4, 1), (KeyCode::Digit8, 4, 2), (KeyCode::Digit7, 4, 3), (KeyCode::Digit6, 4, 4),
-    (KeyCode::KeyP, 5, 0), (KeyCode::KeyO, 5, 1), (KeyCode::KeyI, 5, 2), (KeyCode::KeyU, 5, 3), (KeyCode::KeyY, 5, 4),
-    (KeyCode::Enter, 6, 0), (KeyCode::KeyL, 6, 1), (KeyCode::KeyK, 6, 2), (KeyCode::KeyJ, 6, 3), (KeyCode::KeyH, 6, 4),
-    (KeyCode::Space, 7, 0), (KeyCode::ShiftRight, 7, 1), (KeyCode::KeyM, 7, 2), (KeyCode::KeyN, 7, 3), (KeyCode::KeyB, 7, 4),
+    (KeyCode::ShiftLeft, 0, 0),
+    (KeyCode::KeyZ, 0, 1),
+    (KeyCode::KeyX, 0, 2),
+    (KeyCode::KeyC, 0, 3),
+    (KeyCode::KeyV, 0, 4),
+    (KeyCode::KeyA, 1, 0),
+    (KeyCode::KeyS, 1, 1),
+    (KeyCode::KeyD, 1, 2),
+    (KeyCode::KeyF, 1, 3),
+    (KeyCode::KeyG, 1, 4),
+    (KeyCode::KeyQ, 2, 0),
+    (KeyCode::KeyW, 2, 1),
+    (KeyCode::KeyE, 2, 2),
+    (KeyCode::KeyR, 2, 3),
+    (KeyCode::KeyT, 2, 4),
+    (KeyCode::Digit1, 3, 0),
+    (KeyCode::Digit2, 3, 1),
+    (KeyCode::Digit3, 3, 2),
+    (KeyCode::Digit4, 3, 3),
+    (KeyCode::Digit5, 3, 4),
+    (KeyCode::Digit0, 4, 0),
+    (KeyCode::Digit9, 4, 1),
+    (KeyCode::Digit8, 4, 2),
+    (KeyCode::Digit7, 4, 3),
+    (KeyCode::Digit6, 4, 4),
+    (KeyCode::KeyP, 5, 0),
+    (KeyCode::KeyO, 5, 1),
+    (KeyCode::KeyI, 5, 2),
+    (KeyCode::KeyU, 5, 3),
+    (KeyCode::KeyY, 5, 4),
+    (KeyCode::Enter, 6, 0),
+    (KeyCode::KeyL, 6, 1),
+    (KeyCode::KeyK, 6, 2),
+    (KeyCode::KeyJ, 6, 3),
+    (KeyCode::KeyH, 6, 4),
+    (KeyCode::Space, 7, 0),
+    (KeyCode::ShiftRight, 7, 1),
+    (KeyCode::KeyM, 7, 2),
+    (KeyCode::KeyN, 7, 3),
+    (KeyCode::KeyB, 7, 4),
 ];
 
 /// Позиция физической клавиши в матрице ZX Spectrum (полуряд, бит).
@@ -1775,13 +1843,25 @@ mod intro_tests {
 
         const WHITE: u32 = 0xFFD7_D7D7;
         // Угол рамки панели (ZX 40,52 -> HD 200,260) — белый.
-        assert_eq!(hd.pixels()[260 * 1280 + 200], WHITE, "panel border not drawn");
+        assert_eq!(
+            hd.pixels()[260 * 1280 + 200],
+            WHITE,
+            "panel border not drawn"
+        );
         // Внутри панели нарисован текст: заметное число белых пикселей.
         let white = hd.pixels().iter().filter(|&&p| p == WHITE).count();
         assert!(white > 5000, "menu text too sparse: white={white}");
         // Панель непрозрачная (старший байт != 0), фон слоя — прозрачный.
-        assert_eq!(hd.pixels()[261 * 1280 + 201], 0xFF00_0000, "panel bg not opaque");
-        assert_eq!(hd.pixels()[0], display::TRANSPARENT, "outside panel must stay transparent");
+        assert_eq!(
+            hd.pixels()[261 * 1280 + 201],
+            0xFF00_0000,
+            "panel bg not opaque"
+        );
+        assert_eq!(
+            hd.pixels()[0],
+            display::TRANSPARENT,
+            "outside panel must stay transparent"
+        );
 
         // Композитинг поверх масштабированного ZX-кадра действительно меняет картинку.
         let mut zx = vec![0u32; 256 * 192];
@@ -1820,7 +1900,10 @@ mod intro_tests {
         assert_eq!(MATRIX_MAP.len(), 40);
         let mut seen = std::collections::HashSet::new();
         for &(code, row, bit) in MATRIX_MAP {
-            assert!(row < 8 && bit < 5, "позиция вне матрицы: {code:?} ({row},{bit})");
+            assert!(
+                row < 8 && bit < 5,
+                "позиция вне матрицы: {code:?} ({row},{bit})"
+            );
             assert!(seen.insert((row, bit)), "дубликат позиции {row},{bit}");
         }
         // Kempston: стрелки и правая Ctrl.
@@ -1925,7 +2008,8 @@ mod intro_tests {
         assert!(!app.hdmap.active, "карта галактики не должна открыться");
         // Экран снят данные живого командира.
         let p = equip::KLADOV_SHOP.pilot as usize;
-        let cash = u16::from_le_bytes([app.machine.mem[p + 18], app.machine.mem[p + 19]]) as u32 * 10000
+        let cash = u16::from_le_bytes([app.machine.mem[p + 18], app.machine.mem[p + 19]]) as u32
+            * 10000
             + u16::from_le_bytes([app.machine.mem[p + 20], app.machine.mem[p + 21]]) as u32;
         assert_eq!(app.shop.cash_tenths(), cash, "деньги не из памяти игры");
         // Пока экран открыт, ввод не попадает в эмулятор.
@@ -2004,7 +2088,10 @@ mod intro_tests {
         app.key_event(KeyCode::F1, true, false);
         assert!(app.flight.active);
         app.key_event(KeyCode::F1, true, false);
-        assert!(app.flight.active, "F1 должен включать рендер, а не закрывать");
+        assert!(
+            app.flight.active,
+            "F1 должен включать рендер, а не закрывать"
+        );
     }
 
     /// F1-F4 на станции повторяют оригинальные клавиши 1-4: игра получает
@@ -2092,7 +2179,10 @@ mod intro_tests {
         // вид ещё не успел появиться.
         app.machine.mem[flight::Z80_WHAT_ON_SCREEN] = 4;
         app.follow_flight_screen();
-        assert!(!app.flight.active, "меню покупки осталось под нативным видом");
+        assert!(
+            !app.flight.active,
+            "меню покупки осталось под нативным видом"
+        );
 
         // Первый полётный экран взводит «нативный вид уже видел полёт».
         app.machine.mem[flight::Z80_WHAT_ON_SCREEN] = 0;
@@ -2107,11 +2197,10 @@ mod intro_tests {
         assert!(!app.flight.active, "карта открылась под нативным видом");
     }
 
-    /// `F1` на станции — родная команда вылета. Нативный вид включается не
-    /// сразу, а только когда Z80 закончит анимацию вылета; анимация остаётся
-    /// видимой.
+    /// `F1` на станции — родная команда вылета. Нативный вид включается уже
+    /// во время перехода и проигрывает свою анимацию вылета.
     #[test]
-    fn f1_at_station_waits_for_launch_animation() {
+    fn f1_at_station_plays_native_launch() {
         let opts = test_options();
         let mut app = App::new(boot(), &opts);
         // Станционный экран оригинала.
@@ -2121,7 +2210,8 @@ mod intro_tests {
         app.machine.mem[flight::Z80_FLG_JUMP_DOCKING] = 0;
 
         app.key_event(KeyCode::F1, true, false);
-        assert!(!app.flight.active, "F1 включил вид до анимации вылета");
+        assert!(!app.flight.active, "F1 включил вид до начала вылета");
+        assert!(app.pending_launch, "F1 на станции не запомнил вылет");
         app.apply_input();
         let (row, bit) = matrix_pos(KeyCode::Digit1).expect("1 в матрице");
         assert_eq!(
@@ -2130,42 +2220,59 @@ mod intro_tests {
             "F1 на станции не передал игре клавишу 1"
         );
 
-        // Идёт вылет: Z80 уже в полёте, но рисует тоннель и держит флаги.
+        // Идёт вылет: Z80 уже в полёте, но держит флаги перехода.
         app.machine.mem[flight::Z80_WHAT_ON_SCREEN] = 0;
         app.machine.mem[flight::Z80_IND_DANGER] = 4;
         app.machine.mem[flight::Z80_JUMP_DOCKING] = 1;
         app.machine.mem[flight::Z80_FLG_JUMP_DOCKING] = 1;
         app.open_pending_flight();
-        assert!(!app.flight.active, "вид закрыл анимацию вылета");
+        assert!(app.flight.active, "F1 не открыл нативный вид на вылете");
+        assert_eq!(
+            app.flight.transition_kind(),
+            Some(flight::TransitionKind::Launch),
+            "вылет показан не как вылет"
+        );
 
-        // Анимация закончилась — теперь можно показать нативный вид.
+        // Переход закончился — остаётся обычный вид вперёд.
         app.machine.mem[flight::Z80_JUMP_DOCKING] = 0;
         app.machine.mem[flight::Z80_FLG_JUMP_DOCKING] = 0;
-        app.open_pending_flight();
-        assert!(app.flight.active, "F1 не включил вид после вылета");
+        app.follow_flight_screen();
+        assert!(app.flight.active, "вид закрылся после вылета");
+        assert!(
+            !app.flight.in_transition(),
+            "анимация вылета не закончилась"
+        );
         assert_eq!(app.flight.view_dir, flight::ViewDir::Forward);
     }
 
-    /// `F1` во время прыжка/стыковки не заслоняет анимацию: нативный вид
-    /// появляется только после перехода.
+    /// `F1` во время прыжка сразу открывает нативную анимацию гиперперехода,
+    /// а не ждёт окончания ZX-ролика.
     #[test]
-    fn f1_during_jump_waits_for_transition() {
+    fn f1_during_jump_plays_native_hyperspace() {
         let opts = test_options();
         let mut app = App::new(boot(), &opts);
         app.machine.mem[flight::Z80_WHAT_ON_SCREEN] = 0;
         app.machine.mem[flight::Z80_IND_DANGER] = 1;
         app.machine.mem[flight::Z80_JUMP_DOCKING] = 1;
         app.machine.mem[flight::Z80_FLG_JUMP_DOCKING] = 1;
+        app.machine.mem[flight::Z80_JUMP_COUNTDOWN] = 0x15;
 
         app.key_event(KeyCode::F1, true, false);
-        assert!(!app.flight.active, "F1 включил вид во время прыжка");
+        assert!(!app.flight.active, "F1 включил вид во время перехода");
         app.open_pending_flight();
-        assert!(!app.flight.active, "вид не дождался конца прыжка");
+        assert!(app.flight.active, "F1 не открыл нативный гиперпереход");
+        assert_eq!(
+            app.flight.transition_kind(),
+            Some(flight::TransitionKind::Hyperspace),
+            "прыжок показан не как гиперпереход"
+        );
 
         app.machine.mem[flight::Z80_JUMP_DOCKING] = 0;
         app.machine.mem[flight::Z80_FLG_JUMP_DOCKING] = 0;
-        app.open_pending_flight();
-        assert!(app.flight.active, "вид не включился после прыжка");
+        app.machine.mem[flight::Z80_JUMP_COUNTDOWN] = 0;
+        app.follow_flight_screen();
+        assert!(app.flight.active, "вид закрылся после прыжка");
+        assert!(!app.flight.in_transition(), "переход не закончился");
     }
 
     /// Возврат из Z80-экрана (инвентарь по `Enter`): `F1` должен сразу
@@ -2207,10 +2314,10 @@ mod intro_tests {
         assert_eq!(app.flight.view_dir, flight::ViewDir::Forward);
     }
 
-    /// Если прыжок начался при открытом нативном виде, рендер прячется на
-    /// время анимации и сам возвращается после неё — с тем же направлением.
+    /// Если прыжок начался при открытом нативном виде, рендер не прячется, а
+    /// сам показывает нативную анимацию — с тем же направлением вида.
     #[test]
-    fn flight_reopens_after_jump_transition() {
+    fn flight_stays_active_during_jump_transition() {
         let opts = test_options();
         let mut app = App::new(boot(), &opts);
         app.machine.mem[flight::Z80_WHAT_ON_SCREEN] = 0;
@@ -2222,24 +2329,40 @@ mod intro_tests {
         assert!(app.flight.active);
         assert_eq!(app.flight.view_dir, flight::ViewDir::Right);
 
-        // Начался прыжок: оригинал рисует тоннель и держит флаги.
+        // Начался прыжок: оригинал держит флаги перехода.
         app.machine.mem[flight::Z80_JUMP_DOCKING] = 1;
         app.machine.mem[flight::Z80_FLG_JUMP_DOCKING] = 1;
+        app.machine.mem[flight::Z80_JUMP_COUNTDOWN] = 0x15;
         app.follow_flight_screen();
-        assert!(!app.flight.active, "вид остался поверх анимации прыжка");
-        app.open_pending_flight();
-        assert!(!app.flight.active, "вид вернулся до конца прыжка");
+        assert!(app.flight.active, "вид закрылся на время прыжка");
+        assert_eq!(
+            app.flight.transition_kind(),
+            Some(flight::TransitionKind::Hyperspace),
+            "прыжок показан не как гиперпереход"
+        );
+        assert_eq!(app.flight.view_dir, flight::ViewDir::Right);
 
-        // Прыжок закончился — нативный вид возвращается сам.
+        // Переключение вида во время перехода не сбрасывает анимацию.
+        app.key_event(KeyCode::F3, true, false);
+        assert_eq!(app.flight.view_dir, flight::ViewDir::Left);
+        assert_eq!(
+            app.flight.transition_kind(),
+            Some(flight::TransitionKind::Hyperspace),
+            "смена вида сбросила переход"
+        );
+
+        // Прыжок закончился — нативный вид остаётся с тем же направлением.
         app.machine.mem[flight::Z80_JUMP_DOCKING] = 0;
         app.machine.mem[flight::Z80_FLG_JUMP_DOCKING] = 0;
-        app.open_pending_flight();
-        assert!(app.flight.active, "вид не вернулся после прыжка");
-        assert_eq!(app.flight.view_dir, flight::ViewDir::Right);
+        app.machine.mem[flight::Z80_JUMP_COUNTDOWN] = 0;
+        app.follow_flight_screen();
+        assert!(app.flight.active, "вид закрылся после прыжка");
+        assert!(!app.flight.in_transition(), "переход не закончился");
+        assert_eq!(app.flight.view_dir, flight::ViewDir::Left);
     }
 
-    /// После стыковки запрос нативного вида не переживает посадку: игра
-    /// оказывается на станции, и рендер не должен включиться сам.
+    /// Стыковка при открытом нативном виде: рендер показывает тоннель, а
+    /// после посадки закрывается и не оставляет запроса на возврат.
     #[test]
     fn flight_request_cleared_after_docking() {
         let opts = test_options();
@@ -2248,30 +2371,38 @@ mod intro_tests {
         app.machine.mem[flight::Z80_IND_DANGER] = 1;
         app.machine.mem[flight::Z80_JUMP_DOCKING] = 0;
         app.machine.mem[flight::Z80_FLG_JUMP_DOCKING] = 0;
+        app.machine.mem[flight::Z80_JUMP_COUNTDOWN] = 0;
 
         app.key_event(KeyCode::F1, true, false);
         assert!(app.flight.active);
+        // Даём рендеру увидеть настоящий полётный экран.
+        app.follow_flight_screen();
 
         // Стыковка: тоннель, затем станционный экран.
         app.machine.mem[flight::Z80_JUMP_DOCKING] = 1;
         app.machine.mem[flight::Z80_FLG_JUMP_DOCKING] = 1;
         app.follow_flight_screen();
-        assert!(!app.flight.active);
-        assert!(app.pending_flight.is_some(), "вид не запомнен на время стыковки");
+        assert!(app.flight.active, "вид закрылся на время стыковки");
+        assert_eq!(
+            app.flight.transition_kind(),
+            Some(flight::TransitionKind::Docking),
+            "стыковка показана не как стыковка"
+        );
 
         app.machine.mem[flight::Z80_IND_DANGER] = 0;
         app.machine.mem[flight::Z80_JUMP_DOCKING] = 0;
         app.machine.mem[flight::Z80_FLG_JUMP_DOCKING] = 0;
         app.machine.mem[flight::Z80_WHAT_ON_SCREEN] = 0x0B;
+        app.follow_flight_screen();
         app.open_pending_flight();
         assert!(!app.flight.active, "вид включился на станции");
         assert!(app.pending_flight.is_none(), "запрос вида пережил стыковку");
     }
 
-    /// Реальная игра: `F1` на станции запускает вылет, нативный рендер ждёт
-    /// окончания анимации и включается только в настоящем полёте.
+    /// Реальная игра: `F1` на станции запускает вылет, нативный рендер
+    /// включается уже во время перехода и показывает свою анимацию вылета.
     #[test]
-    fn real_launch_defers_native_flight() {
+    fn real_launch_shows_native_transition() {
         let opts = kladov_options();
         let mut m = boot_kladov();
         let (intro, game) = scene_markers(true);
@@ -2286,11 +2417,13 @@ mod intro_tests {
             m.run_frame();
         }
         assert_eq!(
-            m.mem[flight::Z80_IND_DANGER], 0,
+            m.mem[flight::Z80_IND_DANGER],
+            0,
             "игра не оказалась на станции"
         );
         assert_eq!(
-            m.mem[flight::Z80_WHAT_ON_SCREEN], 0x0B,
+            m.mem[flight::Z80_WHAT_ON_SCREEN],
+            0x0B,
             "игра не на станционном экране"
         );
 
@@ -2298,19 +2431,35 @@ mod intro_tests {
         app.key_event(KeyCode::F1, true, false);
         assert!(!app.flight.active, "F1 включил вид до вылета");
         app.apply_input();
-        app.machine.run_frame();
-        app.open_pending_flight();
-        assert!(!app.flight.active, "вид включился в начале вылета");
 
+        // Ждём, пока оригинал начнёт переход вылета: нативный вид должен
+        // включиться сразу с анимацией, не дожидаясь её конца.
         let mut frames = 0;
         while frames < 1500 && !app.flight.active {
             app.machine.run_frame();
             app.open_pending_flight();
             frames += 1;
         }
-        assert!(app.flight.active, "F1 не включил вид после вылета");
-        assert!(frames > 0, "вид включился без ожидания анимации");
+        assert!(app.flight.active, "F1 не включил вид во время вылета");
+        assert_eq!(
+            app.flight.transition_kind(),
+            Some(flight::TransitionKind::Launch),
+            "вылет показан не как вылет"
+        );
         assert_eq!(app.flight.view_dir, flight::ViewDir::Forward);
+
+        // Переход заканчивается — остаётся обычный нативный полёт.
+        let mut frames = 0;
+        while frames < 1500 && app.flight.in_transition() {
+            app.machine.run_frame();
+            app.follow_flight_screen();
+            frames += 1;
+        }
+        assert!(
+            !app.flight.in_transition(),
+            "анимация вылета не закончилась"
+        );
+        assert!(app.flight.active, "вид закрылся после вылета");
     }
 
     /// В настоящем полёте `F4` — это оригинальный вид вправо, а не закупка.
@@ -2502,7 +2651,10 @@ mod intro_tests {
                 break;
             }
         }
-        assert!(cleared_at.is_some(), "SPACE не запустил игру (флаг не снят)");
+        assert!(
+            cleared_at.is_some(),
+            "SPACE не запустил игру (флаг не снят)"
+        );
     }
 
     /// Точная логика «залипающего» флага заставки.
@@ -2732,7 +2884,7 @@ mod intro_tests {
         let (w, h) = (1280usize, 960usize);
         let mut hd = display::Frame::new(w, h);
         let g = cockpit::panel_geometry(w as u32, h as u32);
-        fl.draw(&mut hd, &g);
+        fl.draw(&mut hd, &g, font);
         // Выше панели вид непрозрачен, ниже — прозрачен (там панель).
         for y in 0..g.panel_y as usize {
             assert!(
@@ -2764,7 +2916,6 @@ mod intro_tests {
         }
     }
 
-
     /// Меню паузы рисует затемнённый пункт SAVE на заставке.
     #[test]
     fn intro_pause_menu_dims_save() {
@@ -2780,7 +2931,10 @@ mod intro_tests {
         };
         let (dim_on_intro, white_on_intro) = counts(true);
         let (dim_in_game, white_in_game) = counts(false);
-        assert!(dim_on_intro > 0, "на заставке пункт SAVE должен быть затемнён");
+        assert!(
+            dim_on_intro > 0,
+            "на заставке пункт SAVE должен быть затемнён"
+        );
         assert_eq!(dim_in_game, 0, "в игре SAVE не затемняется");
         assert!(
             white_on_intro < white_in_game,
@@ -2813,16 +2967,25 @@ mod intro_tests {
         // Автоповтор управляющей клавиши тоже не закрывает (иначе Space
         // «залипал» бы в игру как огонь).
         app.key_event(KeyCode::Space, true, false);
-        assert!(app.hdmap.active, "Space должен листать карту, а не закрывать");
+        assert!(
+            app.hdmap.active,
+            "Space должен листать карту, а не закрывать"
+        );
         app.key_event(KeyCode::Space, true, true);
-        assert!(app.hdmap.active, "автоповтор Space не должен закрывать карту");
+        assert!(
+            app.hdmap.active,
+            "автоповтор Space не должен закрывать карту"
+        );
 
         // F4 на станции: сначала клавиша 4 уходит игре, затем открывается
         // нативный экран закупки.
         app.key_event(KeyCode::Escape, true, false);
         assert!(!app.hdmap.active);
         app.key_event(KeyCode::F4, true, false);
-        assert!(!app.shop.active, "закупка должна открыться после кадра игры");
+        assert!(
+            !app.shop.active,
+            "закупка должна открыться после кадра игры"
+        );
         app.apply_input();
         app.machine.run_frame();
         app.open_pending_shop();
@@ -2837,5 +3000,4 @@ mod intro_tests {
             "нажатие O не передано игре"
         );
     }
-
 }
