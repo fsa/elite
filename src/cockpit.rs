@@ -103,8 +103,11 @@ pub enum Indicator {
 
 /// Цвет индикатора опасности.
 ///
-/// Значения взяты из оригинала (`IndDanger`): `0x04` — зелёный, `0x06` —
-/// жёлтый, `0x02` — красный, `0x63` — мигающий красный. `0` — не рисовать.
+/// Цвета совпадают с атрибутами, которые `PrintIndDanger` записывает в экран:
+/// `0x04` — зелёный, `0x06` — жёлтый, `0x02` — красный. Мигание — это
+/// чередование атрибутов `0x02` и `0x00`, поэтому отдельное состояние
+/// [`Danger::BlinkingRed`] оставлено только для искусственных значений
+/// (например, заставки), а из памяти читается уже текущая фаза.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Danger {
     Off,
@@ -115,13 +118,16 @@ pub enum Danger {
 }
 
 impl Danger {
-    /// Разобрать байт `IndDanger`.
-    pub fn from_byte(value: u8) -> Danger {
-        match value {
+    /// Разобрать атрибут знакоместа индикатора опасности.
+    ///
+    /// В оригинале (`PrintIndDanger`) в атрибут пишется цвет чернил: `0x04`,
+    /// `0x06`, `0x02` или `0x00` (погасшая фаза мигания). Старшие биты
+    /// (яркость, мигание) на цвет самого кружка не влияют.
+    pub fn from_attribute(value: u8) -> Danger {
+        match value & 0x07 {
             0x04 => Danger::Green,
             0x06 => Danger::Yellow,
             0x02 => Danger::Red,
-            0x63 => Danger::BlinkingRed,
             _ => Danger::Off,
         }
     }
@@ -314,8 +320,6 @@ pub struct CockpitLayout {
     pub rotate_du: u16,
     /// Запас ракет (`PilotMissiles`), 0..4.
     pub missiles: u16,
-    /// Индикатор опасности (`IndDanger`) — задаёт цвет рамки.
-    pub ind_danger: u16,
     /// Признак межпланетного пространства (`InFreeSpace`).
     pub in_free_space: u16,
     /// Координаты планеты (`PlanetCrd`, 9 байт знак-величина).
@@ -342,7 +346,6 @@ pub const ELITE_COCKPIT: CockpitLayout = CockpitLayout {
     rotate_lr: 0x705C,
     rotate_du: 0x705E,
     missiles: 0xA845,
-    ind_danger: 0x7062,
     in_free_space: 0x7061,
     planet_crd: 0x706E,
     // Для оригинальной версии адрес фиктивных координат пока не найден.
@@ -365,7 +368,6 @@ pub const KLADOV_COCKPIT: CockpitLayout = CockpitLayout {
     rotate_lr: 0x70FE,
     rotate_du: 0x7100,
     missiles: 0xD083,
-    ind_danger: 0x7104,
     in_free_space: 0x7103,
     planet_crd: 0x7110,
     fake_planet_crd: 0x8AC3,
@@ -406,7 +408,7 @@ impl CockpitLayout {
                 gauge(self.shield_unit1 + 4),
                 gauge(self.shield_unit1 + 6),
             ],
-            danger: Danger::from_byte(byte(self.ind_danger)),
+            danger: read_danger(mem),
             compass: self.read_compass(mem),
             blink: true,
         }
@@ -474,6 +476,22 @@ impl CockpitLayout {
 /// Максимальное смещение указателя компаса от центра, как в оригинале:
 /// `CompasPointerCrdX/Y` лежат в диапазоне `-8..=8`.
 const COMPASS_POINTER_MAX: i8 = 8;
+
+/// Атрибут экрана, которым `PrintIndDanger` задаёт цвет кружка опасности
+/// (левый верхний угол 2x2 знакоместа, адрес в области атрибутов `0x5A28`).
+///
+/// Читать нужно именно экранный атрибут, а не переменную `IndDanger`:
+/// `PrintIndDanger` в конце каждой печати снова записывает в `IndDanger`
+/// значение `0x04` («в полёте»), а также подменяет его на красный при пустых
+/// щитах и мигает красным при неполном четвёртом энергоблоке. В памяти игры
+/// к концу кадра почти всегда остаётся `0x04`, тогда как на экране в этот
+/// момент может быть жёлтый, красный или погасший кружок.
+const DANGER_ATTR: u16 = 0x5A28;
+
+/// Прочитать текущий цвет индикатора опасности с экрана.
+fn read_danger(mem: &[u8]) -> Danger {
+    Danger::from_attribute(mem.get(DANGER_ATTR as usize).copied().unwrap_or(0))
+}
 
 /// Прочитать 24-битную координату в формате знак-величина.
 fn read_coordinate(b: &[u8]) -> f32 {
@@ -1959,9 +1977,21 @@ mod tests {
         assert_eq!(v.compass.x, 0);
         assert_eq!(v.compass.y, -6);
 
-        // `IndDanger` разбирается в цвет индикатора.
-        mem[l.ind_danger as usize] = 0x63;
-        assert_eq!(l.read(&mem).danger, Danger::BlinkingRed);
+        // Цвет опасности берётся с экрана: `PrintIndDanger` пишет в атрибут
+        // текущую фазу (мигающий красный — это чередование 0x02 и 0x00).
+        mem[DANGER_ATTR as usize] = 0x06;
+        assert_eq!(l.read(&mem).danger, Danger::Yellow);
+        mem[DANGER_ATTR as usize] = 0x02;
+        assert_eq!(l.read(&mem).danger, Danger::Red);
+        mem[DANGER_ATTR as usize] = 0x00;
+        assert_eq!(l.read(&mem).danger, Danger::Off);
+
+        // Переменная `IndDanger` к концу кадра уже сброшена в «зелёный»
+        // (`PrintIndDanger` делает это после печати), поэтому она не должна
+        // перекрывать реально показанный на экране красный.
+        mem[0x7104] = 0x04;
+        mem[DANGER_ATTR as usize] = 0x02;
+        assert_eq!(l.read(&mem).danger, Danger::Red);
     }
 
     /// Случайные значения заставки детерминированы и не выходят из диапазонов.
