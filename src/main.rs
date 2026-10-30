@@ -969,8 +969,12 @@ impl<'a> App<'a> {
             // В полёте, но идёт прыжок/стыковка: включим вид после перехода.
             self.pending_flight = Some(dir);
         } else {
-            // Оригинал на своей карте/инвентаре — нативный вид не нужен.
-            self.pending_flight = None;
+            // Оригинал на своём экране (карта, инвентарь, статус). Клавиши
+            // `1`-`4` возвращают его в кабину, поэтому запоминаем вид и
+            // включаем рендер, как только Z80 снова окажется в полёте. Иначе
+            // первый `F1` только закрывал бы Z80-экран, а нативный вид
+            // требовал бы второго нажатия.
+            self.pending_flight = Some(dir);
         }
         self.pending_key = matrix_pos(key);
     }
@@ -2162,6 +2166,45 @@ mod intro_tests {
         app.machine.mem[flight::Z80_FLG_JUMP_DOCKING] = 0;
         app.open_pending_flight();
         assert!(app.flight.active, "вид не включился после прыжка");
+    }
+
+    /// Возврат из Z80-экрана (инвентарь по `Enter`): `F1` должен сразу
+    /// вернуть игру в кабину и включить нативный вид, а не требовать второго
+    /// нажатия.
+    #[test]
+    fn f1_returns_from_z80_screen_in_one_press() {
+        let opts = test_options();
+        let mut app = App::new(boot(), &opts);
+        // Игра в полёте, но открыт родной экран (например, инвентарь).
+        app.machine.mem[flight::Z80_WHAT_ON_SCREEN] = 8;
+        app.machine.mem[flight::Z80_IND_DANGER] = 1;
+        app.machine.mem[flight::Z80_JUMP_DOCKING] = 0;
+        app.machine.mem[flight::Z80_FLG_JUMP_DOCKING] = 0;
+        assert!(!app.flight.active);
+
+        app.key_event(KeyCode::F1, true, false);
+        assert!(!app.flight.active, "вид открылся поверх Z80-экрана");
+        assert_eq!(
+            app.pending_flight,
+            Some(flight::ViewDir::Forward),
+            "F1 не запомнил вид для возврата"
+        );
+        app.apply_input();
+        let (row, bit) = matrix_pos(KeyCode::Digit1).expect("1 в матрице");
+        assert_eq!(
+            app.machine.keyboard[row] & (1 << bit),
+            0,
+            "F1 не передал игре клавишу 1"
+        );
+
+        // Z80 обработал клавишу и снова показывает кабину.
+        app.machine.mem[flight::Z80_WHAT_ON_SCREEN] = 0;
+        app.open_pending_flight();
+        assert!(
+            app.flight.active,
+            "первый F1 не вернул нативный вид без повторного нажатия"
+        );
+        assert_eq!(app.flight.view_dir, flight::ViewDir::Forward);
     }
 
     /// Если прыжок начался при открытом нативном виде, рендер прячется на
