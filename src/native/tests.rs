@@ -44,22 +44,22 @@ fn boot_kladov() -> Spectrum {
     let game = std::fs::read(format!("{base}/zx_bin/kladov.bin"))
         .expect("zx_bin/kladov.bin (собрать: python3 tools/make_kladov_image.py)");
     let mut m = Spectrum::new(Some(&rom));
-    m.load(crate::KLADOV_LOAD_ADDR, &game);
+    m.load(crate::boot::KLADOV_LOAD_ADDR, &game);
     let c = &mut m.cpu;
-    c.a = crate::KLADOV_STATE_A;
-    c.f = crate::KLADOV_STATE_F;
-    c.b = (crate::KLADOV_STATE_BC >> 8) as u8;
-    c.c = (crate::KLADOV_STATE_BC & 0xFF) as u8;
-    c.d = (crate::KLADOV_STATE_DE >> 8) as u8;
-    c.e = (crate::KLADOV_STATE_DE & 0xFF) as u8;
-    c.h = (crate::KLADOV_STATE_HL >> 8) as u8;
-    c.l = (crate::KLADOV_STATE_HL & 0xFF) as u8;
-    c.ix = crate::KLADOV_STATE_IX;
-    c.iy = crate::KLADOV_STATE_IY;
-    c.sp = crate::KLADOV_STATE_SP;
-    c.pc = crate::KLADOV_STATE_PC;
-    c.i = crate::KLADOV_I;
-    c.r = crate::KLADOV_STATE_R;
+    c.a = crate::boot::KLADOV_STATE_A;
+    c.f = crate::boot::KLADOV_STATE_F;
+    c.b = (crate::boot::KLADOV_STATE_BC >> 8) as u8;
+    c.c = (crate::boot::KLADOV_STATE_BC & 0xFF) as u8;
+    c.d = (crate::boot::KLADOV_STATE_DE >> 8) as u8;
+    c.e = (crate::boot::KLADOV_STATE_DE & 0xFF) as u8;
+    c.h = (crate::boot::KLADOV_STATE_HL >> 8) as u8;
+    c.l = (crate::boot::KLADOV_STATE_HL & 0xFF) as u8;
+    c.ix = crate::boot::KLADOV_STATE_IX;
+    c.iy = crate::boot::KLADOV_STATE_IY;
+    c.sp = crate::boot::KLADOV_STATE_SP;
+    c.pc = crate::boot::KLADOV_STATE_PC;
+    c.i = crate::boot::KLADOV_I;
+    c.r = crate::boot::KLADOV_STATE_R;
     c.im = 2;
     c.iff1 = true;
     c.iff2 = true;
@@ -76,17 +76,17 @@ fn boot_elite() -> Spectrum {
     let game = std::fs::read(format!("{base}/zx_bin/elite.bin"))
         .expect("zx_bin/elite.bin (собрать: ./build.sh)");
     let mut m = Spectrum::new(Some(&rom));
-    m.load(crate::GAME_LOAD_ADDR, &game);
-    let [lo, hi] = crate::INTERRUPT_HANDLER.to_le_bytes();
+    m.load(crate::boot::GAME_LOAD_ADDR, &game);
+    let [lo, hi] = crate::boot::INTERRUPT_HANDLER.to_le_bytes();
     for i in 0..128u16 {
-        let a = crate::IM2_TABLE + i * 2;
+        let a = crate::boot::IM2_TABLE + i * 2;
         m.mem[a as usize] = lo;
         m.mem[a as usize + 1] = hi;
     }
     m.mem[0x71F8] = 0x3E;
     m.mem[0x71F9] = 0x02;
-    m.cpu.pc = crate::GAME_ENTRY;
-    m.cpu.sp = crate::GAME_SP;
+    m.cpu.pc = crate::boot::GAME_ENTRY;
+    m.cpu.sp = crate::boot::GAME_SP;
     m
 }
 

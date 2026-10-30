@@ -10,6 +10,7 @@
 //! (`CUSHION`) не даёт колбэкам PipeWire забирать данные из пустой очереди.
 
 use std::collections::VecDeque;
+use std::fs;
 use std::sync::{Arc, Mutex};
 use std::time::Instant;
 
@@ -38,6 +39,47 @@ struct Shared {
 /// Аудиовыход. Держим в `main`, пока работает игра.
 pub struct Audio {
     shared: Arc<Mutex<Shared>>,
+}
+
+/// Запустить вывод звука, если он не отключён. Возвращает `None` (с
+/// предупреждением), если аудиобэкенд не инициализировался.
+pub fn start_output(mute: bool) -> Option<Audio> {
+    if mute {
+        return None;
+    }
+    match Audio::start() {
+        Ok(audio) => Some(audio),
+        Err(e) => {
+            eprintln!("audio: cannot start PipeWire output: {e}");
+            None
+        }
+    }
+}
+
+/// Write mono `samples` (at `rate` Hz) as a 16-bit PCM WAV file.
+pub fn write_wav(path: &str, samples: &[i16], rate: u32) {
+    let data_len = (samples.len() * 2) as u32;
+    let mut out = Vec::with_capacity(44 + samples.len() * 2);
+    out.extend_from_slice(b"RIFF");
+    out.extend_from_slice(&(36 + data_len).to_le_bytes());
+    out.extend_from_slice(b"WAVEfmt ");
+    out.extend_from_slice(&16u32.to_le_bytes());
+    out.extend_from_slice(&1u16.to_le_bytes()); // PCM
+    out.extend_from_slice(&1u16.to_le_bytes()); // mono
+    out.extend_from_slice(&rate.to_le_bytes());
+    out.extend_from_slice(&(rate * 2).to_le_bytes()); // byte rate
+    out.extend_from_slice(&2u16.to_le_bytes()); // block align
+    out.extend_from_slice(&16u16.to_le_bytes()); // bits per sample
+    out.extend_from_slice(b"data");
+    out.extend_from_slice(&data_len.to_le_bytes());
+    for s in samples {
+        out.extend_from_slice(&s.to_le_bytes());
+    }
+    if let Err(e) = fs::write(path, &out) {
+        eprintln!("cannot write wav {path}: {e}");
+    } else {
+        println!("wrote {path}");
+    }
 }
 
 impl Audio {
