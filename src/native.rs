@@ -47,6 +47,11 @@ pub fn install(m: &mut Spectrum, _kladov: bool) {
     // Печать символа/токена: нативно — просмотр таблицы токенов, остальное
     // отдаётся Z80 (Yield). Верхняя оценка — самый длинный поиск токена.
     install_hook(m, 0xD425, print_message1_a_hook, PRINT_MSG1_MAX);
+    // Отдельная точка перехвата игровых сообщений: `sub_D499` печатает один
+    // символ на ZX-экран, через неё проходят все сообщения игры (подписи
+    // вида, гиперпрыжок, отсчёт). Хук только копит текст, состояние машины
+    // не меняет (см. `print_char_tap_hook`).
+    install_hook(m, 0xD499, print_char_tap_hook, 8);
 }
 
 /// Регистрирует хук вместе с верхней оценкой его тактов (см. `hook_max`).
@@ -698,6 +703,35 @@ fn token_scan(cpu: &mut Z80, m: &mut Spectrum, pre_cycles: u64, pre_steps: u32) 
     cpu.pc = 0xD454;
     m.hook_yield = true;
     cycles
+}
+
+/// `CrdXPrnSymbol` — печатный курсор игры: колонка (0..31), строка хода.
+const Z80_CRD_X_PRN_SYMBOL: usize = 0x60F9;
+
+/// Перехват `sub_D499` (0xD499) — печать одного символа на экран ZX.
+///
+/// Через `sub_D499` проходят **все** печатаемые символы всех сообщений
+/// игры (диспетчер `PrintMessage1_A` → литералы здесь, диграфы тоже
+/// через неё, `PrintMessage2` → `sub_D470` → сюда). Хук только подглядывает:
+/// пока [`Spectrum::game_msg`] включён, он записывает символ и позицию
+/// печати (`CrdXPrnSymbol` до продвижения курсора), после чего аккуратно
+/// отдаёт управление Z80 на второй инструкции рутины. Первая инструкция
+/// `cp 0x41h` заряжается флагами и тактами вручную, поэтому состояние
+/// машины (регистры, память, `R`, число тактов) не отличается от прогона
+/// без хука — `hooks_match_plain_run` это проверяет.
+fn print_char_tap_hook(cpu: &mut Z80, m: &mut Spectrum) -> u64 {
+    if m.game_msg.enabled {
+        let col = m.mem.get(Z80_CRD_X_PRN_SYMBOL).copied().unwrap_or(0);
+        let row = m.mem.get(Z80_CRD_X_PRN_SYMBOL + 1).copied().unwrap_or(0);
+        m.game_msg.push_char(cpu.a, row, col);
+    }
+    // `cp 0x41h`: только флаги, `A` не меняется (как `sub8(a, v, 0)` без
+    // сохранения результата).
+    let _ = cpu.sub8(cpu.a, 0x41, 0);
+    bump_r(cpu, 1);
+    cpu.pc = 0xD49B;
+    m.hook_yield = true;
+    7 // `cp n` в этой машине — 7 тактов
 }
 
 /// Счётчик обращений к хуку (только для тестов).
@@ -3591,6 +3625,47 @@ mod tests {
                 }
             }
         }
+    }
+
+    /// Сквозная печать сообщения через нативные хуки: диспетчер
+    /// `PrintMessage1_A` раскрывает токен, `sub_D499` печатает символы —
+    /// хук перехвата копит их в [`Spectrum::game_msg`].
+    #[test]
+    fn message_capture_collects_token_string() {
+        let mut n = kladov();
+        install(&mut n, true);
+        n.game_msg.enabled = true;
+
+        // Детерминированная таблица токенов, как в `print_message1_matches_z80`:
+        // строка 0x87 (135) — четыре буквы 'F'.
+        const TBL: u16 = 0x9000;
+        let mut p = TBL as usize;
+        for i in 0..201usize {
+            let ch = b'A' + (i % 26) as u8;
+            for _ in 0..(1 + i % 4) {
+                n.mem[p] = ch;
+                p += 1;
+            }
+            n.mem[p] = 0;
+            p += 1;
+        }
+        n.mem[0xF11A] = TBL as u8;
+        n.mem[0xF11B] = (TBL >> 8) as u8;
+        // Печатный курсор: строка 2, колонка 0.
+        n.mem[0x60F9] = 0;
+        n.mem[0x60FA] = 2;
+
+        // Токен `0x15` → `0x15 + 0x72 = 0x87` → "FFFF".
+        set(&mut n.cpu, 0x15, 0x1234, 0x5678, 0x00);
+        n.cpu.b = 0x11;
+        n.cpu.c = 0x22;
+        n.cpu.r = 0x3E;
+        run_until_ret(&mut n, 0xD425, 0x4116, true);
+
+        assert_eq!(n.game_msg.text, "FFFF", "хук печати не собрал строку");
+        assert_eq!(n.game_msg.row, 2);
+        assert_eq!(n.game_msg.col, 0);
+        assert_eq!(n.game_msg.frames, 0);
     }
 
     /// Пара машин (чистый Z80 и с хуками) с одинаковым детерминированным

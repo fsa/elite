@@ -1325,6 +1325,14 @@ impl<'a> App<'a> {
         let Some(window) = self.window.clone() else {
             return;
         };
+        // Перехват игровых сообщений — только пока открыт нативный вид
+        // полёта. Переход `false → true` сбрасывает накопленную строку,
+        // чтобы на новом открытии вида не висело старое сообщение.
+        let capture = self.flight.active && !self.menu;
+        if capture && !self.machine.game_msg.enabled {
+            self.machine.game_msg.clear();
+        }
+        self.machine.game_msg.enabled = capture;
         // Область показа и HD-слой нативного рендера — в разрешении окна.
         // Слой очищается каждый кадр: нативные хуки рисуют в него заново
         // во время эмуляции, показ накладывает слой поверх ZX-кадра.
@@ -1348,6 +1356,8 @@ impl<'a> App<'a> {
                     self.machine.run_frame();
                     self.follow_flight_screen();
                     self.flight.sync_from_z80(&self.machine.mem);
+                    self.flight.sync_game_msg(&self.machine.game_msg);
+                    self.machine.game_msg.next_frame();
                     self.flight.tick(1.0 / 50.0);
                     self.play_frame_audio();
                 } else {

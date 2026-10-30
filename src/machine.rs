@@ -15,6 +15,68 @@ pub const CYCLES_PER_FRAME: u64 = 69888;
 /// (возврат по адресу из стека) машина выполняет сама.
 pub type Hook = fn(&mut Z80, &mut Spectrum) -> u64;
 
+/// Перехват игровой печати (`sub_D499`, 0xD499).
+///
+/// Игра печатает сообщения посимвольно на ZX-экран: «Front View» и прочие
+/// подписи, строки гиперпрыжка, числа отсчёта. Пока [`GameMsgTap::enabled`]
+/// взведён, хук печати копит текст строки (вместе с текстовой строкой ZX,
+/// в которую он печатается) — нативный вид полёта показывает его на своём
+/// HD-слое своим шрифтом. Сам эмулятор не меняется: хук только читает
+/// `A` и `CrdXPrnSymbol`.
+#[derive(Clone, Debug, Default)]
+pub struct GameMsgTap {
+    /// Копить ли текст (нативный вид полёта открыт). Переход `false → true`
+    /// сбрасывает строку, чтобы на новом открытии вида не висела старая.
+    pub enabled: bool,
+    /// Текущая строка сообщения (только печатные символы). Меняется, когда
+    /// игра печатает следующий символ на ту же строку; смена позиции печати
+    /// начинает новую строку.
+    pub text: String,
+    /// Номер текстовой строки ZX (0..=23), в которую печатается строка.
+    pub row: u8,
+    /// Колонка (0..=31) первого символа строки.
+    pub col: u8,
+    /// Возраст строки в кадрах: 0 — символы печатались в текущем кадре.
+    pub frames: u32,
+}
+
+impl GameMsgTap {
+    /// Сбросить строку (при включении перехвата).
+    pub fn clear(&mut self) {
+        self.text.clear();
+        self.row = 0;
+        self.col = 0;
+        self.frames = 0;
+    }
+
+    /// Добавить напечатанный символ. `row`/`col` — позиция следующего
+    /// символа на экране ZX (`CrdXPrnSymbol` до его продвижения).
+    pub fn push_char(&mut self, c: u8, row: u8, col: u8) {
+        if !self.enabled || !(0x20..=0x7E).contains(&c) {
+            return;
+        }
+        self.frames = 0;
+        // Продолжение той же строки: та же строка, колонка следует за хвостом.
+        let continuing = self.row == row
+            && self.text.len() <= usize::from(u8::MAX)
+            && self.col.wrapping_add(self.text.len() as u8) == col;
+        if !continuing {
+            self.text.clear();
+            self.row = row;
+            self.col = col;
+        }
+        self.text.push(c as char);
+    }
+
+    /// Старение строки: вызывается раз в кадр после прогона эмулятора (при
+    /// выключенном перехвате возраст не растёт).
+    pub fn next_frame(&mut self) {
+        if self.enabled {
+            self.frames = self.frames.saturating_add(1);
+        }
+    }
+}
+
 
 pub struct Spectrum {
     pub mem: Vec<u8>,
@@ -96,6 +158,9 @@ pub struct Spectrum {
     /// меняет размер под окно; непрозрачные пиксели слоя (старший байт
     /// != 0) накладываются на масштабированный ZX-кадр при показе.
     pub hd: display::Frame,
+    /// Перехват игровых сообщений (заполняет хук печати, читает нативный
+    /// вид полёта). См. [`GameMsgTap`].
+    pub game_msg: GameMsgTap,
 }
 
 impl Spectrum {
@@ -144,6 +209,7 @@ impl Spectrum {
             save_requested: false,
             load_requested: false,
             hd: display::Frame::new(display::ZX_W, display::ZX_H),
+            game_msg: GameMsgTap::default(),
         }
     }
 
@@ -505,5 +571,67 @@ mod audio_tests {
         assert_eq!(out.len(), m.audio_rate as usize / 50);
         assert!(out.iter().any(|&s| s > 0), "no beeper-high samples");
         assert!(out.iter().any(|&s| s < 0), "no beeper-low samples");
+    }
+}
+
+#[cfg(test)]
+mod game_msg_tap_tests {
+    use super::*;
+
+    #[test]
+    fn tap_assembles_line_by_position() {
+        let mut t = GameMsgTap::default();
+        t.enabled = true;
+        // Строка печатается посимвольно: колонка следует за хвостом.
+        t.push_char(b'F', 1, 0);
+        t.push_char(b'R', 1, 1);
+        t.push_char(b'O', 1, 2);
+        t.push_char(b'N', 1, 3);
+        t.push_char(b'T', 1, 4);
+        assert_eq!(t.text, "FRONT");
+        assert_eq!(t.row, 1);
+        assert_eq!(t.col, 0);
+        assert_eq!(t.frames, 0);
+
+        // Печать с той же строки, но левее хвоста — новая строка.
+        t.push_char(b'V', 1, 6);
+        assert_eq!(t.text, "V");
+
+        // Смена строки тоже начинает новую строку.
+        t.push_char(b'H', 3, 2);
+        t.push_char(b'I', 3, 3);
+        assert_eq!(t.text, "HI");
+        assert_eq!(t.row, 3);
+        assert_eq!(t.col, 2);
+    }
+
+    #[test]
+    fn tap_ignores_control_codes_and_counts_age() {
+        let mut t = GameMsgTap::default();
+        t.enabled = true;
+        t.push_char(0x0D, 4, 0); // перевод строки не печатается
+        t.push_char(0x7F, 4, 0); // не-ASCII тоже
+        assert!(t.text.is_empty());
+
+        t.push_char(b'A', 4, 0);
+        assert_eq!(t.text, "A");
+        assert_eq!(t.frames, 0);
+
+        t.next_frame();
+        t.next_frame();
+        assert_eq!(t.frames, 2, "возраст растёт только при включённом перехвате");
+        t.enabled = false;
+        t.next_frame();
+        assert_eq!(t.frames, 2, "выключенный перехват не старит строку");
+    }
+
+    #[test]
+    fn tap_clear_resets_line() {
+        let mut t = GameMsgTap::default();
+        t.enabled = true;
+        t.push_char(b'X', 2, 0);
+        t.clear();
+        assert!(t.text.is_empty());
+        assert_eq!(t.frames, 0);
     }
 }

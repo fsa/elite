@@ -8,7 +8,13 @@
 //!
 //! Экран занимает верхнюю часть окна — вид из кабины. Ниже и вокруг него
 //! рисуется нативный кокпит [`crate::cockpit`], тот же, что на заставке.
-//! Заголовков, подсказок и собственного HUD поверх вида нет.
+//! Поверх вида — сообщения, которые печатает сама игра: они перехватываются
+//! из эмулятора (хук `sub_D499`, см. [`crate::machine::GameMsgTap`]) и
+//! показываются тем же шрифтом, цветом и в том же месте, что заголовок
+//! «E L I T E» на заставке. Пока свежего сообщения нет, на этом месте
+//! держится название направления («Front View» и т.п.), а при подготовке
+//! к гиперпрыжку внизу — строка «Hyperspace -- <имя планеты>» (размером
+//! и цветом приглашения заставки).
 //!
 //! Объекты (корабли, станция, планета, солнце) рисуются общим рендером
 //! [`crate::render3d`], что и корабль на заставке: непрозрачные тёмные грани
@@ -16,6 +22,7 @@
 
 use crate::cockpit::{self, CockpitGeom};
 use crate::display::Frame;
+use crate::machine::GameMsgTap;
 use crate::render3d::{self, Rotation, Screen};
 use crate::shipdata::{self, Ship};
 
@@ -39,6 +46,15 @@ const PLANET_COLOR: u32 = 0xFF00_5800;
 const LAUNCH_TIME: f32 = 1.2;
 /// Цвет надписей в переходе: приглушённый циан, чтобы не спорить с HUD.
 const TRANSITION_TEXT: u32 = 0xFF80_FFFF;
+/// Белый — цвет подписи направления вида и строки гиперпрыжка, как у
+/// надписей на заставке (`E L I T E`, приглашение).
+const VIEW_LABEL_COLOR: u32 = 0xFFD7_D7D7;
+/// Сколько кадров (50 Гц) держать перехваченное сообщение игры после
+/// последнего напечатанного символа: старые строки не должны висеть вечно.
+const MSG_MAX_AGE: u32 = 75;
+/// Текстовые строки ZX `0..=2` — верхняя зона вида, куда игра печатает
+/// подписи; здесь нативный экран показывает верхнюю надпись.
+const MSG_TOP_ROWS: u8 = 2;
 /// Цвет тоннеля гиперпрыжка.
 const WARP_RING_COLOR: u32 = 0xFF40_A0FF;
 /// Максимальная скорость в единицах `HighDeltaSpeed` (0..=31).
@@ -161,6 +177,12 @@ pub const Z80_FLG_JUMP_DOCKING: usize = 0xD040;
 /// на экране идут числа `10..1`. Ноль означает, что началась сама анимация
 /// перехода.
 pub const Z80_JUMP_COUNTDOWN: usize = 0xDBA1;
+/// `PlanetName` — имя планеты, которое игра сгенерировала последним
+/// (`GeneratePlanetName` + `CopyPlanetName`, 8 байт ASCII). При подготовке
+/// к гиперпрыжку (`GoJump` → `SearchNearPlanet`) это имя выбранной цели.
+const Z80_PLANET_NAME: usize = 0x6E93;
+/// Длина буфера `PlanetName`.
+const Z80_PLANET_NAME_LEN: usize = 8;
 /// `HighAngleLR` — угловая скорость крена (знак-величина).
 const Z80_HIGH_ANGLE_LR: usize = 0x70E4;
 /// `HighAngleDU` — угловая скорость тангажа (знак-величина).
@@ -318,6 +340,17 @@ impl Transition {
     }
 }
 
+/// Снимок перехваченного игрового сообщения для показа на виде.
+#[derive(Clone, Debug, Default)]
+struct CapturedMsg {
+    /// Текст строки ровно как напечатал Z80.
+    text: String,
+    /// Текстовая строка ZX (0..=23), куда она печаталась.
+    row: u8,
+    /// Возраст в кадрах после последнего символа.
+    frames: u32,
+}
+
 /// Экран полёта по данным Z80.
 pub struct Flight {
     /// Показывать ли вид из кабины вместо ZX-кадра.
@@ -356,6 +389,10 @@ pub struct Flight {
     rng: u32,
     /// Нативная анимация вылета/прыжка/стыковки вместо ZX-ролика.
     transition: Option<Transition>,
+    /// Имя планеты для надписи «Hyperspace -- <имя>» во время отсчёта.
+    jump_planet_name: String,
+    /// Последнее сообщение, перехваченное из игры (см. [`GameMsgTap`]).
+    tap_msg: Option<CapturedMsg>,
 }
 
 impl Flight {
@@ -379,6 +416,8 @@ impl Flight {
             planet_color: PLANET_COLOR,
             rng: 0x1234_5678,
             transition: None,
+            jump_planet_name: String::new(),
+            tap_msg: None,
         };
         f.stars = make_stars(&mut f.rng, STAR_COUNT);
         f
@@ -402,6 +441,8 @@ impl Flight {
         self.cobra_mk4 = false;
         self.bodies.clear();
         self.transition = None;
+        self.jump_planet_name.clear();
+        self.tap_msg = None;
         if planet_color != 0 {
             self.planet_color = planet_green(planet_color);
         }
@@ -426,6 +467,9 @@ impl Flight {
         } else {
             TransitionKind::Docking
         };
+        if kind == TransitionKind::Hyperspace && countdown > 0 {
+            self.jump_planet_name = planet_name_from_z80(mem);
+        }
         self.transition = Some(Transition::new(kind, countdown));
     }
 
@@ -454,6 +498,33 @@ impl Flight {
     /// Закрыть экран и вернуться к ZX-кадру (клавиша `1`).
     pub fn close(&mut self) {
         self.active = false;
+    }
+
+    /// Забрать перехваченное игровое сообщение (заполняет хук печати
+    /// `sub_D499`; см. [`crate::machine::GameMsgTap`]).
+    pub fn sync_game_msg(&mut self, tap: &GameMsgTap) {
+        if !self.active || !tap.enabled || tap.text.trim().is_empty() {
+            return;
+        }
+        self.tap_msg = Some(CapturedMsg {
+            text: tap.text.clone(),
+            row: tap.row,
+            frames: tap.frames,
+        });
+    }
+
+    /// Текст верхней надписи: свежее сообщение игры из верхней зоны вида,
+    /// причёсанное с большой буквы; иначе — подпись направления вида.
+    fn top_label(&self) -> String {
+        self.tap_msg
+            .as_ref()
+            .and_then(|m| {
+                (m.frames <= MSG_MAX_AGE
+                    && m.row <= MSG_TOP_ROWS
+                    && !m.text.trim().is_empty())
+                    .then(|| pretty_title(m.text.trim()))
+            })
+            .unwrap_or_else(|| view_label(self.view_dir).to_string())
     }
 
     /// Следить за экраном, который показывает Z80, и закрывать нативный вид,
@@ -523,6 +594,10 @@ impl Flight {
                 t.countdown = mem.get(Z80_JUMP_COUNTDOWN).copied().unwrap_or(0);
                 if t.countdown == 0 {
                     t.warp = true;
+                } else {
+                    // Во время отсчёта игра держит в `PlanetName` имя цели
+                    // прыжка — показываем его внизу (как на заставке).
+                    self.jump_planet_name = planet_name_from_z80(mem);
                 }
             }
         }
@@ -719,7 +794,10 @@ impl Flight {
                 // До нуля отсчёта показываем обычный полёт: игрок ещё может
                 // осмотреться, а цифра говорит, сколько осталось.
                 self.draw_flight_scene(frame, &screen, &view_rot, view_bottom, s);
-                self.draw_view_label(frame, font, vx, vy, vw, s);
+                // Во время отсчёта верхнюю надпись рисуем сами (подпись вида):
+                // перехваченные игра печатает в поле зрения цифры, их здесь не
+                // показываем.
+                self.draw_view_label(frame, font, vx, vy, vw, s, false);
                 self.draw_jump_countdown(frame, font, vx, vy, vw, vh, s, t.countdown);
             }
             Some(t) => {
@@ -743,7 +821,7 @@ impl Flight {
             }
             None => {
                 self.draw_flight_scene(frame, &screen, &view_rot, view_bottom, s);
-                self.draw_view_label(frame, font, vx, vy, vw, s);
+                self.draw_view_label(frame, font, vx, vy, vw, s, true);
             }
         }
         frame.clear_clip();
@@ -769,22 +847,41 @@ impl Flight {
         }
     }
 
-    /// Подпись текущего направления вида в верхней части окна.
-    fn draw_view_label(&self, frame: &mut Frame, font: &[u8], vx: i32, vy: i32, vw: i32, s: i32) {
+    /// Верхняя надпись вида: тем же шрифтом и в том же месте, что заголовок
+    /// «E L I T E» на заставке — одной текстовой строкой ниже верхней рамки,
+    /// по центру.
+    ///
+    /// Пока в верхней зоне вида есть свежее сообщение самой игры (перехват
+    /// `sub_D499`), показываем его с большой буквы; иначе — подпись
+    /// направления вида. При `use_tap == false` (отсчёт гиперпрыжка) вывод
+    /// перехваченного текста отключён: игре печатает в эту зону цифры.
+    ///
+    /// Переход «сообщение игры → подпись вида» внешне незаметен: у свежих
+    /// подписей вида текст совпадает («FRONT VIEW» → «Front View», и подпись
+    /// тоже «Front View»).
+    fn draw_view_label(
+        &self,
+        frame: &mut Frame,
+        font: &[u8],
+        vx: i32,
+        vy: i32,
+        vw: i32,
+        s: i32,
+        use_tap: bool,
+    ) {
+        let text = if use_tap {
+            self.top_label()
+        } else {
+            view_label(self.view_dir).to_string()
+        };
         let scale = s.max(1) as usize;
-        draw_centered_text(
-            frame,
-            font,
-            vx,
-            vy + 4 * s,
-            vw,
-            view_label(self.view_dir),
-            TRANSITION_TEXT,
-            scale,
-        );
+        draw_centered_text(frame, font, vx, vy + 8 * s, vw, &text, VIEW_LABEL_COLOR, scale);
     }
 
-    /// Обратный отсчёт гиперпрыжка поверх обычного полёта.
+    /// Обратный отсчёт гиперпрыжка поверх обычного полёта: число по центру
+    /// и строка «Hyperspace -- <имя планеты>» внизу — размером шрифта и
+    /// цветом как приглашение на заставке (одна текстовая строка выше
+    /// нижней рамки, по центру).
     fn draw_jump_countdown(
         &self,
         frame: &mut Frame,
@@ -796,21 +893,28 @@ impl Flight {
         s: i32,
         raw: u8,
     ) {
-        let title_scale = (s * 2).max(1) as usize;
-        draw_centered_text(
-            frame,
-            font,
-            vx,
-            vy + 4 * s,
-            vw,
-            "HYPERSPACE",
-            TRANSITION_TEXT,
-            title_scale,
-        );
         let number = countdown_number(raw).to_string();
         let scale = (s * 4).max(2) as usize;
         let y = vy + vh / 2 - 4 * scale as i32;
         draw_centered_text(frame, font, vx, y, vw, &number, SUN_COLOR, scale);
+
+        let name = self.jump_planet_name.trim();
+        let label = if name.is_empty() {
+            "Hyperspace".to_string()
+        } else {
+            format!("Hyperspace -- {name}")
+        };
+        let hint_y = vy + vh - 16 * s;
+        draw_centered_text(
+            frame,
+            font,
+            vx,
+            hint_y,
+            vw,
+            &label,
+            VIEW_LABEL_COLOR,
+            s.max(1) as usize,
+        );
     }
 
     /// Анимация вылета: станция уходит назад, звёзды и кольца разгоняются.
@@ -1485,6 +1589,24 @@ fn read_signed8(b: u8) -> f32 {
     if (b & 0x80) != 0 { -mag } else { mag }
 }
 
+/// Прочитать имя планеты из буфера игры `PlanetName` (до 8 символов ASCII):
+/// обрезается по нулевому байту и по хвостовым пробелам.
+fn planet_name_from_z80(mem: &[u8]) -> String {
+    let end = (Z80_PLANET_NAME + Z80_PLANET_NAME_LEN).min(mem.len());
+    if Z80_PLANET_NAME >= end {
+        return String::new();
+    }
+    let mut name: String = mem[Z80_PLANET_NAME..end]
+        .iter()
+        .take_while(|&&c| c != 0 && (0x20..0x7F).contains(&c))
+        .map(|&c| c as char)
+        .collect();
+    while name.ends_with(' ') {
+        name.pop();
+    }
+    name
+}
+
 /// Зелёный оттенок планеты с небольшой вариацией яркости по системе.
 ///
 /// Канал красного и синего всегда нулевой, поэтому планета не совпадает по
@@ -1494,13 +1616,32 @@ fn planet_green(seed: u32) -> u32 {
     0xFF00_0000 | (g << 8)
 }
 
-/// Подпись направления вида, как в оригинале (`FRONT`, `REAR`, ...).
+/// «Причесать» сообщение игры: слова с большой буквы, остальные символы
+/// строчные — как заголовок «Elite» на заставке. «FRONT VIEW» → «Front View»,
+/// «DOCKING COMPUTERS  ON» → «Docking Computers On».
+fn pretty_title(s: &str) -> String {
+    s.split_whitespace()
+        .map(|w| {
+            let mut chars = w.chars();
+            match chars.next() {
+                Some(first) => {
+                    first.to_uppercase().collect::<String>() + &chars.as_str().to_lowercase()
+                }
+                None => String::new(),
+            }
+        })
+        .collect::<Vec<_>>()
+        .join(" ")
+}
+
+/// Подпись направления вида: те же слова, что в оригинале (`FRONT`, `REAR`,
+/// ...), но с большой буквы, как заголовок «Elite» на заставке.
 fn view_label(dir: ViewDir) -> &'static str {
     match dir {
-        ViewDir::Forward => "FRONT VIEW",
-        ViewDir::Back => "REAR VIEW",
-        ViewDir::Left => "LEFT VIEW",
-        ViewDir::Right => "RIGHT VIEW",
+        ViewDir::Forward => "Front View",
+        ViewDir::Back => "Rear View",
+        ViewDir::Left => "Left View",
+        ViewDir::Right => "Right View",
     }
 }
 
@@ -2329,10 +2470,10 @@ mod tests {
 
     #[test]
     fn view_labels_match_directions() {
-        assert_eq!(view_label(ViewDir::Forward), "FRONT VIEW");
-        assert_eq!(view_label(ViewDir::Back), "REAR VIEW");
-        assert_eq!(view_label(ViewDir::Left), "LEFT VIEW");
-        assert_eq!(view_label(ViewDir::Right), "RIGHT VIEW");
+        assert_eq!(view_label(ViewDir::Forward), "Front View");
+        assert_eq!(view_label(ViewDir::Back), "Rear View");
+        assert_eq!(view_label(ViewDir::Left), "Left View");
+        assert_eq!(view_label(ViewDir::Right), "Right View");
     }
 
     #[test]
@@ -2389,5 +2530,93 @@ mod tests {
         mem[Z80_JUMP_COUNTDOWN] = 0;
         f.sync_from_z80(&mem);
         assert!(f.transition.expect("переход пропал").warp);
+    }
+
+    #[test]
+    fn hyperspace_countdown_reads_target_planet_name() {
+        // Имя цели прыжка игра держит в `PlanetName`; нативный рендер только
+        // читает его из памяти, ничего не ищет сам.
+        let mut f = open();
+        // Память должна покрывать `JumpDocking` и `JumpCountdown` (старшие
+        // адреса полётного состояния лежат выше `Z80_MEM_MIN`).
+        let mut mem = vec![0u8; Z80_JUMP_COUNTDOWN + 1];
+        mem[Z80_JUMP_DOCKING] = 1;
+        mem[Z80_JUMP_COUNTDOWN] = 0x0A;
+        mem[Z80_PLANET_NAME..Z80_PLANET_NAME + 8].copy_from_slice(b"DISOHERE");
+        f.start_transition(false, &mem);
+        f.sync_from_z80(&mem);
+        assert_eq!(f.transition_kind(), Some(TransitionKind::Hyperspace));
+        assert_eq!(f.jump_planet_name, "DISOHERE");
+
+        // Имя обрезается по нулю и по хвостовым пробелам.
+        mem[Z80_PLANET_NAME..Z80_PLANET_NAME + 8].copy_from_slice(b"LAVE    ");
+        mem[Z80_JUMP_COUNTDOWN] = 0x06;
+        f.sync_from_z80(&mem);
+        assert_eq!(f.jump_planet_name, "LAVE");
+
+        // Как только отсчёт дошёл до нуля, начинается тоннель.
+        mem[Z80_JUMP_COUNTDOWN] = 0;
+        f.sync_from_z80(&mem);
+        assert!(f.transition.expect("переход пропал").warp);
+    }
+
+    #[test]
+    fn pretty_title_capitalizes_words() {
+        assert_eq!(pretty_title("FRONT VIEW"), "Front View");
+        assert_eq!(pretty_title("REAR VIEW"), "Rear View");
+        assert_eq!(pretty_title("LEFT VIEW"), "Left View");
+        assert_eq!(pretty_title("RIGHT VIEW"), "Right View");
+        assert_eq!(
+            pretty_title("  DOCKING  COMPUTERS  ON "),
+            "Docking Computers On"
+        );
+        assert_eq!(pretty_title(""), "");
+    }
+
+    #[test]
+    fn captured_message_replaces_view_label_while_fresh() {
+        let mut f = open();
+        // Свежее сообщение игры в верхней зоне вида — показываем его.
+        f.tap_msg = Some(CapturedMsg {
+            text: "FUEL LOW".into(),
+            row: 1,
+            frames: 0,
+        });
+        assert_eq!(f.top_label(), "Fuel Low");
+        // Устаревшее сообщение уступает место подписи направления вида.
+        f.tap_msg.as_mut().expect("сообщение не установлено").frames = MSG_MAX_AGE + 1;
+        assert_eq!(f.top_label(), "Front View");
+    }
+
+    #[test]
+    fn captured_message_from_lower_rows_is_ignored_for_top_label() {
+        let mut f = open();
+        f.tap_msg = Some(CapturedMsg {
+            text: "ANY".into(),
+            row: MSG_TOP_ROWS + 1,
+            frames: 0,
+        });
+        assert_eq!(f.top_label(), "Front View");
+        f.view_dir = ViewDir::Back;
+        assert_eq!(f.top_label(), "Rear View");
+    }
+
+    #[test]
+    fn sync_game_msg_copies_tap_line() {
+        let mut f = open();
+        let mut tap = GameMsgTap::default();
+        tap.enabled = true;
+        tap.push_char(b'F', 1, 0);
+        tap.push_char(b'U', 1, 1);
+        tap.push_char(b'E', 1, 2);
+        tap.push_char(b'L', 1, 3);
+        f.sync_game_msg(&tap);
+        assert_eq!(f.tap_msg.as_ref().map(|m| m.text.as_str()), Some("FUEL"));
+        assert_eq!(f.tap_msg.as_ref().map(|m| m.row), Some(1));
+        assert_eq!(f.tap_msg.as_ref().map(|m| m.frames), Some(0));
+        // Печать с другой позиции начинает новую строку.
+        tap.push_char(b'H', 3, 5);
+        f.sync_game_msg(&tap);
+        assert_eq!(f.tap_msg.as_ref().map(|m| m.text.as_str()), Some("H"));
     }
 }
