@@ -104,11 +104,42 @@ fn view_rotation(dir: ViewDir) -> Rotation {
     }
 }
 
+/// Показывает ли Z80 сейчас настоящий вид из кабины, а не переход.
+///
+/// Одного `WhatOnScreen < 4` мало: во время вылета со станции и прыжка игра
+/// тоже держит `WhatOnScreen = 0`, но рисует тоннель/анимацию и игнорирует
+/// управление. Нативные экраны (закупка, карта) должны ждать, пока оригинал
+/// действительно окажется в полёте.
+pub fn z80_in_cockpit(mem: &[u8]) -> bool {
+    let Some(&screen) = mem.get(Z80_WHAT_ON_SCREEN) else {
+        return false;
+    };
+    screen < 4
+        && mem.get(Z80_JUMP_DOCKING).copied().unwrap_or(1) == 0
+        && mem.get(Z80_FLG_JUMP_DOCKING).copied().unwrap_or(1) == 0
+}
+
+/// Пристыкован ли корабль к станции (`IndDanger == 0`).
+pub fn z80_is_docked(mem: &[u8]) -> bool {
+    mem.get(Z80_IND_DANGER).copied() == Some(0)
+}
+
 // Адреса в памяти Z80 (версия Кладова). Координаты объектов ведутся уже
 // в системе координат игрока: камера стоит в начале координат вдоль +Z.
 /// Минимальный объём памяти, покрывающий все адреса полётных данных
 /// (включая таблицу звёзд и флаг J-драйва).
 const Z80_MEM_MIN: usize = 0x7EE0;
+/// `WhatOnScreen` — что сейчас показывает игра: `0..=3` — вид из кабины
+/// (вперёд, назад, влево, вправо), остальные значения — станция и её меню,
+/// карты, инвентарь и прочие экраны оригинала.
+pub const Z80_WHAT_ON_SCREEN: usize = 0x70E3;
+/// `IndDanger`: `0` — корабль пристыкован к станции, иначе — в полёте.
+pub const Z80_IND_DANGER: usize = 0x7104;
+/// `JumpDocking`: `1` — прыжок/стыковка, `2` — межгалактический прыжок.
+pub const Z80_JUMP_DOCKING: usize = 0xD03F;
+/// `FlgJumpDocking`: `1`, пока идёт анимация прыжка/стыковки/вылета. В это
+/// время оригинал игнорирует клавиши `1`-`4`.
+pub const Z80_FLG_JUMP_DOCKING: usize = 0xD040;
 /// `HighAngleLR` — угловая скорость крена (знак-величина).
 const Z80_HIGH_ANGLE_LR: usize = 0x70E4;
 /// `HighAngleDU` — угловая скорость тангажа (знак-величина).
@@ -231,6 +262,12 @@ pub struct Flight {
     pub active: bool,
     /// Текущее направление вида из кабины.
     pub view_dir: ViewDir,
+    /// С момента открытия экрана Z80 успел показать настоящий вид из кабины.
+    ///
+    /// Нужен только как совместимость для перехода со станции: если экран уже
+    /// открыт, а `WhatOnScreen` ещё равен станционному `0x0B`, не закрываем его
+    /// до первого полётного кадра.
+    seen_flight_screen: bool,
     /// Предыдущий `TempLaser` из Z80 — по его росту ловим выстрел.
     prev_laser_temp: Option<u8>,
     /// Предыдущий передний щит Z80 — по его падению ловим атаку.
@@ -262,6 +299,7 @@ impl Flight {
         let mut f = Flight {
             active: false,
             view_dir: ViewDir::Forward,
+            seen_flight_screen: false,
             prev_laser_temp: None,
             prev_z80_shield: None,
             prev_star_table: None,
@@ -286,6 +324,7 @@ impl Flight {
     pub fn open(&mut self, planet_color: u32) {
         self.active = true;
         self.view_dir = ViewDir::Forward;
+        self.seen_flight_screen = false;
         self.prev_laser_temp = None;
         self.prev_z80_shield = None;
         self.prev_star_table = None;
@@ -303,7 +342,8 @@ impl Flight {
         self.stars = make_stars(&mut self.rng, STAR_COUNT);
     }
 
-    /// Переключить вид по сторонам (F1-F4 в нативном полёте).
+    /// Переключить вид по сторонам (F1-F4 в нативном полёте): те же клавиши
+    /// 1-4, которыми оригинал меняет `WhatOnScreen`.
     pub fn set_view_dir(&mut self, dir: ViewDir) {
         if !self.active {
             return;
@@ -314,9 +354,38 @@ impl Flight {
         }
     }
 
-    /// Закрыть экран и вернуться к ZX-кадру (клавиша `1` или `F1`).
+    /// Закрыть экран и вернуться к ZX-кадру (клавиша `1`).
     pub fn close(&mut self) {
         self.active = false;
+    }
+
+    /// Следить за экраном, который показывает Z80, и закрывать нативный вид,
+    /// когда игра уходит с вида из кабины.
+    ///
+    /// Игровые клавиши (`O`, `I`, `Enter` и т.п.) всегда уходят в эмулятор,
+    /// поэтому оригинал сам переключает `WhatOnScreen`. Без этой проверки
+    /// нативный вид оставался поверх ZX-кадра, и карта/инвентарь открывались
+    /// «в фоне». Анимации вылета/прыжка/стыковки тоже показывает Z80: нативный
+    /// вид на это время закрывается, иначе ролик был бы не виден.
+    pub fn follow_z80_screen(&mut self, mem: &[u8]) {
+        if !self.active {
+            return;
+        }
+        let Some(&screen) = mem.get(Z80_WHAT_ON_SCREEN) else {
+            return;
+        };
+        if screen < 4 {
+            self.seen_flight_screen = true;
+        }
+        if !z80_in_cockpit(mem) {
+            // `0x0B` — экран станции. После запуска со станции Z80 держит его
+            // несколько кадров, пока идёт анимация вылета; уже открытый экран
+            // не закрываем до первого настоящего полётного кадра.
+            if screen == 0x0B && !self.seen_flight_screen {
+                return;
+            }
+            self.active = false;
+        }
     }
 
     /// Синхронизировать рендер с данными из памяти Z80.

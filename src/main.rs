@@ -120,10 +120,9 @@ fn parse_args() -> Options {
                 println!("  --native   включить нативные (Rust) замены подпрограмм");
                 println!("  --save FILE фиксированный файл командира вместо диалога");
                 println!("  --fullscreen запуск в полноэкранном режиме (borderless)");
-                println!("В игре: F1 — экран полёта (нативный рендер по данным Z80; назад — 1 или F1),");
-                println!("        F10 — карта галактики (нативная), F4 — закупка");
-                println!("        оборудования (нативная), Esc — меню паузы");
-                println!("        (продолжить/сохранить/загрузить/выход),");
+                println!("В игре: F1-F4 — оригинальные клавиши 1-4 (F1 включает");
+                println!("        нативный вид полёта, F4 — нативную закупку),");
+                println!("        F10 — карта галактики, Esc — меню паузы,");
                 println!("        F11 — полный экран.");
                 println!();
                 println!("Заставка нативная: [SPACE] — начать игру, [Esc] — меню");
@@ -136,21 +135,25 @@ fn parse_args() -> Options {
                 println!();
                 println!("Управление:");
                 println!("  Esc        меню паузы (продолжить/сохранить/загрузить/выход)");
-                println!("  F1         экран полёта (в игре; возврат — 1 или F1)");
-                println!("  F4         закупка оборудования (нативный экран)");
+                println!("  F1-F4      клавиши 1-4 оригинала; F1 включает нативный");
+                println!("             вид полёта, F4 на станции — нативную закупку");
+                println!("  F10        нативная карта галактики");
                 println!("  F11, Alt+Enter полный экран");
                 println!("  Ctrl+Q     выход из игры");
                 println!();
                 println!("Заставка: SPACE запускает игру, остальные клавиши не срабатывают.");
                 println!();
                 println!("Карта галактики (F10): стрелки/NM/XS — курсор, Enter —");
-                println!("  ближайшая планета, +/- или колесо — масштаб, F1 — чит:");
-                println!("  телепорт на станцию выбранной планеты, Esc — закрыть.");
+                println!("  ближайшая планета, +/- или колесо — масштаб, Esc — закрыть;");
+                println!("  F1-F4 — клавиши 1-4 игры (F1 ещё и включает вид полёта),");
+                println!("  Ctrl+F1 — чит: телепорт на станцию выбранной планеты.");
                 println!();
                 println!("Экран полёта (F1): управление как в оригинале — S/X или");
                 println!("  ↑/↓ — тангаж, N/M или ←/→ — крен, Space — ускорение,");
                 println!("  Shift — торможение, A/RightCtrl — огонь; Esc — меню паузы,");
-                println!("  1 или F1 — назад к Z80-кадру.");
+                println!("  F1-F4 — виды вперёд/назад/влево/вправо (клавиши 1-4),");
+                println!("  1 — назад к ZX-кадру. Переходы игры (O, Enter и т.п.)");
+                println!("  закрывают нативный вид и показывают экран оригинала.");
                 println!();
                 println!("Закупка оборудования (F4): клик/Enter — купить,");
                 println!("  1-9 (+вторая цифра) — номер товара, стрелки — выбор,");
@@ -732,6 +735,14 @@ struct App<'a> {
     /// Нажатие игровой клавиши, которым был закрыт нативный экран: один кадр
     /// принудительно подаётся в эмулятор, даже если клавишу уже отпустили.
     pending_key: Option<(usize, u8)>,
+    /// После кадра эмулятора открыть нативный экран закупки. Нужно для `F4`:
+    /// сначала оригинал должен перейти в режим `4` (equip), и только потом
+    /// нативный экран встаёт на паузу.
+    pending_shop: bool,
+    /// Нативный вид, который нужно включить, как только Z80 окажется в
+    /// настоящем полёте. Нужен для `F1` на станции: сначала идёт родная
+    /// анимация вылета, и только после неё показывается нативный рендер.
+    pending_flight: Option<flight::ViewDir>,
     /// Состояние джойстика Kempston (5 бит).
     kempston: [bool; 5],
     ctrl: bool,
@@ -775,6 +786,8 @@ impl<'a> App<'a> {
             surface: None,
             matrix: [[false; 5]; 8],
             pending_key: None,
+            pending_shop: false,
+            pending_flight: None,
             kempston: [false; 5],
             ctrl: false,
             alt: false,
@@ -832,6 +845,108 @@ impl<'a> App<'a> {
         self.next_frame = Instant::now();
     }
 
+    /// Открыть нативный экран закупки поверх текущего состояния игры.
+    fn open_shop(&mut self) {
+        self.shop.open(&self.machine.mem, equip::KLADOV_SHOP);
+        if let Some(w) = &self.window {
+            let size = w.inner_size();
+            self.shop.resize(size.width, size.height);
+        }
+        self.hdmap.close();
+        self.menu = false;
+        self.pending_key = None;
+        self.pending_flight = None;
+    }
+
+    /// Открыть закупку, отложенную до конца кадра (см. `pending_shop`).
+    fn open_pending_shop(&mut self) {
+        if !self.pending_shop {
+            return;
+        }
+        self.pending_shop = false;
+        if !self.machine.intro_seen
+            && !self.flight.active
+            && !self.hdmap.active
+            && flight::z80_is_docked(&self.machine.mem)
+        {
+            self.open_shop();
+        }
+    }
+
+    /// Открыть нативный экран полёта поверх текущего состояния игры.
+    fn open_flight(&mut self, dir: flight::ViewDir) {
+        let planet_color = current_planet_color(&self.machine.mem);
+        self.flight.open(planet_color);
+        self.flight.set_view_dir(dir);
+        self.hdmap.close();
+        self.shop.close();
+        self.menu = false;
+        self.pending_key = None;
+        self.pending_shop = false;
+        self.pending_flight = None;
+    }
+
+    /// Открыть нативный вид, отложенный до настоящего полёта (см.
+    /// `pending_flight`). Пока оригинал играет вылет/прыжок или находится на
+    /// станции, рендер не включается — ZX-кадр показывает всё как в игре.
+    fn open_pending_flight(&mut self) {
+        let Some(dir) = self.pending_flight else {
+            return;
+        };
+        if !self.flight.active && flight::z80_in_cockpit(&self.machine.mem) {
+            self.open_flight(dir);
+        }
+    }
+
+    /// Нажатие `F1`-`F4`: отдать игре оригинальную клавишу `1`-`4` и включить
+    /// соответствующий нативный вид, если игра уже в полёте.
+    ///
+    /// На станции это родные команды (вылет/покупка/продажа/оборудование):
+    /// нативный вид включается не сразу после нажатия, а когда эмулятор
+    /// действительно перейдёт в полёт. В прыжке и анимациях вид ждёт их
+    /// окончания, чтобы не заслонять ZX-кадр.
+    fn function_key(&mut self, code: KeyCode) {
+        let Some(key) = function_game_key(code) else {
+            return;
+        };
+        let Some(dir) = function_view(code) else {
+            return;
+        };
+        let docked = flight::z80_is_docked(&self.machine.mem);
+        let in_cockpit = flight::z80_in_cockpit(&self.machine.mem);
+        let in_transition = self.machine.mem.get(flight::Z80_JUMP_DOCKING).copied().unwrap_or(0) != 0
+            || self.machine.mem.get(flight::Z80_FLG_JUMP_DOCKING).copied().unwrap_or(0) != 0;
+
+        self.hdmap.close();
+        self.shop.close();
+        self.menu = false;
+        self.pending_shop = false;
+        if docked {
+            // На станции `F1`-`F4` — родные команды. `F1` (вылет) включает
+            // нативный вид после анимации; `F4` — нативную закупку после
+            // кадра игры; `F2`/`F3` остаются родными экранами покупки/продажи.
+            self.pending_shop = code == KeyCode::F4;
+            self.pending_flight = if code == KeyCode::F1 && in_cockpit {
+                // Снимок/переход, где станция уже отдала полётный экран.
+                self.open_flight(dir);
+                None
+            } else if code == KeyCode::F1 {
+                Some(dir)
+            } else {
+                None
+            };
+        } else if in_cockpit {
+            self.open_flight(dir);
+        } else if in_transition {
+            // В полёте, но идёт прыжок/стыковка: включим вид после перехода.
+            self.pending_flight = Some(dir);
+        } else {
+            // Оригинал на своей карте/инвентаре — нативный вид не нужен.
+            self.pending_flight = None;
+        }
+        self.pending_key = matrix_pos(key);
+    }
+
     /// Обработать событие клавиши (по физической позиции, раскладка не важна).
     fn key_event(&mut self, code: KeyCode, pressed: bool, repeat: bool) {
         if let Some((row, bit)) = matrix_pos(code) {
@@ -856,23 +971,14 @@ impl<'a> App<'a> {
                 self.shop.close();
                 self.menu = false;
                 self.pending_key = None;
+                self.pending_flight = None;
             }
             return;
         }
-        // F4 — нативный экран закупки оборудования.
-        if code == KeyCode::F4 && !repeat {
-            if self.shop.active {
-                self.shop.close();
-            } else if !self.machine.intro_seen && !self.flight.active {
-                self.shop.open(&self.machine.mem, equip::KLADOV_SHOP);
-                if let Some(w) = &self.window {
-                    let size = w.inner_size();
-                    self.shop.resize(size.width, size.height);
-                }
-                self.hdmap.close();
-                self.menu = false;
-                self.pending_key = None;
-            }
+        // F4 при открытой закупке закрывает её. В остальных режимах это
+        // обычная функция `F4` (вид вправо или команда станции).
+        if code == KeyCode::F4 && !repeat && self.shop.active {
+            self.shop.close();
             return;
         }
         // При открытой карте всё управление принадлежит ей (игра на паузе).
@@ -888,15 +994,21 @@ impl<'a> App<'a> {
                         self.hdmap.snap_to_nearest();
                     }
                 }
-                // F1 — временный чит: телепорт «на станцию» выбранной планеты.
-                // Пишем координаты системы и уходим в родную ветку
+                // Ctrl+F1 — временный чит: телепорт «на станцию» выбранной
+                // планеты. Пишем координаты системы и уходим в родную ветку
                 // переинициализации (см. `native::request_teleport`), затем
                 // закрываем карту — игра перерисует экран станции.
-                KeyCode::F1 if !repeat => {
+                KeyCode::F1 if self.ctrl && !repeat => {
                     if let Some((x, y)) = self.hdmap.selected_coords() {
                         native::request_teleport(&mut self.machine, save_layout_kladov(), x, y);
                         self.hdmap.close();
                     }
+                }
+                // F1-F4 — те же клавиши 1-4 оригинала: карта закрывается,
+                // нажатие уходит игре, а нативный вид/закупка включаются по
+                // фактическому состоянию эмулятора.
+                KeyCode::F1 | KeyCode::F2 | KeyCode::F3 | KeyCode::F4 if !repeat => {
+                    self.function_key(code);
                 }
                 KeyCode::Equal | KeyCode::NumpadAdd => self.hdmap.zoom_by(1),
                 KeyCode::Minus | KeyCode::NumpadSubtract => self.hdmap.zoom_by(-1),
@@ -925,6 +1037,11 @@ impl<'a> App<'a> {
                 }
                 KeyCode::ArrowUp => self.shop.move_selection(-1),
                 KeyCode::ArrowDown => self.shop.move_selection(1),
+                // F1-F3 — клавиши 1-3 оригинала: закупка закрывается и
+                // нажатие уходит игре. F4 выше уже закрывает экран.
+                KeyCode::F1 | KeyCode::F2 | KeyCode::F3 if !repeat => {
+                    self.function_key(code);
+                }
                 KeyCode::Enter | KeyCode::Space => {
                     // На автоповторе не подтверждаем выбор повторно.
                     if !repeat {
@@ -961,42 +1078,25 @@ impl<'a> App<'a> {
             self.menu_key(code);
             return;
         }
-        // Экран полёта: F1-4 переключают вид из кабины, 1 возвращает Z80-кадр,
-        // Esc открывает меню паузы (оно рисуется поверх экрана, а симуляция замирает).
+        // Экран полёта: F1-4 — те же клавиши 1-4 оригинала (передний/задний/
+        // левый/правый вид) плюс переключение нативного вида; 1 возвращает
+        // Z80-кадр, Esc открывает меню паузы.
         if self.flight.active {
-            match code {
-                KeyCode::F1 => {
-                    self.flight.set_view_dir(crate::flight::ViewDir::Forward);
-                }
-                KeyCode::F2 => {
-                    self.flight.set_view_dir(crate::flight::ViewDir::Back);
-                }
-                KeyCode::F3 => {
-                    self.flight.set_view_dir(crate::flight::ViewDir::Left);
-                }
-                KeyCode::F4 => {
-                    self.flight.set_view_dir(crate::flight::ViewDir::Right);
-                }
-                KeyCode::Digit1 => self.flight.close(),
-                KeyCode::Escape => {
-                    self.menu = true;
-                    self.menu_sel = 0;
-                }
-                _ => {}
-            }
-            return;
-        }
-        // F1 — экран полёта (нативный рендер по данным Z80). Доступен только
-        // в игре (не на заставке); повторный F1 или клавиша 1 возвращают
-        // ZX-кадр.
-        if code == KeyCode::F1 {
-            if !self.machine.intro_seen {
-                let planet_color = current_planet_color(&self.machine.mem);
-                self.flight.open(planet_color);
-                self.hdmap.close();
-                self.shop.close();
-                self.menu = false;
-                self.pending_key = None;
+            let view = match code {
+                KeyCode::F1 => Some(crate::flight::ViewDir::Forward),
+                KeyCode::F2 => Some(crate::flight::ViewDir::Back),
+                KeyCode::F3 => Some(crate::flight::ViewDir::Left),
+                KeyCode::F4 => Some(crate::flight::ViewDir::Right),
+                _ => None,
+            };
+            if let Some(view) = view {
+                self.flight.set_view_dir(view);
+                self.pending_key = function_game_key(code).and_then(matrix_pos);
+            } else if code == KeyCode::Digit1 {
+                self.flight.close();
+            } else if code == KeyCode::Escape {
+                self.menu = true;
+                self.menu_sel = 0;
             }
             return;
         }
@@ -1014,6 +1114,13 @@ impl<'a> App<'a> {
                 self.menu = true;
                 self.menu_sel = 0;
             }
+            return;
+        }
+        // F1-F4 повторяют клавиши 1-4 основной игры. Если Z80 уже в полёте,
+        // сразу включается нативный вид; на станции сначала идёт её команда,
+        // а рендер (вид/закупка) появляется только после перехода игры.
+        if function_game_key(code).is_some() {
+            self.function_key(code);
             return;
         }
         match code {
@@ -1160,6 +1267,7 @@ impl<'a> App<'a> {
                 if !self.menu {
                     self.forward_input();
                     self.machine.run_frame();
+                    self.flight.follow_z80_screen(&self.machine.mem);
                     self.flight.sync_from_z80(&self.machine.mem);
                     self.flight.tick(1.0 / 50.0);
                     self.play_frame_audio();
@@ -1195,6 +1303,8 @@ impl<'a> App<'a> {
             } else {
                 self.apply_input();
                 self.machine.run_frame();
+                self.open_pending_shop();
+                self.open_pending_flight();
                 if self.machine.save_requested {
                     self.machine.save_requested = false;
                     do_save(&mut self.machine, self.opts, &mut self.last_path);
@@ -1516,6 +1626,29 @@ fn matrix_pos(code: KeyCode) -> Option<(usize, u8)> {
         .map(|&(_, row, bit)| (row, bit))
 }
 
+/// Оригинальная клавиша, которой соответствует функциональная: `F1` → `1`,
+/// `F2` → `2`, `F3` → `3`, `F4` → `4`.
+fn function_game_key(code: KeyCode) -> Option<KeyCode> {
+    Some(match code {
+        KeyCode::F1 => KeyCode::Digit1,
+        KeyCode::F2 => KeyCode::Digit2,
+        KeyCode::F3 => KeyCode::Digit3,
+        KeyCode::F4 => KeyCode::Digit4,
+        _ => return None,
+    })
+}
+
+/// Вид из кабины, который включает функциональная клавиша `F1`-`F4`.
+fn function_view(code: KeyCode) -> Option<flight::ViewDir> {
+    Some(match code {
+        KeyCode::F1 => flight::ViewDir::Forward,
+        KeyCode::F2 => flight::ViewDir::Back,
+        KeyCode::F3 => flight::ViewDir::Left,
+        KeyCode::F4 => flight::ViewDir::Right,
+        _ => return None,
+    })
+}
+
 /// Цифра физической клавиши (верхний ряд или цифровой блок), 0..9.
 fn digit_of(code: KeyCode) -> Option<u8> {
     Some(match code {
@@ -1736,14 +1869,30 @@ mod intro_tests {
         assert!(!app.hdmap.active, "Esc не закрыл карту");
     }
 
-    /// F4 открывает нативный экран закупки: игра на паузе, ввод уходит
-    /// экрану (не эмулятору), Esc/F4 возвращают экран игры.
+    /// F4 — оригинальная клавиша 4 плюс нативный экран закупки: сначала
+    /// эмулятору уходит клавиша 4 (игра переходит в equip ship), затем поверх
+    /// открывается закупка. Esc/F4 возвращают экран игры.
     #[test]
     fn f4_opens_and_closes_equip_shop() {
         let opts = test_options();
         let mut app = App::new(boot(), &opts);
         assert!(!app.shop.active);
         app.key_event(KeyCode::F4, true, false);
+        // Закупка отложена: сначала кадр игры с клавишей 4.
+        assert!(!app.shop.active, "F4 открыл закупку до перехода игры");
+        app.apply_input();
+        let (row, bit) = matrix_pos(KeyCode::Digit4).expect("4 в матрице");
+        assert_eq!(
+            app.machine.keyboard[row] & (1 << bit),
+            0,
+            "F4 не передал игре клавишу 4"
+        );
+        app.machine.run_frame();
+        println!(
+            "probe F4 screen=0x{:02X}",
+            app.machine.mem[flight::Z80_WHAT_ON_SCREEN]
+        );
+        app.open_pending_shop();
         assert!(app.shop.active, "F4 не открыл экран закупки");
         assert!(!app.hdmap.active, "карта галактики не должна открыться");
         // Экран снят данные живого командира.
@@ -1759,15 +1908,19 @@ mod intro_tests {
         // Esc закрывает экран (окна крепления не было).
         app.key_event(KeyCode::Escape, true, false);
         assert!(!app.shop.active, "Esc не закрыл экран закупки");
-        // Повторное открытие и закрытие по F4.
+        // Повторное открытие (с тем же кадром игры) и закрытие по F4.
         app.key_event(KeyCode::F4, true, false);
+        app.apply_input();
+        app.machine.run_frame();
+        app.open_pending_shop();
         assert!(app.shop.active);
         app.key_event(KeyCode::F4, true, false);
         assert!(!app.shop.active, "F4 не закрыл экран закупки");
     }
 
-    /// F1 открывает экран полёта: рендер идёт по данным Z80, ввод уходит в
-    /// эмулятор, F10/F4 не открываются поверх, а 1 или F1 возвращают ZX-кадр.
+    /// F1 включает нативный экран полёта и одновременно отдаёт игре клавишу 1.
+    /// F1-4 под полётом — это клавиши 1-4 оригинала (виды), а `1` возвращает
+    /// ZX-кадр; Esc открывает меню паузы.
     #[test]
     fn f1_opens_and_closes_flight() {
         let opts = test_options();
@@ -1776,6 +1929,13 @@ mod intro_tests {
         app.key_event(KeyCode::F1, true, false);
         assert!(app.flight.active, "F1 не открыл экран полёта");
         assert!(!app.hdmap.active && !app.shop.active);
+        app.apply_input();
+        let (row, bit) = matrix_pos(KeyCode::Digit1).expect("1 в матрице");
+        assert_eq!(
+            app.machine.keyboard[row] & (1 << bit),
+            0,
+            "F1 не передал игре клавишу 1"
+        );
 
         // Под экраном продолжает работать Z80, поэтому ввод должен доходить
         // до эмулятора.
@@ -1788,11 +1948,19 @@ mod intro_tests {
         );
         app.key_event(KeyCode::KeyS, false, false);
 
-        // Поверх полёта карта и закупка не открываются.
+        // F2-F4 — виды назад/влево/вправо и клавиши 2-4 оригинала.
+        app.key_event(KeyCode::F2, true, false);
+        assert_eq!(app.flight.view_dir, flight::ViewDir::Back);
+        app.apply_input();
+        let (row, bit) = matrix_pos(KeyCode::Digit2).expect("2 в матрице");
+        assert_eq!(
+            app.machine.keyboard[row] & (1 << bit),
+            0,
+            "F2 не передал игре клавишу 2"
+        );
+        // Поверх полёта карта не открывается.
         app.key_event(KeyCode::F10, true, false);
         assert!(!app.hdmap.active, "F10 открыл карту поверх полёта");
-        app.key_event(KeyCode::F4, true, false);
-        assert!(!app.shop.active, "F4 открыл закупку поверх полёта");
 
         // Esc — пауза, но экран остаётся выбранным; Esc снова — продолжить.
         app.key_event(KeyCode::Escape, true, false);
@@ -1804,11 +1972,107 @@ mod intro_tests {
         app.key_event(KeyCode::Digit1, true, false);
         assert!(!app.flight.active, "1 не закрыла экран полёта");
 
-        // Повторное открытие и закрытие по F1.
+        // F1 снова включает экран полёта (и остаётся включённым).
         app.key_event(KeyCode::F1, true, false);
         assert!(app.flight.active);
         app.key_event(KeyCode::F1, true, false);
-        assert!(!app.flight.active, "F1 не закрыл экран полёта");
+        assert!(app.flight.active, "F1 должен включать рендер, а не закрывать");
+    }
+
+    /// F1-F4 на станции повторяют оригинальные клавиши 1-4: игра получает
+    /// ту же матричную клавишу (1 — вылет, 2 — покупка, 3 — продажа,
+    /// 4 — оборудование).
+    #[test]
+    fn function_keys_send_original_number_keys() {
+        for (fkey, digit) in [
+            (KeyCode::F1, KeyCode::Digit1),
+            (KeyCode::F2, KeyCode::Digit2),
+            (KeyCode::F3, KeyCode::Digit3),
+            (KeyCode::F4, KeyCode::Digit4),
+        ] {
+            let opts = test_options();
+            let mut app = App::new(boot(), &opts);
+            app.key_event(fkey, true, false);
+            app.apply_input();
+            let (row, bit) = matrix_pos(digit).expect("цифра в матрице");
+            assert_eq!(
+                app.machine.keyboard[row] & (1 << bit),
+                0,
+                "{fkey:?} не передал игре {digit:?}"
+            );
+        }
+    }
+
+    /// F1-F4 на нативной карте тоже работают как клавиши 1-4: карта
+    /// закрывается, нажатие уходит игре; F1 включает нативный вид полёта.
+    #[test]
+    fn map_function_keys_forward_original_keys() {
+        let opts = test_options();
+        let mut app = App::new(boot(), &opts);
+        app.key_event(KeyCode::F10, true, false);
+        assert!(app.hdmap.active);
+        app.key_event(KeyCode::F1, true, false);
+        assert!(!app.hdmap.active, "F1 не закрыл карту");
+        assert!(app.flight.active, "F1 не включил нативный вид полёта");
+        app.apply_input();
+        let (row, bit) = matrix_pos(KeyCode::Digit1).expect("1 в матрице");
+        assert_eq!(
+            app.machine.keyboard[row] & (1 << bit),
+            0,
+            "F1 на карте не передал игре клавишу 1"
+        );
+
+        // F2-F4 закрывают карту и передают свои цифры.
+        for (fkey, digit) in [
+            (KeyCode::F2, KeyCode::Digit2),
+            (KeyCode::F3, KeyCode::Digit3),
+            (KeyCode::F4, KeyCode::Digit4),
+        ] {
+            let mut app = App::new(boot(), &opts);
+            app.key_event(KeyCode::F10, true, false);
+            assert!(app.hdmap.active);
+            app.key_event(fkey, true, false);
+            assert!(!app.hdmap.active, "{fkey:?} не закрыл карту");
+            assert!(!app.flight.active, "{fkey:?} не должен включать полёт");
+            app.apply_input();
+            let (row, bit) = matrix_pos(digit).expect("цифра в матрице");
+            assert_eq!(
+                app.machine.keyboard[row] & (1 << bit),
+                0,
+                "{fkey:?} на карте не передал игре {digit:?}"
+            );
+        }
+    }
+
+    /// Когда Z80 уходит с вида из кабины (карта по `O`, инвентарь по `Enter`
+    /// и т.п.), нативный вид закрывается и показывается настоящий экран игры.
+    #[test]
+    fn flight_closes_when_z80_leaves_cockpit_view() {
+        let opts = test_options();
+        let mut app = App::new(boot(), &opts);
+        app.key_event(KeyCode::F1, true, false);
+        assert!(app.flight.active);
+        // Экран станции до первого полётного вида не закрывает нативный вид:
+        // так идёт анимация вылета после запуска.
+        app.machine.mem[flight::Z80_WHAT_ON_SCREEN] = 0x0B;
+        app.flight.follow_z80_screen(&app.machine.mem);
+        assert!(app.flight.active, "станция закрыла вид во время вылета");
+        // Любой другой неполётный экран закрывает сразу, даже если полётный
+        // вид ещё не успел появиться.
+        app.machine.mem[flight::Z80_WHAT_ON_SCREEN] = 4;
+        app.flight.follow_z80_screen(&app.machine.mem);
+        assert!(!app.flight.active, "меню покупки осталось под нативным видом");
+
+        // Первый полётный экран взводит «нативный вид уже видел полёт».
+        app.key_event(KeyCode::F1, true, false);
+        assert!(app.flight.active);
+        app.machine.mem[flight::Z80_WHAT_ON_SCREEN] = 0;
+        app.flight.follow_z80_screen(&app.machine.mem);
+        assert!(app.flight.active);
+        // Карта/инвентарь оригинала — нативный вид больше не нужен.
+        app.machine.mem[flight::Z80_WHAT_ON_SCREEN] = 8;
+        app.flight.follow_z80_screen(&app.machine.mem);
+        assert!(!app.flight.active, "карта открылась под нативным видом");
     }
 
     /// Под экраном полёта эмулятор продолжает работать, поэтому ввод
@@ -2269,8 +2533,15 @@ mod intro_tests {
         app.key_event(KeyCode::Space, true, true);
         assert!(app.hdmap.active, "автоповтор Space не должен закрывать карту");
 
-        // То же для экрана закупки.
+        // F4 на станции: сначала клавиша 4 уходит игре, затем открывается
+        // нативный экран закупки.
+        app.key_event(KeyCode::Escape, true, false);
+        assert!(!app.hdmap.active);
         app.key_event(KeyCode::F4, true, false);
+        assert!(!app.shop.active, "закупка должна открыться после кадра игры");
+        app.apply_input();
+        app.machine.run_frame();
+        app.open_pending_shop();
         assert!(app.shop.active);
         app.key_event(KeyCode::KeyO, true, false);
         assert!(!app.shop.active, "игровая клавиша не закрыла закупку");
