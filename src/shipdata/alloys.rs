@@ -2,7 +2,7 @@
 //!
 //! Модель из таблицы `AdrDataShips` версии Кладова.
 
-use super::{Edge, Face, Ship, Stats, Vertex};
+use super::{Edge, Ship, Stats, Vertex};
 
 pub(super) static SHIP_D_ALLOYS: Ship = Ship {
     name: "d_Alloys",

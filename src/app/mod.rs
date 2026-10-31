@@ -15,9 +15,8 @@ use std::rc::Rc;
 use std::time::{Duration, Instant};
 
 use softbuffer::{Context, Surface};
-use winit::dpi::LogicalSize;
 use winit::event_loop::{ControlFlow, EventLoop};
-use winit::window::{Fullscreen, Window};
+use winit::window::Window;
 
 use crate::audio::{self, Audio};
 use crate::cli::Options;

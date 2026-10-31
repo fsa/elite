@@ -19,8 +19,6 @@ fn beeper_edges_become_audio() {
     assert!(out.iter().any(|&s| s < 0), "no beeper-low samples");
 }
 
-use super::*;
-
 #[test]
 fn tap_assembles_line_by_position() {
     let mut t = GameMsgTap::default();

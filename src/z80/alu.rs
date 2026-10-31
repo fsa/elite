@@ -7,21 +7,6 @@ pub(super) fn parity(v: u8) -> bool {
 }
 
 impl Z80 {
-    // flags: S, Z, X/Y from result; reset H,N,C
-    #[inline]
-    fn sz53(&mut self, v: u8) {
-        self.f = (self.f & (CF)) | if v == 0 { ZF } else { 0 } | (v & (SF | XF | YF));
-        self.f &= !(HF | NF);
-    }
-    #[inline]
-    fn sz53p(&mut self, v: u8) {
-        self.f = (self.f & CF)
-            | if v == 0 { ZF } else { 0 }
-            | (v & (SF | XF | YF))
-            | if parity(v) { PF } else { 0 };
-        self.f &= !(HF | NF);
-    }
-
     #[inline]
     pub(crate) fn inc8(&mut self, v: u8) -> u8 {
         let r = v.wrapping_add(1);

@@ -77,6 +77,11 @@ pub struct Face {
 }
 
 /// Лётно-тактические характеристики из шапки `ShipData`.
+///
+/// Поля повторяют формат таблицы; пока нативная логика читает только
+/// `collision` (радиус столкновения), остальные нужны для будущих механик
+/// и сверки с образом.
+#[allow(dead_code)]
 #[derive(Clone, Copy, Debug)]
 pub struct Stats {
     pub cargo: u8, pub collision: u8, pub fire_chance: u8,
@@ -92,6 +97,7 @@ pub struct Ship {
     /// Адрес блока в ROM версии Кладова.
     pub addr: u16,
     /// 4-й байт записи таблицы (категория).
+    #[allow(dead_code)]
     pub category: u8,
     pub stats: Stats,
     pub vertices: &'static [Vertex],
@@ -127,6 +133,9 @@ pub static SHIPS: &[Ship] = &[
 ];
 
 /// Найти модель по внутреннему имени.
+///
+/// Используется тестами заставки.
+#[allow(dead_code)]
 pub fn find(name: &str) -> Option<&'static Ship> {
     SHIPS.iter().find(|s| s.name == name)
 }

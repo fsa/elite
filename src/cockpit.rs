@@ -25,13 +25,13 @@
 //! тем же шрифтом ПЗУ ZX, что и заголовок `ELITE` на заставке.
 //!
 //! Длинная клетка-полоса задаётся в процентах от ширины панели
-//! ([`BAR_WIDTH_FRAC`]) и растягивается вместе с окном. Клетка подписи
-//! фиксирована по высоте строки ([`LABEL_WIDTH_PER_ROW_PCT`]) и при смене
-//! соотношения сторон не растягивается.
+//! ([`geometry::BAR_WIDTH_FRAC`]) и растягивается вместе с окном. Клетка подписи
+//! фиксирована по высоте строки ([`geometry::LABEL_WIDTH_PER_ROW_PCT`]) и при
+//! смене соотношения сторон не растягивается.
 //!
 //! Значения панели приходят одним снимком [`CockpitValues`]: кокпит не
-//! читает память Z80 сам. [`CockpitLayout::read`] превращает байты живой
-//! памяти в [`Indicator`] для каждой строки. Статическая часть панели и
+//! читает память Z80 сам. [`layout::CockpitLayout::read`] превращает байты живой
+//! памяти в [`values::Indicator`] для каждой строки. Статическая часть панели и
 //! значения рисуются раздельно, но вызывающий код делает один вызов
 //! [`Cockpit::draw`].
 //!
@@ -54,18 +54,24 @@
 
 use crate::display::Frame;
 
-pub use self::geometry::{
-    BAR_WIDTH_FRAC, CockpitGeom, LABEL_WIDTH_PER_ROW_PCT, LINE, Rect, panel_geometry,
-};
-pub use self::labels::{LEFT_LABELS, RIGHT_LABELS};
-pub use self::layout::{CockpitLayout, ELITE_COCKPIT, KLADOV_COCKPIT};
+pub use self::geometry::{CockpitGeom, Rect, panel_geometry};
+pub use self::layout::KLADOV_COCKPIT;
 pub use self::palette::{
-    BACKGROUND, BAR_MAGENTA, BAR_RED, CockpitStyle, DANGER_COLOR, DANGER_GREEN, DANGER_YELLOW,
-    FRAME_COLOR,
+    BACKGROUND, BAR_MAGENTA, BAR_RED, CockpitStyle, DANGER_COLOR, FRAME_COLOR,
 };
+pub use self::values::CockpitValues;
+
+// Элементы ниже нужны только тестам модуля: боевой код обращается к
+// подмодулям напрямую.
+#[cfg(test)]
+pub use self::geometry::{BAR_WIDTH_FRAC, LABEL_WIDTH_PER_ROW_PCT, LINE};
+#[cfg(test)]
+pub use self::labels::{LEFT_LABELS, RIGHT_LABELS};
+#[cfg(test)]
+pub use self::palette::{DANGER_GREEN, DANGER_YELLOW};
+#[cfg(test)]
 pub use self::values::{
-    CockpitValues, Compass, DEFLECTION_MAX, Danger, GAUGE_MAX, Indicator, MISSILE_ROW,
-    MISSILE_SLOTS, PANEL_ROWS,
+    Compass, DEFLECTION_MAX, Danger, GAUGE_MAX, Indicator, MISSILE_ROW, MISSILE_SLOTS, PANEL_ROWS,
 };
 
 mod compass;
@@ -94,6 +100,10 @@ impl Cockpit {
     ///
     /// `font` — знакогенератор ПЗУ ZX (коды 0x20..0x7F) для подписей,
     /// `style` — цвета линий и полос, `values` — снимок показаний на кадр.
+    ///
+    /// Удобная обёртка для тестов и простых вызовов; экраны заранее считают
+    /// геометрию и зовут [`Cockpit::draw_with_geom`].
+    #[allow(dead_code)]
     pub fn draw(&self, f: &mut Frame, font: &[u8], style: CockpitStyle, values: &CockpitValues) {
         let g = panel_geometry(f.width as u32, f.height as u32);
         self.draw_with_geom(f, &g, font, style, values);

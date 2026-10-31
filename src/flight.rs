@@ -150,11 +150,15 @@ impl Flight {
     }
 
     /// Идёт ли сейчас нативный переход (вылет, прыжок или стыковка).
+    ///
+    /// Используется тестами; боевой код смотрит на состояние перехода напрямую.
+    #[allow(dead_code)]
     pub fn in_transition(&self) -> bool {
         self.transition.in_transition()
     }
 
     /// Какой переход сейчас идёт (для тестов и отладки).
+    #[allow(dead_code)]
     pub fn transition_kind(&self) -> Option<TransitionKind> {
         self.transition.kind()
     }

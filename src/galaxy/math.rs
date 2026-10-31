@@ -211,7 +211,7 @@ fn sqrt2(r: &mut SqrtRegs) {
     r.carry = 0;
     // push hl ; push hl
     let x = ((r.h as u16) << 8) | r.l as u16;
-    let mut stack = [x, x];
+    let stack = [x, x];
     let mut sp = 2usize;
     // srl h ; rr l ; rra
     r.shr24();

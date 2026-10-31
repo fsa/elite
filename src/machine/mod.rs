@@ -23,7 +23,6 @@ mod video;
 
 pub use game_msg::GameMsgTap;
 pub use rom::install_stub_rom;
-pub use video::{ZX_PALETTE, pixel_addr};
 
 pub struct Spectrum {
     pub mem: Vec<u8>,

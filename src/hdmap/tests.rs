@@ -2,8 +2,6 @@
 
 use super::*;
 
-use super::*;
-
 /// Семя и координаты из памяти запущенной версии Кладова (tmp/wf/mem.bin).
 fn fake_mem() -> Vec<u8> {
     let mut m = vec![0u8; 0x10000];

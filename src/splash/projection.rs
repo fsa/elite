@@ -1,7 +1,10 @@
 //! Экранная проекция корабля: калибровка масштаба и постоянный центр.
 
-use crate::render3d::{INTRO_DIST, Rotation, Screen as Proj};
+use crate::render3d::Rotation;
 use crate::shipdata::Ship;
+
+#[cfg(test)]
+use crate::render3d::{INTRO_DIST, Screen as Proj};
 
 use super::Splash;
 use super::motion::STEP_AXIS;

@@ -1,7 +1,6 @@
 //! Имена и постоянные цвета планет.
 
 use super::model::twist;
-use super::*;
 
 /// Имя планеты — порт `GeneratePlanetName` (у Кладова `0xE016`).
 ///

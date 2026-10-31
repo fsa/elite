@@ -2,8 +2,6 @@
 
 use super::*;
 
-use super::*;
-
 /// Семя галактики из запущенной версии Кладова (`tmp/wf/mem.bin`, `0xD090`).
 const SEED: [u8; 6] = [0x4A, 0x5A, 0x48, 0x02, 0x53, 0xB7];
 

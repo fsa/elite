@@ -26,6 +26,9 @@ pub(crate) fn start_game_kladov_hook(cpu: &mut Z80, m: &mut Spectrum) -> u64 {
 }
 
 /// Хук старта для оригинальной версии.
+///
+/// Пока не подключён: `native::install` ставит только хуки Кладова.
+#[allow(dead_code)]
 pub(crate) fn start_game_elite_hook(cpu: &mut Z80, m: &mut Spectrum) -> u64 {
     start_game_gate(cpu, m, _ELITE_SAVE)
 }
@@ -103,6 +106,9 @@ pub(crate) fn teleport_kladov_hook(cpu: &mut Z80, m: &mut Spectrum) -> u64 {
 }
 
 /// Хук телепортации для оригинальной версии.
+///
+/// Пока не подключён: `native::install` ставит только хуки Кладова.
+#[allow(dead_code)]
 pub(crate) fn teleport_elite_hook(cpu: &mut Z80, m: &mut Spectrum) -> u64 {
     teleport(cpu, m, _ELITE_SAVE)
 }
@@ -155,6 +161,9 @@ pub(crate) fn load_gate_kladov_hook(cpu: &mut Z80, m: &mut Spectrum) -> u64 {
 }
 
 /// Ветка «в полёте» для оригинальной версии (`0x72A9`).
+///
+/// Пока не подключён: `native::install` ставит только хуки Кладова.
+#[allow(dead_code)]
 pub(crate) fn load_gate_elite_hook(cpu: &mut Z80, m: &mut Spectrum) -> u64 {
     load_gate(cpu, m, _ELITE_SAVE)
 }
@@ -192,7 +201,7 @@ pub(crate) fn menu_save_load(cpu: &mut Z80, m: &mut Spectrum, layout: SaveLayout
         m.save_requested = false;
         // Обновим буферы кокпита перед перезапуском, чтобы панель
         // отрисовалась корректно (особенно при загрузке со станции).
-        if let Some(save_cocpit) = layout.save_cocpit {
+        if layout.save_cocpit.is_some() {
             // Вложенный вызов: кладём адрес возврата 0 (пустышка) и
             // временно уходим в SaveCocpitInBuffer; она сделает RET.
             // Но нам нужно вернуться обратно в этот хук? Проще -
@@ -221,6 +230,9 @@ pub(crate) fn menu_save_load_kladov_hook(cpu: &mut Z80, m: &mut Spectrum) -> u64
 }
 
 /// Нативная замена `MenuSaveLoad` в оригинальной версии (`0xD2E4`).
+///
+/// Пока не подключён: `native::install` ставит только хуки Кладова.
+#[allow(dead_code)]
 pub(crate) fn menu_save_load_elite_hook(cpu: &mut Z80, m: &mut Spectrum) -> u64 {
     menu_save_load(cpu, m, _ELITE_SAVE)
 }

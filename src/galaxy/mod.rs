@@ -23,7 +23,7 @@
 //! Расстояния на карте считаются точно так же, как в игре, — вплоть до
 //! странностей: модуль разности у Кладова на единицу меньше (см.
 //! [`Metric`]), а квадратный корень игра считает своей рутиной
-//! [`game_sqrt`], и результат отличается от точного корня на единицу.
+//! [`math::game_sqrt`], и результат отличается от точного корня на единицу.
 
 /// Число звёзд в галактике.
 pub const COUNT: usize = 256;
@@ -36,10 +36,10 @@ mod math;
 mod model;
 mod name;
 
-pub use math::{
-    distance_to_cursor_ly, distance2, fuel_for_distance, fuel_to_cursor, game_sqrt, jump_radius,
-    nearest,
-};
+pub use math::{distance_to_cursor_ly, jump_radius, nearest};
+
+#[cfg(test)]
+pub use math::{distance2, fuel_for_distance, fuel_to_cursor, game_sqrt};
 pub use model::{GalaxyLayout, KLADOV_GALAXY, Metric, Planet, planets};
 pub use name::{color, name};
 

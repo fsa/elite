@@ -1,7 +1,5 @@
 //! Минимальная заглушка ROM для запуска без образа ПЗУ.
 
-use super::*;
-
 /// Minimal substitute ROM implementing only the entry points Elite needs.
 /// Used when a real ROM image is not supplied. Addresses match the standard
 /// ZX Spectrum 48K ROM layout.

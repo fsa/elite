@@ -69,7 +69,7 @@ mod state;
 #[cfg(test)]
 mod tests;
 
-pub use self::layout::{KLADOV_SHOP, ShopLayout, _ELITE_SHOP};
+pub use self::layout::{KLADOV_SHOP, ShopLayout};
 
 use self::items::MAX_ITEMS;
 

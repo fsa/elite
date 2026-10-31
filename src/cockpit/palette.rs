@@ -32,6 +32,10 @@ impl CockpitStyle {
         bar: BAR_RED,
     };
     /// Cobra Mk IV: белые линии, фиолетовые полосы.
+    ///
+    /// Пока используется только в тестах: боевой код выбирает цвет полос
+    /// отдельно (`Flight::cockpit_bar_color`).
+    #[allow(dead_code)]
     pub const COBRA_MK4: CockpitStyle = CockpitStyle {
         line: FRAME_COLOR,
         bar: BAR_MAGENTA,

@@ -122,14 +122,6 @@ impl Z80 {
         self.f = v as u8;
     }
 
-    #[inline]
-    fn zf(&self) -> bool {
-        self.f & ZF != 0
-    }
-    #[inline]
-    fn cf(&self) -> bool {
-        self.f & CF != 0
-    }
     fn push(&mut self, bus: &mut dyn Bus, v: u16) {
         self.sp = self.sp.wrapping_sub(1);
         bus.write(self.sp, (v >> 8) as u8);
@@ -265,7 +257,6 @@ impl Default for Z80 {
 
 // Add a couple of fields the core needs but which are not part of the register file.
 impl Z80 {
-    pub fn init_extra(&mut self) {}
     /// Signal a maskable interrupt. Returns true if it was accepted.
     pub fn interrupt(&mut self, bus: &mut dyn Bus, data: u8) -> bool {
         if !self.iff1 {

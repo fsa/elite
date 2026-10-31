@@ -1,8 +1,6 @@
 //! Тесты HD-слоя: раскладка, масштабирование, отсечение и текст.
 
 use super::*;
-
-use super::*;
 use crate::machine::Spectrum;
 use crate::z80::Z80;
 

@@ -77,12 +77,7 @@ fn boot_elite() -> Spectrum {
         .expect("zx_bin/elite.bin (собрать: ./build.sh)");
     let mut m = Spectrum::new(Some(&rom));
     m.load(crate::boot::GAME_LOAD_ADDR, &game);
-    let [lo, hi] = crate::boot::INTERRUPT_HANDLER.to_le_bytes();
-    for i in 0..128u16 {
-        let a = crate::boot::IM2_TABLE + i * 2;
-        m.mem[a as usize] = lo;
-        m.mem[a as usize + 1] = hi;
-    }
+    crate::boot::install_im2_table(&mut m);
     m.mem[0x71F8] = 0x3E;
     m.mem[0x71F9] = 0x02;
     m.cpu.pc = crate::boot::GAME_ENTRY;

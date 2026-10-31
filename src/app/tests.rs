@@ -969,7 +969,7 @@ use crate::world::{current_planet_color, save_layout_kladov, scene_markers};
         let m = boot();
         let mut hd = display::Frame::new(256 * 5, 192 * 5);
         let font = &m.mem[PAUSE_FONT_ADDR..PAUSE_FONT_ADDR + PAUSE_FONT_LEN];
-        let mut st = splash::Splash::new();
+        let st = splash::Splash::new();
         st.draw(&mut hd, font);
         // Фон полностью непрозрачный.
         assert_eq!(hd.pixels()[0], 0xFF00_0000, "фон заставки не непрозрачный");

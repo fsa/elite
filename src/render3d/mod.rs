@@ -22,7 +22,7 @@ mod occlusion;
 
 use faces::{face_shapes, fill_faces};
 use occlusion::{NEAR, occluders};
-pub(crate) use occlusion::{Occluder, line_hidden};
+pub(crate) use occlusion::line_hidden;
 
 /// Цвет рёбер корабля — ярко-белый.
 pub const SHIP_COLOR: u32 = 0xFFFF_FFFF;

@@ -6,7 +6,7 @@
 
 use crate::display::Frame;
 
-use super::geometry::{CockpitGeom, LINE, Rect};
+use super::geometry::{CockpitGeom, Rect};
 use super::values::PANEL_ROWS;
 
 /// Подписи левой колонки сверху вниз.
@@ -100,8 +100,9 @@ fn draw_indicator_label(
 
 /// Нарисовать значок скорости по центру короткой клетки.
 ///
-/// Масштаб тот же, что у подписей: один пиксель растра — [`LINE`] и более
-/// пикселей окна, в зависимости от высоты строки.
+/// Масштаб тот же, что у подписей: один пиксель растра —
+/// [`crate::cockpit::geometry::LINE`] и более пикселей окна, в зависимости от
+/// высоты строки.
 fn draw_speed_icon(f: &mut Frame, area: Rect, color: u32) {
     const W: i32 = 12;
     const H: i32 = SPEED_ICON.len() as i32;
