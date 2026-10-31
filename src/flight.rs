@@ -169,10 +169,9 @@ impl Flight {
         if !self.active {
             return;
         }
-        if self.view_dir != dir {
-            self.view_dir = dir;
-            self.stars.respawn(self.stars.len().max(STAR_COUNT));
-        }
+        // Поле сферическое и общее для всех видов: при смене направления его
+        // не пересоздаём, иначе звёзды снова окажутся только перед кораблём.
+        self.view_dir = dir;
     }
 
     /// Закрыть экран и вернуться к ZX-кадру (клавиша `1`).
@@ -303,7 +302,7 @@ impl Flight {
         let dt = dt.clamp(0.0, 0.1);
         self.combat.tick(dt);
         self.transition.tick(dt);
-        self.stars.advance(dt, self.speed, self.view_dir);
+        self.stars.advance(dt, self.speed);
     }
 
     /// Нарисовать вид из кабины в верхней части кадра.

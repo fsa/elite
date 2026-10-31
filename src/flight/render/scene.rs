@@ -18,7 +18,7 @@ pub(super) fn draw_flight_scene(
     view_bottom: i32,
     s: i32,
 ) {
-    draw_stars_view(frame, screen, &f.stars.stars, view_rot);
+    draw_stars_view(frame, screen, &f.stars.stars, view_rot, f.stars.streak());
     draw_bodies_view(f, frame, screen, view_rot);
     draw_enemy_shots_view(f, frame, screen, 0, view_bottom, view_rot);
     if f.view_dir == ViewDir::Forward {
@@ -34,16 +34,15 @@ pub(crate) fn draw_stars_view(
     screen: &Screen,
     stars: &[Star],
     view_rot: &Rotation,
+    streak: f32,
 ) {
     let cam = view_rot.transpose();
+    let (xmin, ymin) = (0.0, 0.0);
+    let (xmax, ymax) = (frame.width as f32 - 1.0, frame.height as f32 - 1.0);
     for star in stars {
-        let v = cam.apply(star.pos);
-        if v[2] <= view::NEAR {
-            continue;
-        }
-        let x = screen.cx + v[0] / v[2] * screen.k;
-        let y = screen.cy - v[1] / v[2] * screen.k;
-        if x < 0.0 || y < 0.0 || x >= frame.width as f32 || y >= frame.height as f32 {
+        let head = cam.apply(star.pos);
+        let head_visible = head[2] > view::NEAR;
+        if !head_visible && streak <= 0.0 {
             continue;
         }
         let bright = 0.25 + star.mag as f32 / 255.0 * 0.75;
@@ -51,6 +50,31 @@ pub(crate) fn draw_stars_view(
             | ((bright * 210.0) as u32) << 16
             | ((bright * 225.0) as u32) << 8
             | (bright * 255.0) as u32;
+        // На J-драйве звезда вытягивается в штрих от прошлого положения к
+        // текущему. Хвост лежит дальше по `+Z`: в переднем виде штрих идёт от
+        // центра наружу, в заднем — снаружи к центру.
+        if streak > 0.0 {
+            let tail = cam.apply([star.pos[0], star.pos[1], star.pos[2] + streak]);
+            if let Some((a, b)) = view::clip_segment_near(tail, head) {
+                let ax = screen.cx + a[0] / a[2] * screen.k;
+                let ay = screen.cy - a[1] / a[2] * screen.k;
+                let bx = screen.cx + b[0] / b[2] * screen.k;
+                let by = screen.cy - b[1] / b[2] * screen.k;
+                if let Some((x0, y0, x1, y1)) =
+                    view::clip_segment_2d(ax, ay, bx, by, xmin, ymin, xmax, ymax)
+                {
+                    frame.line(x0, y0, x1, y1, c);
+                }
+            }
+        }
+        if !head_visible {
+            continue;
+        }
+        let x = screen.cx + head[0] / head[2] * screen.k;
+        let y = screen.cy - head[1] / head[2] * screen.k;
+        if x < 0.0 || y < 0.0 || x >= frame.width as f32 || y >= frame.height as f32 {
+            continue;
+        }
         let (xi, yi) = (x.round() as i32, y.round() as i32);
         frame.plot(xi, yi, c);
         if star.mag > 210 {

@@ -13,7 +13,7 @@ use super::messages::{
 use super::palette::{CYAN, ENEMY_BEAM};
 use super::render::scene::draw_stars_view;
 use super::scene::{BodyKind, PLANET_RADIUS, SUN_RADIUS};
-use super::stars::{star_count_for, Star, SPEED_MAX, STAR_COUNT, STAR_COUNT_MAX};
+use super::stars::{star_count_for, Star, SPEED_MAX, STAR_COUNT, STAR_COUNT_MAX, STAR_FIELD_RADIUS};
 use super::transition::Transition;
 use super::view;
 
@@ -142,18 +142,18 @@ fn j_drive_accelerates_stars_on_game_tick() {
     f.stars.stars = vec![star([100.0, 0.0, 1000.0])];
     mem[Z80_STARS_TABLE] = 1;
     f.sync_from_z80(&mem);
-    let before = f.stars.stars[0].pos[0];
+    let before = f.stars.stars[0].pos[2];
     f.tick(1.0 / 50.0);
-    let normal = f.stars.stars[0].pos[0] - before;
+    let normal = (f.stars.stars[0].pos[2] - before).abs();
 
     // Такт J-драйва: HighDeltaSpeed затёрт, таблица обновилась.
     f.stars.stars = vec![star([100.0, 0.0, 1000.0])];
     mem[Z80_STARS_TABLE] = 2;
     mem[Z80_HIGH_DELTA_SPEED] = 0x10;
     f.sync_from_z80(&mem);
-    let before = f.stars.stars[0].pos[0];
+    let before = f.stars.stars[0].pos[2];
     f.tick(1.0 / 50.0);
-    let fast = f.stars.stars[0].pos[0] - before;
+    let fast = (f.stars.stars[0].pos[2] - before).abs();
 
     assert!(normal > 0.0, "звёзды не движутся на обычном такте");
     assert!(
@@ -226,7 +226,13 @@ fn close_star_does_not_draw_long_streak() {
         bx: 0.0,
         by: 0.0,
     };
-    draw_stars_view(&mut frame, &screen, &f.stars.stars, &Rotation::identity());
+    draw_stars_view(
+        &mut frame,
+        &screen,
+        &f.stars.stars,
+        &Rotation::identity(),
+        0.0,
+    );
     let lit = frame.pixels().iter().filter(|&&p| p != 0).count();
     assert!(lit <= 5, "звезда нарисовала {lit} пикселей вместо точки");
 }
@@ -328,10 +334,10 @@ fn stars_move_faster_with_speed() {
 
     let start = slow.stars.stars[0].pos;
     slow.tick(0.1);
-    let slow_step = (slow.stars.stars[0].pos[0] - start[0]).abs();
+    let slow_step = (slow.stars.stars[0].pos[2] - start[2]).abs();
     let start = fast.stars.stars[0].pos;
     fast.tick(0.1);
-    let fast_step = (fast.stars.stars[0].pos[0] - start[0]).abs();
+    let fast_step = (fast.stars.stars[0].pos[2] - start[2]).abs();
 
     assert!(slow_step > 0.0, "на минимальной скорости звёзды стоят");
     assert!(
@@ -345,18 +351,31 @@ fn stars_move_faster_with_speed() {
 }
 
 #[test]
-fn star_field_spawns_near_center_and_scales_with_screen() {
-    // Исходное поле — 16 звёзд, но на большом кадре их должно быть
-    // заметно больше, иначе экран выглядит пустым.
+fn star_field_fills_whole_sphere_and_scales_with_screen() {
+    // Поле должно окружать корабль со всех сторон: иначе задний вид пуст,
+    // а боковые виды показывают звёзды только в центре.
     let f = open();
     assert_eq!(f.stars.len(), STAR_COUNT);
+    let (mut front, mut back, mut left, mut right) = (0, 0, 0, 0);
     for s in &f.stars.stars {
-        let r = (s.pos[0] * s.pos[0] + s.pos[1] * s.pos[1]).sqrt() / s.pos[2];
+        let r = (s.pos[0] * s.pos[0] + s.pos[1] * s.pos[1] + s.pos[2] * s.pos[2]).sqrt();
         assert!(
-            r <= 0.3,
-            "звезда родилась слишком далеко от центра: радиус {r:.2}"
+            (1.0..=STAR_FIELD_RADIUS + 1.0).contains(&r),
+            "звезда родилась вне облака: радиус {r:.0}"
         );
+        if s.pos[2] > 0.0 {
+            front += 1;
+        } else {
+            back += 1;
+        }
+        if s.pos[0] > 0.0 {
+            right += 1;
+        } else {
+            left += 1;
+        }
     }
+    assert!(front > 0 && back > 0, "звёзды есть только с одной стороны");
+    assert!(left > 0 && right > 0, "звёзды есть только на одной стороне");
     assert_eq!(star_count_for(256, 128), STAR_COUNT);
     let small = star_count_for(640, 480);
     let large = star_count_for(1280, 750);
@@ -366,6 +385,101 @@ fn star_field_spawns_near_center_and_scales_with_screen() {
         "на большом экране звёзд всё ещё мало: {large}"
     );
     assert!(star_count_for(4000, 3000) <= STAR_COUNT_MAX);
+}
+
+#[test]
+fn rear_view_shows_stars_and_they_converge_to_center() {
+    // В заднем виде звезда за кормой видна, а при полёте вперёд её угол от
+    // центра уменьшается: поле удаляется и сходится к точке.
+    let mut f = open();
+    f.speed = 12.0;
+    f.view_dir = ViewDir::Back;
+    f.stars.stars = vec![star([600.0, 0.0, -2000.0])];
+
+    let before = (f.stars.stars[0].pos[0] / f.stars.stars[0].pos[2]).abs();
+    f.tick(0.1);
+    let s = &f.stars.stars[0];
+    assert!(s.pos[2] < -2000.0, "звезда за кормой не удаляется");
+    let after = (s.pos[0] / s.pos[2]).abs();
+    assert!(
+        after < before,
+        "в заднем виде звезда не сходится к центру: {before} -> {after}"
+    );
+
+    let mut frame = Frame::new(320, 200);
+    let screen = Screen {
+        cx: 160.0,
+        cy: 100.0,
+        k: 180.0,
+        bx: 0.0,
+        by: 0.0,
+    };
+    draw_stars_view(
+        &mut frame,
+        &screen,
+        &f.stars.stars,
+        &view::rotation(ViewDir::Back),
+        0.0,
+    );
+    assert!(
+        frame.pixels().iter().any(|&p| p != 0),
+        "звезда в заднем виде не нарисована"
+    );
+}
+
+#[test]
+fn side_views_move_stars_horizontally() {
+    // В боковом виде звезда должна идти поперёк экрана, не меняя высоту.
+    let mut f = open();
+    f.speed = 12.0;
+    f.stars.stars = vec![star([2000.0, 300.0, 0.0])];
+    let cam = view::rotation(ViewDir::Left).transpose();
+    let before = cam.apply(f.stars.stars[0].pos);
+
+    f.tick(0.1);
+    let after = cam.apply(f.stars.stars[0].pos);
+    assert!(before[2] > 0.0 && after[2] > 0.0, "звезда ушла за камеру");
+    assert!(
+        (after[1] - before[1]).abs() < 1e-3,
+        "в боковом виде звезда сместилась по вертикали: {} -> {}",
+        before[1],
+        after[1]
+    );
+    assert!(
+        after[0] > before[0],
+        "в боковом виде звезда не пересекает экран по горизонтали"
+    );
+}
+
+#[test]
+fn j_drive_stretches_stars_into_streaks() {
+    let mut f = open();
+    f.speed = SPEED_MAX;
+    f.stars.stars = vec![star([800.0, 0.0, 2000.0])];
+    f.stars.mark_boost(true);
+    f.tick(0.02);
+    assert!(
+        f.stars.streak() > 0.0,
+        "J-драйв не включил растягивание звёзд"
+    );
+
+    let mut frame = Frame::new(320, 200);
+    let screen = Screen {
+        cx: 160.0,
+        cy: 100.0,
+        k: 180.0,
+        bx: 0.0,
+        by: 0.0,
+    };
+    draw_stars_view(
+        &mut frame,
+        &screen,
+        &f.stars.stars,
+        &Rotation::identity(),
+        f.stars.streak(),
+    );
+    let lit = frame.pixels().iter().filter(|&&p| p != 0).count();
+    assert!(lit > 20, "J-драйв нарисовал всего {lit} пикселей");
 }
 
 #[test]
