@@ -1,0 +1,67 @@
+//! `d_Asteroid2` (адрес 0x6256).
+//!
+//! Модель из таблицы `AdrDataShips` версии Кладова.
+
+use super::{Edge, Face, Ship, Stats, Vertex};
+
+pub(super) static SHIP_D_ASTEROID2: Ship = Ship {
+    name: "d_Asteroid2",
+    addr: 0x6256,
+    category: 2,
+    stats: Stats {
+        cargo: 0, collision: 80, fire_chance: 0,
+        max_speed: 30, energy: 60, cash: 5,
+        launch: 0, size: 50, flags: 0,
+        factor: 1, laser: 0, rating: 47,
+    },
+    vertices: &[
+        Vertex { x: 0, y: 80, z: 0, lod: 0x1f, faces: [255, 255] },
+        Vertex { x: 0, y: -80, z: 0, lod: 0x1e, faces: [255, 255] },
+        Vertex { x: -80, y: -10, z: 0, lod: 0x1f, faces: [255, 255] },
+        Vertex { x: 70, y: -40, z: 0, lod: 0x1f, faces: [255, 255] },
+        Vertex { x: 60, y: 50, z: 0, lod: 0x1f, faces: [101, 220] },
+        Vertex { x: 50, y: 0, z: 60, lod: 0x1f, faces: [255, 255] },
+        Vertex { x: -40, y: 0, z: 70, lod: 0x1f, faces: [16, 50] },
+        Vertex { x: 0, y: 30, z: -75, lod: 0x1f, faces: [255, 255] },
+        Vertex { x: 0, y: -50, z: -60, lod: 0x1f, faces: [152, 186] },
+    ],
+    edges: &[
+        Edge { lod: 0x1f, v: [2, 0], faces: 0x72 },
+        Edge { lod: 0x1f, v: [4, 0], faces: 0xd6 },
+        Edge { lod: 0x1f, v: [4, 3], faces: 0xc5 },
+        Edge { lod: 0x1f, v: [3, 1], faces: 0xb4 },
+        Edge { lod: 0x1f, v: [2, 1], faces: 0xa3 },
+        Edge { lod: 0x1f, v: [6, 2], faces: 0x32 },
+        Edge { lod: 0x1f, v: [6, 1], faces: 0x31 },
+        Edge { lod: 0x1f, v: [5, 1], faces: 0x41 },
+        Edge { lod: 0x1f, v: [6, 5], faces: 0x10 },
+        Edge { lod: 0x1f, v: [5, 0], faces: 0x60 },
+        Edge { lod: 0x1f, v: [5, 3], faces: 0x54 },
+        Edge { lod: 0x1f, v: [6, 0], faces: 0x20 },
+        Edge { lod: 0x1f, v: [5, 4], faces: 0x65 },
+        Edge { lod: 0x1f, v: [8, 2], faces: 0xa8 },
+        Edge { lod: 0x1f, v: [7, 2], faces: 0x87 },
+        Edge { lod: 0x1f, v: [7, 0], faces: 0xd7 },
+        Edge { lod: 0x1f, v: [7, 4], faces: 0xdc },
+        Edge { lod: 0x1f, v: [7, 3], faces: 0xc9 },
+        Edge { lod: 0x1f, v: [8, 3], faces: 0xb9 },
+        Edge { lod: 0x1f, v: [8, 1], faces: 0xba },
+        Edge { lod: 0x1f, v: [8, 7], faces: 0x98 },
+    ],
+    faces: &[
+        Face { nx: 9, ny: 66, nz: 81, flags: 0x1f },
+        Face { nx: 9, ny: -66, nz: 81, flags: 0x5e },
+        Face { nx: -72, ny: 64, nz: 31, flags: 0x9f },
+        Face { nx: -64, ny: -73, nz: 47, flags: 0xdf },
+        Face { nx: 45, ny: -79, nz: 65, flags: 0x5f },
+        Face { nx: 135, ny: 15, nz: 35, flags: 0x1f },
+        Face { nx: 38, ny: 76, nz: 70, flags: 0x1f },
+        Face { nx: -66, ny: 59, nz: -39, flags: 0xbf },
+        Face { nx: -67, ny: -15, nz: -80, flags: 0xff },
+        Face { nx: 66, ny: -14, nz: -75, flags: 0x7f },
+        Face { nx: -70, ny: -80, nz: -40, flags: 0xff },
+        Face { nx: 58, ny: -102, nz: -51, flags: 0x7f },
+        Face { nx: 81, ny: 9, nz: -67, flags: 0x3f },
+        Face { nx: 47, ny: 94, nz: -63, flags: 0x3f },
+    ],
+};

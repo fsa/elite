@@ -22,4 +22,5 @@
 - TablCrdPrnVertex - таблица координат вершин
 - MatrixRotate - матрица вращения
 
-Детальная информация в src/shipdata.rs, src/galaxy.rs, src/equip.rs для версии Кладова.
+Детальная информация в src/shipdata.rs и src/shipdata/*.rs (по файлу на
+модель), src/galaxy.rs, src/equip.rs для версии Кладова.

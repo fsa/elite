@@ -1,0 +1,67 @@
+//! `d_Krait` (адрес 0x63dd).
+//!
+//! Модель из таблицы `AdrDataShips` версии Кладова.
+
+use super::{Edge, Face, Ship, Stats, Vertex};
+
+pub(super) static SHIP_D_KRAIT: Ship = Ship {
+    name: "d_Krait",
+    addr: 0x63dd,
+    category: 4,
+    stats: Stats {
+        cargo: 1, collision: 60, fire_chance: 110,
+        max_speed: 30, energy: 80, cash: 20,
+        launch: 0, size: 20, flags: 140,
+        factor: 1, laser: 0, rating: 320,
+    },
+    vertices: &[
+        Vertex { x: 0, y: 0, z: 96, lod: 0x1f, faces: [1, 255] },
+        Vertex { x: 0, y: 18, z: -48, lod: 0x1f, faces: [3, 69] },
+        Vertex { x: 0, y: -18, z: -48, lod: 0x1e, faces: [18, 69] },
+        Vertex { x: 90, y: 0, z: -3, lod: 0x1f, faces: [1, 255] },
+        Vertex { x: -90, y: 0, z: -3, lod: 0x1e, faces: [35, 85] },
+        Vertex { x: 90, y: 0, z: 87, lod: 0x1f, faces: [1, 17] },
+        Vertex { x: -90, y: 0, z: 87, lod: 0x1e, faces: [35, 51] },
+        Vertex { x: 0, y: 5, z: 53, lod: 0x9, faces: [0, 51] },
+        Vertex { x: 0, y: 7, z: 38, lod: 0x7, faces: [0, 51] },
+        Vertex { x: -18, y: 7, z: 19, lod: 0x9, faces: [51, 51] },
+        Vertex { x: 18, y: 7, z: 19, lod: 0x8, faces: [0, 0] },
+        Vertex { x: 18, y: 11, z: -39, lod: 0x9, faces: [68, 68] },
+        Vertex { x: 18, y: -11, z: -39, lod: 0x8, faces: [68, 68] },
+        Vertex { x: -18, y: -11, z: -39, lod: 0x8, faces: [85, 85] },
+        Vertex { x: -18, y: 11, z: -39, lod: 0x8, faces: [85, 85] },
+        Vertex { x: 36, y: 0, z: -30, lod: 0x9, faces: [68, 68] },
+        Vertex { x: -36, y: 0, z: -30, lod: 0x8, faces: [85, 85] },
+    ],
+    edges: &[
+        Edge { lod: 0x1f, v: [1, 0], faces: 0x30 },
+        Edge { lod: 0x1f, v: [2, 0], faces: 0x21 },
+        Edge { lod: 0x1f, v: [3, 0], faces: 0x10 },
+        Edge { lod: 0x1f, v: [4, 0], faces: 0x32 },
+        Edge { lod: 0x1f, v: [4, 1], faces: 0x53 },
+        Edge { lod: 0x1f, v: [4, 2], faces: 0x52 },
+        Edge { lod: 0x1f, v: [3, 2], faces: 0x41 },
+        Edge { lod: 0x1f, v: [3, 1], faces: 0x40 },
+        Edge { lod: 0x1e, v: [5, 3], faces: 0x10 },
+        Edge { lod: 0x1e, v: [6, 4], faces: 0x32 },
+        Edge { lod: 0x8, v: [2, 1], faces: 0x54 },
+        Edge { lod: 0x9, v: [10, 7], faces: 0x0 },
+        Edge { lod: 0x6, v: [10, 8], faces: 0x0 },
+        Edge { lod: 0x9, v: [9, 7], faces: 0x33 },
+        Edge { lod: 0x6, v: [9, 8], faces: 0x33 },
+        Edge { lod: 0x8, v: [15, 11], faces: 0x44 },
+        Edge { lod: 0x8, v: [15, 12], faces: 0x44 },
+        Edge { lod: 0x7, v: [12, 11], faces: 0x44 },
+        Edge { lod: 0x7, v: [13, 14], faces: 0x55 },
+        Edge { lod: 0x8, v: [13, 16], faces: 0x55 },
+        Edge { lod: 0x8, v: [14, 16], faces: 0x55 },
+    ],
+    faces: &[
+        Face { nx: 3, ny: 24, nz: 3, flags: 0x1f },
+        Face { nx: 3, ny: -24, nz: 3, flags: 0x5e },
+        Face { nx: -3, ny: -24, nz: 3, flags: 0xde },
+        Face { nx: -3, ny: 24, nz: 3, flags: 0x9e },
+        Face { nx: 38, ny: 0, nz: -77, flags: 0x3f },
+        Face { nx: -38, ny: 0, nz: -77, flags: 0xbe },
+    ],
+};
