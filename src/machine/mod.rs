@@ -15,68 +15,15 @@ pub const CYCLES_PER_FRAME: u64 = 69888;
 /// (возврат по адресу из стека) машина выполняет сама.
 pub type Hook = fn(&mut Z80, &mut Spectrum) -> u64;
 
-/// Перехват игровой печати (`sub_D499`, 0xD499).
-///
-/// Игра печатает сообщения посимвольно на ZX-экран: «Front View» и прочие
-/// подписи, строки гиперпрыжка, числа отсчёта. Пока [`GameMsgTap::enabled`]
-/// взведён, хук печати копит текст строки (вместе с текстовой строкой ZX,
-/// в которую он печатается) — нативный вид полёта показывает его на своём
-/// HD-слое своим шрифтом. Сам эмулятор не меняется: хук только читает
-/// `A` и `CrdXPrnSymbol`.
-#[derive(Clone, Debug, Default)]
-pub struct GameMsgTap {
-    /// Копить ли текст (нативный вид полёта открыт). Переход `false → true`
-    /// сбрасывает строку, чтобы на новом открытии вида не висела старая.
-    pub enabled: bool,
-    /// Текущая строка сообщения (только печатные символы). Меняется, когда
-    /// игра печатает следующий символ на ту же строку; смена позиции печати
-    /// начинает новую строку.
-    pub text: String,
-    /// Номер текстовой строки ZX (0..=23), в которую печатается строка.
-    pub row: u8,
-    /// Колонка (0..=31) первого символа строки.
-    pub col: u8,
-    /// Возраст строки в кадрах: 0 — символы печатались в текущем кадре.
-    pub frames: u32,
-}
+mod audio;
+mod bus;
+mod game_msg;
+mod rom;
+mod video;
 
-impl GameMsgTap {
-    /// Сбросить строку (при включении перехвата).
-    pub fn clear(&mut self) {
-        self.text.clear();
-        self.row = 0;
-        self.col = 0;
-        self.frames = 0;
-    }
-
-    /// Добавить напечатанный символ. `row`/`col` — позиция следующего
-    /// символа на экране ZX (`CrdXPrnSymbol` до его продвижения).
-    pub fn push_char(&mut self, c: u8, row: u8, col: u8) {
-        if !self.enabled || !(0x20..=0x7E).contains(&c) {
-            return;
-        }
-        self.frames = 0;
-        // Продолжение той же строки: та же строка, колонка следует за хвостом.
-        let continuing = self.row == row
-            && self.text.len() <= usize::from(u8::MAX)
-            && self.col.wrapping_add(self.text.len() as u8) == col;
-        if !continuing {
-            self.text.clear();
-            self.row = row;
-            self.col = col;
-        }
-        self.text.push(c as char);
-    }
-
-    /// Старение строки: вызывается раз в кадр после прогона эмулятора (при
-    /// выключенном перехвате возраст не растёт).
-    pub fn next_frame(&mut self) {
-        if self.enabled {
-            self.frames = self.frames.saturating_add(1);
-        }
-    }
-}
-
+pub use game_msg::GameMsgTap;
+pub use rom::install_stub_rom;
+pub use video::{ZX_PALETTE, pixel_addr};
 
 pub struct Spectrum {
     pub mem: Vec<u8>,
@@ -217,7 +164,9 @@ impl Spectrum {
     pub fn load(&mut self, addr: u16, data: &[u8]) {
         let mut a = addr as usize;
         for &b in data {
-            if a >= MEM_SIZE { break; }
+            if a >= MEM_SIZE {
+                break;
+            }
             self.mem[a] = b;
             a += 1;
         }
@@ -311,7 +260,16 @@ impl Spectrum {
             if !self.dump_at.is_empty() && self.dump_at.contains(&pc) {
                 println!(
                     "AT pc=0x{:04X} hl=0x{:04X} de=0x{:04X} bc=0x{:04X} a=0x{:02X} f=0x{:02X} sp=0x{:04X} ix=0x{:04X} iy=0x{:04X} mem[0xAA0F]=0x{:02X}",
-                    pc, cpu.hl(), cpu.de(), cpu.bc(), cpu.a, cpu.f, cpu.sp, cpu.ix, cpu.iy, self.mem[0xAA0F]
+                    pc,
+                    cpu.hl(),
+                    cpu.de(),
+                    cpu.bc(),
+                    cpu.a,
+                    cpu.f,
+                    cpu.sp,
+                    cpu.ix,
+                    cpu.iy,
+                    self.mem[0xAA0F]
                 );
                 let _ = std::fs::write(
                     format!("/tmp/opencode/at_{:04X}.bin", pc),
@@ -347,7 +305,11 @@ impl Spectrum {
                 if pc >= lo && pc <= hi {
                     println!(
                         "  cpu pc=0x{:04X} a=0x{:02X} f=0x{:02X} hl=0x{:04X} bc=0x{:04X}",
-                        pc, cpu.a, cpu.f, cpu.hl(), cpu.bc()
+                        pc,
+                        cpu.a,
+                        cpu.f,
+                        cpu.hl(),
+                        cpu.bc()
                     );
                 }
             }
@@ -356,7 +318,16 @@ impl Spectrum {
                     *n += 1;
                     println!(
                         "  spat pc=0x{:04X} sp=0x{:04X} a=0x{:02X} f=0x{:02X} hl=0x{:04X} de=0x{:04X} bc=0x{:04X} ix=0x{:04X} iy=0x{:04X} frame={}",
-                        pc, cpu.sp, cpu.a, cpu.f, cpu.hl(), cpu.de(), cpu.bc(), cpu.ix, cpu.iy, self.frames
+                        pc,
+                        cpu.sp,
+                        cpu.a,
+                        cpu.f,
+                        cpu.hl(),
+                        cpu.de(),
+                        cpu.bc(),
+                        cpu.ix,
+                        cpu.iy,
+                        self.frames
                     );
                 }
             }
@@ -382,256 +353,7 @@ impl Spectrum {
     pub fn beeper_edges(&self) -> &[(u64, bool)] {
         &self.beeper_edges
     }
-
-    /// Decode the bitmap and attributes into a 256x192 RGBA pixel buffer.
-    ///
-    /// Это «старый» путь отрисовки: кадр всегда 256x192 независимо от
-    /// разрешения окна — масштабирование до HD делает оконный слой
-    /// (`main.rs`, целое множитель). В полном разрешении рисует HD-слой
-    /// [`Spectrum::hd`] (нативные реализации).
-    pub fn render_rgba(&self, out: &mut [u32]) {
-        for y in 0..192u16 {
-            for x in 0..256u16 {
-                let (addr, bit) = pixel_addr(x, y);
-                let on = self.mem[addr as usize] & bit != 0;
-                let attr = self.mem[0x5800 + (y as usize / 8) * 32 + x as usize / 8];
-                let ink = attr & 7;
-                let paper = (attr >> 3) & 7;
-                let bright = if attr & 0x40 != 0 { 8 } else { 0 };
-                let palette = if on { ink } else { paper };
-                out[y as usize * 256 + x as usize] = ZX_PALETTE[(palette | bright) as usize];
-            }
-        }
-    }
-
-    /// Synthesize one frame of 1-bit beeper audio (mono, [`AUDIO_RATE`]) into
-    /// `out`. Call after [`Spectrum::run_frame`].
-    pub fn render_audio(&mut self, out: &mut Vec<i16>) {
-        const AMP: i16 = 4000;
-        let samples = (self.audio_rate as usize) / 50;
-        out.clear();
-        out.reserve(samples);
-        let base = self.audio_cycle_base;
-        let mut idx = 0usize;
-        let mut level = self.beeper_frame_start;
-        for i in 0..samples {
-            let cycle = base + (i as u64 * CYCLES_PER_FRAME) / samples as u64;
-            while idx < self.beeper_edges.len() && self.beeper_edges[idx].0 <= cycle {
-                level = self.beeper_edges[idx].1;
-                idx += 1;
-            }
-            out.push(if level { AMP } else { -AMP });
-        }
-    }
-}
-
-/// Compute the bitmap byte address and bit mask for a screen pixel.
-/// (0,0) is the top-left corner.
-#[inline]
-pub fn pixel_addr(x: u16, y: u16) -> (u16, u8) {
-    let addr = 0x4000
-        + ((y & 0xC0) << 5)
-        + ((y & 0x07) << 8)
-        + ((y & 0x38) << 2)
-        + (x >> 3);
-    (addr, 0x80 >> (x & 7))
-}
-
-pub const ZX_PALETTE: [u32; 16] = [
-    0x0000_0000, // black
-    0x0000_00D7, // blue
-    0x00D7_0000, // red
-    0x00D7_00D7, // magenta
-    0x0000_D700, // green
-    0x0000_D7D7, // cyan
-    0x00D7_D700, // yellow
-    0x00D7_D7D7, // white
-    0x0000_0000, // bright black
-    0x0000_00FF, // bright blue
-    0x00FF_0000, // bright red
-    0x00FF_00FF, // bright magenta
-    0x0000_FF00, // bright green
-    0x0000_FFFF, // bright cyan
-    0x00FF_FF00, // bright yellow
-    0x00FF_FFFF, // bright white
-];
-
-impl Bus for Spectrum {
-    fn read(&mut self, addr: u16) -> u8 {
-        self.mem[addr as usize]
-    }
-
-    fn write(&mut self, addr: u16, val: u8) {
-        // 48K has no memory paging: RAM everywhere, ROM is read-only-ish
-        // (the original ignores writes to ROM).
-        if let Some((lo, hi)) = self.wwatch {
-            if addr >= lo && addr <= hi {
-                *self.wwatch_hist.entry(self.pc_for_write).or_insert(0) += 1;
-            }
-        }
-        if let Some((lo, hi)) = self.wtrace {
-            if addr >= lo && addr <= hi {
-                eprintln!(
-                    "W 0x{addr:04X} <- 0x{val:02X} pc=0x{:04X} sp=0x{:04X}",
-                    self.pc_for_write, self.sp_for_write
-                );
-            }
-        }
-        if addr >= ROM_SIZE as u16 {
-            self.mem[addr as usize] = val;
-        }
-    }
-
-    fn input(&mut self, port: u16) -> u8 {
-        let high = (port >> 8) as u8;
-        // Kempston joystick: selected when A5=0 (e.g. port 0x1F / 0xFF1F).
-        if port & 0x20 == 0 {
-            // Игра читает Kempston как active-high: бит4=огонь, биты0-3 = направления.
-            return self.kempston & 0x1F;
-        }
-        if port & 0x01 == 0 {
-            let mut res = 0xFFu8;
-            for (r, row) in self.keyboard.iter().enumerate() {
-                if high & (1 << r) == 0 {
-                    res &= *row;
-                }
-            }
-            res | 0xE0 // bits 5-7 read as 1 (no tape input)
-        } else {
-            0xFF
-        }
-    }
-
-    fn output(&mut self, port: u16, val: u8) {
-        if port & 0xC000 == 0x4000 && port & 0x0002 == 0 {
-            // Порт пейджинга памяти 0x7FFD (и родственный 0x1FFD).
-            self.paging_writes = self.paging_writes.wrapping_add(1);
-            self.paging_last = val;
-        }
-        if port & 0x01 == 0 {
-            self.border = val & 0x07;
-            let beep = val & 0x10 != 0;
-            if beep != self.beeper {
-                self.beeper = beep;
-                self.beeper_edges.push((self.cycle_clock, beep));
-            }
-        }
-    }
-}
-
-/// Minimal substitute ROM implementing only the entry points Elite needs.
-/// Used when a real ROM image is not supplied. Addresses match the standard
-/// ZX Spectrum 48K ROM layout.
-pub fn install_stub_rom(rom: &mut [u8]) {
-    // Reset vector: DI / JR to itself is not desired; start of ROM just spins.
-    rom[0x0000] = 0xF3; // DI
-    rom[0x0001] = 0x76; // HALT
-    rom[0x0002] = 0x18; // JR
-    rom[0x0003] = 0xFD; // -3
-
-    // Interrupt handler at 0x0038: EI / RET
-    rom[0x0038] = 0xFB; // EI
-    rom[0x0039] = 0xC9; // RET
-
-    // BEEPER at 0x03B5: RET (silent)
-    rom[0x03B5] = 0xC9;
-
-    // PIXEL_ADD exact bytes at 0x22AA (contract: B=y, C=x -> HL=addr, A=x&7).
-    const PIXEL_ADD: [u8; 33] = [
-        0x3E, 0xAF, 0x90, 0xDA, 0xF9, 0x24, 0x47, 0xA7, 0x1F, 0x37, 0x1F, 0xA7, 0x1F, 0xA8, 0xE6,
-        0xF8, 0xA8, 0x67, 0x79, 0x07, 0x07, 0x07, 0xA8, 0xE6, 0xC7, 0xA8, 0x07, 0x07, 0x6F, 0x79,
-        0xE6, 0x07, 0xC9,
-    ];
-    rom[0x22AA..0x22AA + PIXEL_ADD.len()].copy_from_slice(&PIXEL_ADD);
-
-    // Target of the "out of range" branch: just RET.
-    rom[0x24F9] = 0xC9;
-
-    // Tape load/save stubs (LD-BYTES 0x0562, SA-BYTES 0x04C6): RET.
-    rom[0x0562] = 0xC9;
-    rom[0x04C6] = 0xC9;
 }
 
 #[cfg(test)]
-mod audio_tests {
-    use super::*;
-
-    #[test]
-    fn beeper_edges_become_audio() {
-        let mut m = Spectrum::new(None);
-        // DI ; loop: ld a,0x10 ; out (0xfe),a ; ld a,0 ; out (0xfe),a ; jr loop
-        let prog = [
-            0xF3, 0x3E, 0x10, 0xD3, 0xFE, 0x3E, 0x00, 0xD3, 0xFE, 0x18, 0xF6,
-        ];
-        m.load(0x8000, &prog);
-        m.cpu.pc = 0x8000;
-        m.run_frame();
-        let mut out = Vec::new();
-        m.render_audio(&mut out);
-        assert_eq!(out.len(), m.audio_rate as usize / 50);
-        assert!(out.iter().any(|&s| s > 0), "no beeper-high samples");
-        assert!(out.iter().any(|&s| s < 0), "no beeper-low samples");
-    }
-}
-
-#[cfg(test)]
-mod game_msg_tap_tests {
-    use super::*;
-
-    #[test]
-    fn tap_assembles_line_by_position() {
-        let mut t = GameMsgTap::default();
-        t.enabled = true;
-        // Строка печатается посимвольно: колонка следует за хвостом.
-        t.push_char(b'F', 1, 0);
-        t.push_char(b'R', 1, 1);
-        t.push_char(b'O', 1, 2);
-        t.push_char(b'N', 1, 3);
-        t.push_char(b'T', 1, 4);
-        assert_eq!(t.text, "FRONT");
-        assert_eq!(t.row, 1);
-        assert_eq!(t.col, 0);
-        assert_eq!(t.frames, 0);
-
-        // Печать с той же строки, но левее хвоста — новая строка.
-        t.push_char(b'V', 1, 6);
-        assert_eq!(t.text, "V");
-
-        // Смена строки тоже начинает новую строку.
-        t.push_char(b'H', 3, 2);
-        t.push_char(b'I', 3, 3);
-        assert_eq!(t.text, "HI");
-        assert_eq!(t.row, 3);
-        assert_eq!(t.col, 2);
-    }
-
-    #[test]
-    fn tap_ignores_control_codes_and_counts_age() {
-        let mut t = GameMsgTap::default();
-        t.enabled = true;
-        t.push_char(0x0D, 4, 0); // перевод строки не печатается
-        t.push_char(0x7F, 4, 0); // не-ASCII тоже
-        assert!(t.text.is_empty());
-
-        t.push_char(b'A', 4, 0);
-        assert_eq!(t.text, "A");
-        assert_eq!(t.frames, 0);
-
-        t.next_frame();
-        t.next_frame();
-        assert_eq!(t.frames, 2, "возраст растёт только при включённом перехвате");
-        t.enabled = false;
-        t.next_frame();
-        assert_eq!(t.frames, 2, "выключенный перехват не старит строку");
-    }
-
-    #[test]
-    fn tap_clear_resets_line() {
-        let mut t = GameMsgTap::default();
-        t.enabled = true;
-        t.push_char(b'X', 2, 0);
-        t.clear();
-        assert!(t.text.is_empty());
-        assert_eq!(t.frames, 0);
-    }
-}
+mod tests;
