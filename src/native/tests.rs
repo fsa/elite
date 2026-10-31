@@ -881,9 +881,9 @@ fn message_capture_collects_token_string() {
     }
     n.mem[0xF11A] = TBL as u8;
     n.mem[0xF11B] = (TBL >> 8) as u8;
-    // Печатный курсор: строка 2, колонка 0.
-    n.mem[0x60F9] = 0;
-    n.mem[0x60FA] = 2;
+    // Печатный курсор (CrdXPrnSymbol версии Кладова): строка 2, колонка 0.
+    n.mem[KLADOV_CRD_X_PRN_SYMBOL] = 0;
+    n.mem[KLADOV_CRD_X_PRN_SYMBOL + 1] = 2;
 
     // Токен `0x15` → `0x15 + 0x72 = 0x87` → "FFFF".
     set(&mut n.cpu, 0x15, 0x1234, 0x5678, 0x00);

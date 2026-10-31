@@ -160,8 +160,9 @@ pub(crate) fn token_scan(cpu: &mut Z80, m: &mut Spectrum, pre_cycles: u64, pre_s
     cycles
 }
 
-/// `CrdXPrnSymbol` — печатный курсор игры: колонка (0..31), строка хода.
-pub(crate) const Z80_CRD_X_PRN_SYMBOL: usize = 0x60F9;
+/// `CrdXPrnSymbol` в версии Кладова (`0xD045`) — печатный курсор игры:
+/// колонка (0..31), строка хода. У оригинала адрес другой (`0xA80D`).
+pub(crate) const KLADOV_CRD_X_PRN_SYMBOL: usize = 0xD045;
 
 /// Перехват `sub_D499` (0xD499) — печать одного символа на экран ZX.
 ///
@@ -176,8 +177,8 @@ pub(crate) const Z80_CRD_X_PRN_SYMBOL: usize = 0x60F9;
 /// без хука — `hooks_match_plain_run` это проверяет.
 pub(crate) fn print_char_tap_hook(cpu: &mut Z80, m: &mut Spectrum) -> u64 {
     if m.game_msg.enabled {
-        let col = m.mem.get(Z80_CRD_X_PRN_SYMBOL).copied().unwrap_or(0);
-        let row = m.mem.get(Z80_CRD_X_PRN_SYMBOL + 1).copied().unwrap_or(0);
+        let col = m.mem.get(KLADOV_CRD_X_PRN_SYMBOL).copied().unwrap_or(0);
+        let row = m.mem.get(KLADOV_CRD_X_PRN_SYMBOL + 1).copied().unwrap_or(0);
         m.game_msg.push_char(cpu.a, row, col);
     }
     // `cp 0x41h`: только флаги, `A` не меняется (как `sub8(a, v, 0)` без
