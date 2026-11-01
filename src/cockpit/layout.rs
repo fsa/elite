@@ -6,7 +6,15 @@
 
 use super::values::{
     CockpitValues, Compass, DEFLECTION_MAX, Danger, GAUGE_MAX, Indicator, MISSILE_SLOTS,
+    RadarContact, RadarContactKind, RadarContacts,
 };
+
+/// Размер слота `SlotObj` в памяти Z80.
+const SLOT_SIZE: u16 = 0x27;
+/// Смещение `oEnerg` в слоте: 0 — слот пуст.
+const SLOT_OENERG: u16 = 0x22;
+/// Число основных слотов объектов (без станции и ракеты).
+const SHIP_SLOTS: u16 = 6;
 
 /// Адреса переменных панели в памяти игры (текущее значение показания).
 ///
@@ -46,6 +54,10 @@ pub struct CockpitLayout {
     pub fake_planet_crd: u16,
     /// Слот станции (`objCoriolis`).
     pub coriolis_slot: u16,
+    /// Первый из шести основных слотов объектов (`DataOfAround`).
+    pub ship_slot0: u16,
+    /// Слот ракеты (`objMissile`).
+    pub missile_slot: u16,
     /// Флаг доступности J-драйва у станции (`J_Drive_Coriolis`).
     pub j_drive_coriolis: u16,
 }
@@ -69,6 +81,8 @@ pub const ELITE_COCKPIT: CockpitLayout = CockpitLayout {
     // Для оригинальной версии адрес фиктивных координат пока не найден.
     fake_planet_crd: 0,
     coriolis_slot: 0x5FA6,
+    ship_slot0: 0x5FCD,
+    missile_slot: 0x60B7,
     j_drive_coriolis: 0x707B,
 };
 
@@ -90,6 +104,8 @@ pub const KLADOV_COCKPIT: CockpitLayout = CockpitLayout {
     planet_crd: 0x7110,
     fake_planet_crd: 0x8AC3,
     coriolis_slot: 0x6048,
+    ship_slot0: 0x606F,
+    missile_slot: 0x6159,
     j_drive_coriolis: 0x711D,
 };
 
@@ -128,6 +144,7 @@ impl CockpitLayout {
             ],
             danger: read_danger(mem),
             compass: self.read_compass(mem),
+            radar: self.read_radar(mem),
             blink: true,
         }
     }
@@ -185,6 +202,51 @@ impl CockpitLayout {
             filled: z >= 0.0,
         }
     }
+
+    /// Прочитать контакты для радара.
+    ///
+    /// Обходится тот же набор слотов, что и в `PrintObjScaner`: станция,
+    /// шесть основных слотов и ракета. Пустые слоты (`oEnerg == 0`)
+    /// пропускаются. Координаты уже ведутся в системе игрока, поэтому
+    /// радарам не нужно ничего пересчитывать.
+    fn read_radar(&self, mem: &[u8]) -> RadarContacts {
+        let mut contacts = RadarContacts::empty();
+        self.push_slot(mem, self.coriolis_slot, RadarContactKind::Station, &mut contacts);
+        for i in 0..SHIP_SLOTS {
+            self.push_slot(
+                mem,
+                self.ship_slot0.wrapping_add(i.wrapping_mul(SLOT_SIZE)),
+                RadarContactKind::Ship,
+                &mut contacts,
+            );
+        }
+        self.push_slot(mem, self.missile_slot, RadarContactKind::Missile, &mut contacts);
+        contacts
+    }
+
+    /// Добавить объект из слота Z80, если он существует и целиком в памяти.
+    fn push_slot(
+        &self,
+        mem: &[u8],
+        base: u16,
+        kind: RadarContactKind,
+        contacts: &mut RadarContacts,
+    ) {
+        if base == 0 {
+            return;
+        }
+        let base = base as usize;
+        let size = SLOT_SIZE as usize;
+        if base + size > mem.len() || mem[base + SLOT_OENERG as usize] == 0 {
+            return;
+        }
+        contacts.push(RadarContact {
+            x: read_game_coordinate(&mem[base..base + 3]),
+            y: read_game_coordinate(&mem[base + 3..base + 6]),
+            z: read_game_coordinate(&mem[base + 6..base + 9]),
+            kind,
+        });
+    }
 }
 
 /// Максимальное смещение указателя компаса от центра, как в оригинале:
@@ -209,10 +271,14 @@ fn read_danger(mem: &[u8]) -> Danger {
 
 /// Прочитать 24-битную координату в формате знак-величина.
 fn read_coordinate(b: &[u8]) -> f32 {
+    read_game_coordinate(b) as f32
+}
+
+/// Прочитать 24-битную координату как целое число единиц игры.
+fn read_game_coordinate(b: &[u8]) -> i32 {
     if b.len() < 3 {
-        return 0.0;
+        return 0;
     }
-    let mag = (((b[2] & 0x7F) as u32) << 16) | ((b[1] as u32) << 8) | b[0] as u32;
-    let value = mag as f32;
-    if b[2] & 0x80 != 0 { -value } else { value }
+    let mag = (((b[2] & 0x7F) as i32) << 16) | ((b[1] as i32) << 8) | b[0] as i32;
+    if b[2] & 0x80 != 0 { -mag } else { mag }
 }

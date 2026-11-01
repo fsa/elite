@@ -9,6 +9,20 @@ fn font() -> Vec<u8> {
     vec![0xFFu8; 0x300]
 }
 
+/// Записать координаты объекта (X, Y, Z) в формате знак-величина.
+fn put_crd(mem: &mut [u8], at: u16, x: i32, y: i32, z: i32) {
+    let put = |mem: &mut [u8], at: u16, v: i32| {
+        let sign = if v < 0 { 0x80 } else { 0 };
+        let mag = v.unsigned_abs();
+        mem[at as usize] = mag as u8;
+        mem[at as usize + 1] = (mag >> 8) as u8;
+        mem[at as usize + 2] = ((mag >> 16) as u8 & 0x7F) | sign;
+    };
+    put(mem, at, x);
+    put(mem, at + 3, y);
+    put(mem, at + 6, z);
+}
+
 /// Значения для тестов: пустые шкалы и полный запас ракет.
 fn values(missiles: u8) -> CockpitValues {
     CockpitValues {
@@ -24,6 +38,7 @@ fn values(missiles: u8) -> CockpitValues {
         right: [Indicator::Gauge(0); PANEL_ROWS as usize],
         danger: Danger::Off,
         compass: Compass::centered(),
+        radar: RadarContacts::empty(),
         blink: true,
     }
 }
@@ -197,11 +212,12 @@ fn panel_is_a_table_with_borders() {
             "нет вертикального разделителя в x={x}"
         );
     }
-    // В центре горизонтальных линий нет.
+    // В центре горизонтальных линий нет: радар рисует только свою клетку.
+    let sample_x = (center.x + g.oval_radar_cell().x) / 2;
     for row in 0..PANEL_ROWS - 1 {
         let sep = g.row_separator(row);
         assert_eq!(
-            px(center.x + center.w / 2, sep.y + LINE / 2),
+            px(sample_x, sep.y + LINE / 2),
             BACKGROUND,
             "горизонтальная линия пересекает центр (строка {row})"
         );
@@ -693,6 +709,105 @@ fn compass_reads_target_from_memory() {
     mem[0x7104] = 0x04;
     mem[DANGER_ATTR as usize] = 0x02;
     assert_eq!(l.read(&mem).danger, Danger::Red);
+}
+
+/// Радар читает тот же набор слотов, что и оригинальный сканер:
+/// станция, шесть основных слотов и ракета. Пустые слоты пропускаются.
+#[test]
+fn layout_reads_radar_contacts_from_slots() {
+    const OENERG: usize = 0x22;
+    const SLOT: u16 = 0x27;
+    let l = KLADOV_COCKPIT;
+    let mut mem = vec![0u8; 0x10000];
+
+    // Пустая память — ни одного контакта.
+    assert!(
+        l.read(&mem).radar.as_slice().is_empty(),
+        "радар не пуст без объектов"
+    );
+
+    // Станция справа и впереди.
+    mem[l.coriolis_slot as usize + OENERG] = 0x50;
+    put_crd(&mut mem, l.coriolis_slot, 1000, 0, 2000);
+
+    // Заняты нулевой и пятый слоты кораблей, остальные пусты.
+    mem[l.ship_slot0 as usize + OENERG] = 1;
+    put_crd(&mut mem, l.ship_slot0, -3000, 500, 100);
+    let fifth = l.ship_slot0 + 5 * SLOT;
+    mem[fifth as usize + OENERG] = 1;
+    put_crd(&mut mem, fifth, 0, 0, -4000);
+
+    // Ракета.
+    mem[l.missile_slot as usize + OENERG] = 1;
+    put_crd(&mut mem, l.missile_slot, 100, -200, 300);
+
+    let radar = l.read(&mem).radar;
+    let c = radar.as_slice();
+    assert_eq!(c.len(), 4, "прочитаны не все контакты");
+    assert_eq!(c[0].kind, RadarContactKind::Station);
+    assert_eq!((c[0].x, c[0].y, c[0].z), (1000, 0, 2000));
+    assert_eq!(c[1].kind, RadarContactKind::Ship);
+    assert_eq!(
+        (c[1].x, c[1].y, c[1].z),
+        (-3000, 500, 100),
+        "неверные координаты или знак"
+    );
+    assert_eq!(c[2].kind, RadarContactKind::Ship);
+    assert_eq!((c[2].x, c[2].y, c[2].z), (0, 0, -4000));
+    assert_eq!(c[3].kind, RadarContactKind::Missile);
+    assert_eq!((c[3].x, c[3].y, c[3].z), (100, -200, 300));
+}
+
+/// В снимок радара помещаются все восемь слотов без потерь.
+#[test]
+fn radar_holds_all_eight_slots() {
+    const OENERG: usize = 0x22;
+    const SLOT: u16 = 0x27;
+    let l = KLADOV_COCKPIT;
+    let mut mem = vec![0u8; 0x10000];
+    mem[l.coriolis_slot as usize + OENERG] = 1;
+    for i in 0..6u16 {
+        mem[(l.ship_slot0 + i * SLOT) as usize + OENERG] = 1;
+    }
+    mem[l.missile_slot as usize + OENERG] = 1;
+    assert_eq!(l.read(&mem).radar.as_slice().len(), 8);
+}
+
+/// Кокпит рисует овальный радар и показывает на нём контакты.
+#[test]
+fn cockpit_draws_radar_with_contacts() {
+    let font = font();
+    let g = panel_geometry(1280, 960);
+    let count = |f: &Frame, cell: Rect| {
+        let mut n = 0;
+        for y in cell.y..cell.y + cell.h {
+            for x in cell.x..cell.x + cell.w {
+                if f.pixels()[y as usize * 1280 + x as usize] != BACKGROUND {
+                    n += 1;
+                }
+            }
+        }
+        n
+    };
+    let mut v = values(MISSILE_SLOTS as u8);
+    let mut empty = Frame::new(1280, 960);
+    Cockpit::new().draw(&mut empty, &font, CockpitStyle::COBRA_MK3, &v);
+    let oval = g.oval_radar_cell();
+    let oval_before = count(&empty, oval);
+    assert!(oval_before > 0, "радар не нарисован");
+
+    v.radar.push(RadarContact {
+        x: 0x2000,
+        y: 0,
+        z: 0,
+        kind: RadarContactKind::Ship,
+    });
+    let mut full = Frame::new(1280, 960);
+    Cockpit::new().draw(&mut full, &font, CockpitStyle::COBRA_MK3, &v);
+    assert!(
+        count(&full, oval) > oval_before,
+        "радар не показал контакт"
+    );
 }
 
 /// Случайные значения заставки детерминированы и не выходят из диапазонов.

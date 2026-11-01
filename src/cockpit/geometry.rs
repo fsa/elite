@@ -24,6 +24,12 @@ pub const BAR_WIDTH_FRAC: i32 = 15;
 /// сторон растягиваются только длинные клетки-полосы.
 pub const LABEL_WIDTH_PER_ROW_PCT: i32 = 225;
 
+/// Соотношение сторон классического овального радара (ширина/высота).
+///
+/// В оригинале сканер — плоский овал примерно 90x38 «пикселей» ZX.
+const OVAL_RADAR_ASPECT_NUM: i32 = 12;
+const OVAL_RADAR_ASPECT_DEN: i32 = 5;
+
 /// Прямоугольник в пикселях окна.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct Rect {
@@ -313,6 +319,30 @@ impl CockpitGeom {
         self.top_circle(true, (self.side_row(0).h * 5 / 2).max(1))
     }
 
+    /// Свободная область под радар в центральной клетке.
+    ///
+    /// Классический сканер занимает всю высоту: в оригинале он был почти во
+    /// всю высоту панели и даже мог наезжать на кружки по бокам. У нас
+    /// центральная клетка достаточно широка, поэтому овал помещается между
+    /// ними, не пересекаясь.
+    pub fn radar_area(&self) -> Rect {
+        let center = self.center_cell();
+        if center.is_empty() {
+            return center;
+        }
+        center.inset(self.radar_gap())
+    }
+
+    /// Клетка классического овального радара.
+    pub fn oval_radar_cell(&self) -> Rect {
+        fit_aspect(self.radar_area(), OVAL_RADAR_ASPECT_NUM, OVAL_RADAR_ASPECT_DEN)
+    }
+
+    /// Зазор вокруг радара.
+    fn radar_gap(&self) -> i32 {
+        (self.side_row(0).h / 3).max(LINE)
+    }
+
     /// X-координаты четырёх вертикальных разделителей таблицы.
     pub fn column_separators(&self) -> [i32; 4] {
         let inner = self.panel_inner();
@@ -324,6 +354,32 @@ impl CockpitGeom {
             inner.x + inner.w - lw - LINE - bw - LINE,
             inner.x + inner.w - lw - LINE,
         ]
+    }
+}
+
+/// Вписать прямоугольник с соотношением сторон `num/den` в клетку по центру.
+fn fit_aspect(cell: Rect, num: i32, den: i32) -> Rect {
+    if cell.is_empty() || num <= 0 || den <= 0 {
+        return Rect {
+            x: cell.x,
+            y: cell.y,
+            w: 0,
+            h: 0,
+        };
+    }
+    // w/h = num/den, значит w = h*num/den. Сначала ограничиваем высотой,
+    // затем, если не влезло по ширине, — шириной.
+    let mut h = cell.h;
+    let mut w = (h * num / den).max(1);
+    if w > cell.w {
+        w = cell.w;
+        h = (w * den / num).max(1);
+    }
+    Rect {
+        x: cell.x + (cell.w - w) / 2,
+        y: cell.y + (cell.h - h) / 2,
+        w,
+        h,
     }
 }
 

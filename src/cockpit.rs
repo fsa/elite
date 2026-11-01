@@ -50,7 +50,8 @@
 //! - [`labels`] — подписи коротких клеток и значок скорости;
 //! - [`indicators`] — шкалы, отклонения и запас ракет;
 //! - [`danger`] — индикатор опасности;
-//! - [`compass`] — кольцо и указатель компаса.
+//! - [`compass`] — кольцо и указатель компаса;
+//! - [`radar`] — классический овальный сканер (радар Кладова временно отключён).
 
 use crate::display::Frame;
 
@@ -72,6 +73,7 @@ pub use self::palette::{DANGER_GREEN, DANGER_YELLOW};
 #[cfg(test)]
 pub use self::values::{
     Compass, DEFLECTION_MAX, Danger, GAUGE_MAX, Indicator, MISSILE_ROW, MISSILE_SLOTS, PANEL_ROWS,
+    RadarContact, RadarContactKind, RadarContacts,
 };
 
 mod compass;
@@ -82,6 +84,7 @@ mod indicators;
 mod labels;
 mod layout;
 mod palette;
+mod radar;
 mod table;
 #[cfg(test)]
 mod tests;
@@ -140,6 +143,7 @@ impl Cockpit {
         indicators::draw(f, g, style, values);
         danger::draw(f, g, values);
         compass::draw(f, g, style, values);
+        radar::draw(f, g, style, values);
     }
 }
 

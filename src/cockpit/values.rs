@@ -19,6 +19,12 @@ pub const GAUGE_MAX: u8 = 0xA0;
 /// Максимальное отклонение стрелки влево/вправо (нейтраль — 0).
 pub const DEFLECTION_MAX: i8 = 15;
 
+/// Сколько контактов помещается в снимок радара.
+///
+/// Оригинальный сканер обходит станцию, шесть основных слотов и слот ракеты,
+/// поэтому восемь — ровно столько, сколько он может показать за кадр.
+pub const RADAR_CONTACTS: usize = 8;
+
 /// Значение одной длинной клетки панели.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Indicator {
@@ -111,6 +117,77 @@ impl Default for Compass {
     }
 }
 
+/// Что за объект показывает радар.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum RadarContactKind {
+    /// Станция (`objCoriolis`).
+    Station,
+    /// Корабль из одного из основных слотов.
+    Ship,
+    /// Ракета (`objMissile`).
+    Missile,
+}
+
+/// Один контакт радара в системе координат игрока.
+///
+/// `x` — вправо, `y` — вверх, `z` — вперёд; единицы те же, что в слотах
+/// объектов Z80. Компоненты радара сами решают, как отобразить контакт,
+/// поэтому модель не зависит от геометрии и от полётной подсистемы.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct RadarContact {
+    pub x: i32,
+    pub y: i32,
+    pub z: i32,
+    pub kind: RadarContactKind,
+}
+
+impl RadarContact {
+    const EMPTY: RadarContact = RadarContact {
+        x: 0,
+        y: 0,
+        z: 0,
+        kind: RadarContactKind::Ship,
+    };
+}
+
+/// Небольшой набор контактов радара фиксированного размера.
+///
+/// Массив внутри, а не `Vec`, чтобы [`CockpitValues`] оставался `Copy`.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct RadarContacts {
+    items: [RadarContact; RADAR_CONTACTS],
+    len: u8,
+}
+
+impl RadarContacts {
+    /// Пустой набор — радар без целей.
+    pub const fn empty() -> Self {
+        RadarContacts {
+            items: [RadarContact::EMPTY; RADAR_CONTACTS],
+            len: 0,
+        }
+    }
+
+    /// Добавить контакт; лишние сверх [`RADAR_CONTACTS`] отбрасываются.
+    pub fn push(&mut self, contact: RadarContact) {
+        if (self.len as usize) < RADAR_CONTACTS {
+            self.items[self.len as usize] = contact;
+            self.len += 1;
+        }
+    }
+
+    /// Контакты, поместившиеся в снимок.
+    pub fn as_slice(&self) -> &[RadarContact] {
+        &self.items[..self.len as usize]
+    }
+}
+
+impl Default for RadarContacts {
+    fn default() -> Self {
+        Self::empty()
+    }
+}
+
 /// Снимок показаний панели на один кадр.
 ///
 /// Индексы строк совпадают с [`super::LEFT_LABELS`] и
@@ -123,6 +200,8 @@ pub struct CockpitValues {
     pub danger: Danger,
     /// Указатель компаса в верхнем правом кружке.
     pub compass: Compass,
+    /// Контакты радара в системе координат игрока.
+    pub radar: RadarContacts,
     /// Фаза мигания для [`Danger::BlinkingRed`].
     pub blink: bool,
 }
@@ -161,6 +240,7 @@ impl CockpitValues {
             ],
             danger: Danger::Green,
             compass: Compass::centered(),
+            radar: RadarContacts::empty(),
             blink: true,
         }
     }
