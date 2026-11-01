@@ -19,7 +19,7 @@ use super::view;
 
 /// Тёмно-зелёный пиксель планеты: красный и синий нулевые, зелёный заметен.
 fn is_planet_green(p: u32) -> bool {
-    p >> 24 == 0xFF && p & 0x00FF_00FF == 0 && (p >> 8) & 0xFF >= 0x58
+    p >> 24 == 0xFF && p & 0x00FF_00FF == 0 && (p >> 8) & 0xFF >= 0x18
 }
 
 fn open() -> Flight {
@@ -242,6 +242,10 @@ fn planet_is_dark_green_and_smaller_than_sun() {
     let color = planet_green(0xFF40_80C0);
     assert_eq!(color & 0x00FF_00FF, 0, "у планеты не зелёный цвет");
     assert!((color >> 8) & 0xFF > 0, "планета слишком тёмная");
+    assert!(
+        (color >> 8) & 0xFF <= 0x30,
+        "планета должна быть сильно темнее прежней"
+    );
     // У планеты есть более яркий ободок: тёмная заливка остаётся, но диск
     // не сливается с чёрным космосом и сохраняет рамку оригинала.
     let rim = planet_rim(color);
