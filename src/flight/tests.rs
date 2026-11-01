@@ -432,7 +432,7 @@ fn side_views_move_stars_horizontally() {
     // В боковом виде звезда должна идти поперёк экрана, не меняя высоту.
     let mut f = open();
     f.speed = 12.0;
-    f.stars.stars = vec![star([2000.0, 300.0, 0.0])];
+    f.stars.stars = vec![star([-2000.0, 300.0, 0.0])];
     let cam = view::rotation(ViewDir::Left).transpose();
     let before = cam.apply(f.stars.stars[0].pos);
 
@@ -446,8 +446,30 @@ fn side_views_move_stars_horizontally() {
         after[1]
     );
     assert!(
-        after[0] > before[0],
-        "в боковом виде звезда не пересекает экран по горизонтали"
+        after[0] < before[0],
+        "в левом виде поле не сдвигается влево по экрану"
+    );
+}
+
+#[test]
+fn left_and_right_views_look_in_correct_directions() {
+    // Камера смотрит вдоль +Z координат вида. В левом виде впереди должна
+    // оказаться левая сторона мира (-X), в правом — правая (+X).
+    let left = view::rotation(ViewDir::Left).transpose();
+    let right = view::rotation(ViewDir::Right).transpose();
+
+    let left_target = left.apply([-1000.0, 0.0, 0.0]);
+    assert!(left_target[2] > 0.0, "левый вид не смотрит влево");
+    let right_target = right.apply([1000.0, 0.0, 0.0]);
+    assert!(right_target[2] > 0.0, "правый вид не смотрит вправо");
+
+    assert!(
+        left.apply([1000.0, 0.0, 0.0])[2] < 0.0,
+        "левый вид показывает объект справа"
+    );
+    assert!(
+        right.apply([-1000.0, 0.0, 0.0])[2] < 0.0,
+        "правый вид показывает объект слева"
     );
 }
 

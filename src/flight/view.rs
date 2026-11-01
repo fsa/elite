@@ -33,8 +33,8 @@ pub(super) fn rotation(dir: ViewDir) -> Rotation {
     match dir {
         ViewDir::Forward => Rotation::identity(),
         ViewDir::Back => Rotation::axis_angle([0.0, 1.0, 0.0], std::f32::consts::PI),
-        ViewDir::Left => Rotation::axis_angle([0.0, 1.0, 0.0], std::f32::consts::FRAC_PI_2),
-        ViewDir::Right => Rotation::axis_angle([0.0, 1.0, 0.0], -std::f32::consts::FRAC_PI_2),
+        ViewDir::Left => Rotation::axis_angle([0.0, 1.0, 0.0], -std::f32::consts::FRAC_PI_2),
+        ViewDir::Right => Rotation::axis_angle([0.0, 1.0, 0.0], std::f32::consts::FRAC_PI_2),
     }
 }
 
