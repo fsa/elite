@@ -8,7 +8,7 @@ use crate::cockpit::CockpitGeom;
 use crate::display::Frame;
 use crate::render3d::Screen;
 
-use super::palette::{BG, SUN_COLOR, VIEW_LABEL_COLOR};
+use super::palette::{BG, VIEW_LABEL_COLOR};
 use super::stars::star_count_for;
 use super::view;
 use super::Flight;
@@ -63,16 +63,15 @@ pub(super) fn draw(f: &mut Flight, frame: &mut Frame, geom: &CockpitGeom, font: 
             scene::draw_flight_scene(f, frame, &screen, &view_rot, view_bottom, s);
             // Во время отсчёта верхнюю надпись рисуем сами (подпись вида):
             // перехваченные игра печатает в поле зрения цифры, их здесь не
-            // показываем.
+            // показываем. Само число идёт слева в той же строке, что и
+            // подпись вида.
             draw_view_label(f, frame, font, vx, vy, vw, s, false);
-            draw_jump_countdown(f, frame, font, vx, vy, vw, vh, s, t.countdown);
+            draw_jump_countdown(frame, font, vx, vy, s, t.countdown);
         }
         Some(t) => {
-            let title = if t.kind == super::TransitionKind::Hyperspace {
-                "HYPERSPACE"
-            } else {
-                "DOCKING"
-            };
+            // У гиперпрыжка надписей нет: только тоннель и звёзды. Стыковка
+            // сохраняет заголовок оригинала.
+            let title = (t.kind != super::TransitionKind::Hyperspace).then_some("DOCKING");
             transition::draw_warp(
                 f,
                 frame,
@@ -135,42 +134,18 @@ fn draw_view_label(
     );
 }
 
-/// Обратный отсчёт гиперпрыжка поверх обычного полёта: число по центру
-/// и строка «Hyperspace -- <имя планеты>» внизу — размером шрифта и
-/// цветом как приглашение на заставке (одна текстовая строка выше
-/// нижней рамки, по центру).
-#[allow(clippy::too_many_arguments)]
-fn draw_jump_countdown(
-    f: &Flight,
-    frame: &mut Frame,
-    font: &[u8],
-    vx: i32,
-    vy: i32,
-    vw: i32,
-    vh: i32,
-    s: i32,
-    raw: u8,
-) {
+/// Обратный отсчёт гиперпрыжка поверх обычного полёта: только число в левом
+/// верхнем углу, в той же строке, что и подпись вида, тем же шрифтом и цветом.
+fn draw_jump_countdown(frame: &mut Frame, font: &[u8], vx: i32, vy: i32, s: i32, raw: u8) {
     let number = super::messages::countdown_number(raw).to_string();
-    let scale = (s * 4).max(2) as usize;
-    let y = vy + vh / 2 - 4 * scale as i32;
-    text::draw_centered_text(frame, font, vx, y, vw, &number, SUN_COLOR, scale);
-
-    let name = f.transition.planet_name().trim();
-    let label = if name.is_empty() {
-        "Hyperspace".to_string()
-    } else {
-        format!("Hyperspace -- {name}")
-    };
-    let hint_y = vy + vh - 16 * s;
-    text::draw_centered_text(
-        frame,
+    let scale = s.max(1) as usize;
+    // Один знак отступа от левой рамки — как строка вида от верхней.
+    frame.draw_text(
         font,
-        vx,
-        hint_y,
-        vw,
-        &label,
+        vx + 8 * s,
+        vy + 8 * s,
+        &number,
         VIEW_LABEL_COLOR,
-        s.max(1) as usize,
+        scale,
     );
 }

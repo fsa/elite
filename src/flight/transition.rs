@@ -57,7 +57,7 @@ impl Transition {
 /// Текущий переход и имя цели гиперпрыжка.
 pub(super) struct TransitionState {
     pub(super) current: Option<Transition>,
-    /// Имя планеты для надписи «Hyperspace -- <имя>» во время отсчёта.
+    /// Имя планеты во время отсчёта (в рендере не показывается).
     planet_name: String,
 }
 
@@ -110,7 +110,7 @@ impl TransitionState {
                     t.warp = true;
                 } else {
                     // Во время отсчёта игра держит в `PlanetName` имя цели
-                    // прыжка — показываем его внизу (как на заставке).
+                    // прыжка; нативный рендер его не показывает.
                     self.planet_name = memory::planet_name_from_z80(mem);
                 }
             }
@@ -138,6 +138,7 @@ impl TransitionState {
         self.current.map(|t| t.kind)
     }
 
+    #[allow(dead_code)] // используется тестами, на экране не выводится
     pub(super) fn planet_name(&self) -> &str {
         &self.planet_name
     }

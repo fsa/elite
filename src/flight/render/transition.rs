@@ -82,7 +82,7 @@ pub(super) fn draw_warp(
     vh: i32,
     s: i32,
     elapsed: f32,
-    title: &str,
+    title: Option<&str>,
 ) {
     let view_rot = view::rotation(f.view_dir);
     draw_star_streaks(
@@ -106,17 +106,19 @@ pub(super) fn draw_warp(
         6,
         WARP_RING_COLOR,
     );
-    let scale = (s * 2).max(1) as usize;
-    draw_centered_text(
-        frame,
-        font,
-        vx,
-        vy + 4 * s,
-        vw,
-        title,
-        TRANSITION_TEXT,
-        scale,
-    );
+    if let Some(title) = title {
+        let scale = (s * 2).max(1) as usize;
+        draw_centered_text(
+            frame,
+            font,
+            vx,
+            vy + 4 * s,
+            vw,
+            title,
+            TRANSITION_TEXT,
+            scale,
+        );
+    }
 }
 
 /// Полосы звёзд, летящих на камеру.
