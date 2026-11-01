@@ -67,6 +67,11 @@ pub(super) fn draw(f: &mut Flight, frame: &mut Frame, geom: &CockpitGeom, font: 
             // подпись вида.
             draw_view_label(f, frame, font, vx, vy, vw, s, false);
             draw_jump_countdown(frame, font, vx, vy, s, t.countdown);
+            // Строку «HYPERSPACE -- <планета>» печатает сама игра; показываем
+            // перехваченный текст внизу вида, как и раньше.
+            if let Some(label) = f.messages.jump_label() {
+                draw_jump_label(frame, font, vx, vy, vw, vh, s, label);
+            }
         }
         Some(t) => {
             // У гиперпрыжка надписей нет: только тоннель и звёзды. Стыковка
@@ -147,5 +152,31 @@ fn draw_jump_countdown(frame: &mut Frame, font: &[u8], vx: i32, vy: i32, s: i32,
         &number,
         VIEW_LABEL_COLOR,
         scale,
+    );
+}
+
+/// Строка гиперпрыжка из игры внизу вида: одна текстовая строка выше нижней
+/// рамки, по центру, тем же шрифтом и цветом, что подпись вида.
+#[allow(clippy::too_many_arguments)]
+fn draw_jump_label(
+    frame: &mut Frame,
+    font: &[u8],
+    vx: i32,
+    vy: i32,
+    vw: i32,
+    vh: i32,
+    s: i32,
+    label: &str,
+) {
+    let y = vy + vh - 16 * s;
+    text::draw_centered_text(
+        frame,
+        font,
+        vx,
+        y,
+        vw,
+        label,
+        VIEW_LABEL_COLOR,
+        s.max(1) as usize,
     );
 }

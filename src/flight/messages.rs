@@ -66,6 +66,22 @@ impl Messages {
             })
             .unwrap_or_else(|| view_label(view_dir).to_string())
     }
+
+    /// Свежая строка, напечатанная игрой ниже верхней зоны вида.
+    ///
+    /// Во время отсчёта гиперпрыжка оригинал печатает там сообщение
+    /// `HYPERSPACE -- <планета>` (токен `msgNumber` из `GoJump`). Нативный
+    /// вид показывает именно перехваченный текст, а не собирает строку сам.
+    pub(super) fn jump_label(&self) -> Option<&str> {
+        let m = self.tap.as_ref()?;
+        if m.frames > MSG_MAX_AGE
+            || m.row <= MSG_TOP_ROWS
+            || !m.text.contains("HYPERSPACE")
+        {
+            return None;
+        }
+        Some(m.text.trim())
+    }
 }
 
 /// «Причесать» сообщение игры: слова с большой буквы, остальные символы

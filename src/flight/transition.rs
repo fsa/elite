@@ -4,7 +4,7 @@
 //! Модуль хранит только состояние анимации и отсчёт, который ведёт Z80;
 //! сама отрисовка живёт в [`super::render::transition`].
 
-use super::memory::{self, Z80_JUMP_COUNTDOWN, Z80_JUMP_DOCKING};
+use super::memory::{Z80_JUMP_COUNTDOWN, Z80_JUMP_DOCKING};
 
 /// Сколько секунд длится нативная анимация вылета со станции.
 ///
@@ -54,24 +54,18 @@ impl Transition {
     }
 }
 
-/// Текущий переход и имя цели гиперпрыжка.
+/// Текущий переход.
 pub(super) struct TransitionState {
     pub(super) current: Option<Transition>,
-    /// Имя планеты во время отсчёта (в рендере не показывается).
-    planet_name: String,
 }
 
 impl TransitionState {
     pub(super) fn new() -> Self {
-        TransitionState {
-            current: None,
-            planet_name: String::new(),
-        }
+        TransitionState { current: None }
     }
 
     pub(super) fn reset(&mut self) {
         self.current = None;
-        self.planet_name.clear();
     }
 
     /// Начать нативную анимацию перехода.
@@ -92,13 +86,10 @@ impl TransitionState {
         } else {
             TransitionKind::Docking
         };
-        if kind == TransitionKind::Hyperspace && countdown > 0 {
-            self.planet_name = memory::planet_name_from_z80(mem);
-        }
         self.current = Some(Transition::new(kind, countdown));
     }
 
-    /// Обновить отсчёт и имя цели по памяти игры.
+    /// Обновить отсчёт по памяти игры.
     pub(super) fn sync(&mut self, mem: &[u8]) {
         // Отсчёт гиперпрыжка ведёт Z80. Читаем его каждый кадр: пока число
         // больше нуля, нативный рендер показывает обычный полёт и цифру, а
@@ -108,10 +99,6 @@ impl TransitionState {
                 t.countdown = mem.get(Z80_JUMP_COUNTDOWN).copied().unwrap_or(0);
                 if t.countdown == 0 {
                     t.warp = true;
-                } else {
-                    // Во время отсчёта игра держит в `PlanetName` имя цели
-                    // прыжка; нативный рендер его не показывает.
-                    self.planet_name = memory::planet_name_from_z80(mem);
                 }
             }
         }
@@ -136,10 +123,5 @@ impl TransitionState {
     #[allow(dead_code)]
     pub(super) fn kind(&self) -> Option<TransitionKind> {
         self.current.map(|t| t.kind)
-    }
-
-    #[allow(dead_code)] // используется тестами, на экране не выводится
-    pub(super) fn planet_name(&self) -> &str {
-        &self.planet_name
     }
 }

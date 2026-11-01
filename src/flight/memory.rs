@@ -26,12 +26,6 @@ pub const Z80_FLG_JUMP_DOCKING: usize = 0xD040;
 /// на экране идут числа `10..1`. Ноль означает, что началась сама анимация
 /// перехода.
 pub const Z80_JUMP_COUNTDOWN: usize = 0xDBA1;
-/// `PlanetName` — имя планеты, которое игра сгенерировала последним
-/// (`GeneratePlanetName` + `CopyPlanetName`, 8 байт ASCII). При подготовке
-/// к гиперпрыжку (`GoJump` → `SearchNearPlanet`) это имя выбранной цели.
-pub(super) const Z80_PLANET_NAME: usize = 0x6E93;
-/// Длина буфера `PlanetName`.
-pub(super) const Z80_PLANET_NAME_LEN: usize = 8;
 /// `HighAngleLR` — угловая скорость крена (знак-величина).
 pub(super) const Z80_HIGH_ANGLE_LR: usize = 0x70E4;
 /// `HighAngleDU` — угловая скорость тангажа (знак-величина).
@@ -127,22 +121,4 @@ pub(super) fn read_signed8(b: u8) -> f32 {
     } else {
         mag
     }
-}
-
-/// Прочитать имя планеты из буфера игры `PlanetName` (до 8 символов ASCII):
-/// обрезается по нулевому байту и по хвостовым пробелам.
-pub(super) fn planet_name_from_z80(mem: &[u8]) -> String {
-    let end = (Z80_PLANET_NAME + Z80_PLANET_NAME_LEN).min(mem.len());
-    if Z80_PLANET_NAME >= end {
-        return String::new();
-    }
-    let mut name: String = mem[Z80_PLANET_NAME..end]
-        .iter()
-        .take_while(|&&c| c != 0 && (0x20..0x7F).contains(&c))
-        .map(|&c| c as char)
-        .collect();
-    while name.ends_with(' ') {
-        name.pop();
-    }
-    name
 }

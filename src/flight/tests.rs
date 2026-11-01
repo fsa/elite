@@ -4,7 +4,7 @@ use super::*;
 use crate::render3d::{Rotation, Screen};
 
 use super::memory::{
-    read_signed24, read_signed8, Z80_OBJ_CORIOLIS, Z80_OBJ_SLOT0, Z80_PLANET_CRD, Z80_PLANET_NAME,
+    read_signed24, read_signed8, Z80_OBJ_CORIOLIS, Z80_OBJ_SLOT0, Z80_PLANET_CRD,
     Z80_SHIELD_FRONT, Z80_SLOT_OADRDATA, Z80_SLOT_OENERG, Z80_SUN_CRD, Z80_TEMP_LASER,
 };
 use super::messages::{
@@ -936,31 +936,41 @@ fn hyperspace_countdown_keeps_normal_flight_until_zero() {
 }
 
 #[test]
-fn hyperspace_countdown_reads_target_planet_name() {
-    // Имя цели прыжка игра держит в `PlanetName`; нативный рендер только
-    // читает его из памяти, ничего не ищет сам.
+fn hyperspace_label_comes_from_game_message() {
+    // Строку «HYPERSPACE -- <планета>» печатает сама игра; нативный вид
+    // показывает перехваченный текст, а не собирает его из `PlanetName`.
     let mut f = open();
-    // Память должна покрывать `JumpDocking` и `JumpCountdown` (старшие
-    // адреса полётного состояния лежат выше `Z80_MEM_MIN`).
-    let mut mem = vec![0u8; Z80_JUMP_COUNTDOWN + 1];
-    mem[Z80_JUMP_DOCKING] = 1;
-    mem[Z80_JUMP_COUNTDOWN] = 0x0A;
-    mem[Z80_PLANET_NAME..Z80_PLANET_NAME + 8].copy_from_slice(b"DISOHERE");
-    f.start_transition(false, &mem);
-    f.sync_from_z80(&mem);
-    assert_eq!(f.transition_kind(), Some(TransitionKind::Hyperspace));
-    assert_eq!(f.transition.planet_name(), "DISOHERE");
+    f.messages.tap = Some(CapturedMsg {
+        text: "HYPERSPACE -- LAVE".into(),
+        row: MSG_TOP_ROWS + 1,
+        frames: 0,
+    });
+    assert_eq!(f.messages.jump_label(), Some("HYPERSPACE -- LAVE"));
 
-    // Имя обрезается по нулю и по хвостовым пробелам.
-    mem[Z80_PLANET_NAME..Z80_PLANET_NAME + 8].copy_from_slice(b"LAVE    ");
-    mem[Z80_JUMP_COUNTDOWN] = 0x06;
-    f.sync_from_z80(&mem);
-    assert_eq!(f.transition.planet_name(), "LAVE");
+    // Строка из верхней зоны вида — это подпись направления, а не сообщение
+    // гиперпрыжка.
+    f.messages.tap = Some(CapturedMsg {
+        text: "FRONT VIEW".into(),
+        row: 1,
+        frames: 0,
+    });
+    assert_eq!(f.messages.jump_label(), None);
 
-    // Как только отсчёт дошёл до нуля, начинается тоннель.
-    mem[Z80_JUMP_COUNTDOWN] = 0;
-    f.sync_from_z80(&mem);
-    assert!(f.transition.current.expect("переход пропал").warp);
+    // Другие сообщения в нижней зоне к прыжку не относятся.
+    f.messages.tap = Some(CapturedMsg {
+        text: "MISSILE JAMMED".into(),
+        row: MSG_TOP_ROWS + 1,
+        frames: 0,
+    });
+    assert_eq!(f.messages.jump_label(), None);
+
+    // Устаревшее сообщение тоже не показываем.
+    f.messages.tap = Some(CapturedMsg {
+        text: "HYPERSPACE -- LAVE".into(),
+        row: MSG_TOP_ROWS + 1,
+        frames: MSG_MAX_AGE + 1,
+    });
+    assert_eq!(f.messages.jump_label(), None);
 }
 
 #[test]
