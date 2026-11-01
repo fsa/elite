@@ -940,7 +940,7 @@ fn hyperspace_label_comes_from_game_message() {
     // Строку «HYPERSPACE -- <планета>» печатает сама игра; нативный вид
     // показывает перехваченный текст, а не собирает его из `PlanetName`.
     let mut f = open();
-    f.messages.tap = Some(CapturedMsg {
+    f.messages.jump = Some(CapturedMsg {
         text: "HYPERSPACE -- LAVE".into(),
         row: MSG_TOP_ROWS + 1,
         frames: 0,
@@ -949,7 +949,7 @@ fn hyperspace_label_comes_from_game_message() {
 
     // Строка из верхней зоны вида — это подпись направления, а не сообщение
     // гиперпрыжка.
-    f.messages.tap = Some(CapturedMsg {
+    f.messages.jump = Some(CapturedMsg {
         text: "FRONT VIEW".into(),
         row: 1,
         frames: 0,
@@ -957,7 +957,7 @@ fn hyperspace_label_comes_from_game_message() {
     assert_eq!(f.messages.jump_label(), None);
 
     // Другие сообщения в нижней зоне к прыжку не относятся.
-    f.messages.tap = Some(CapturedMsg {
+    f.messages.jump = Some(CapturedMsg {
         text: "MISSILE JAMMED".into(),
         row: MSG_TOP_ROWS + 1,
         frames: 0,
@@ -965,12 +965,35 @@ fn hyperspace_label_comes_from_game_message() {
     assert_eq!(f.messages.jump_label(), None);
 
     // Устаревшее сообщение тоже не показываем.
-    f.messages.tap = Some(CapturedMsg {
+    f.messages.jump = Some(CapturedMsg {
         text: "HYPERSPACE -- LAVE".into(),
         row: MSG_TOP_ROWS + 1,
         frames: MSG_MAX_AGE + 1,
     });
     assert_eq!(f.messages.jump_label(), None);
+}
+
+#[test]
+fn jump_line_survives_later_prints_in_other_rows() {
+    // После строки гиперпрыжка игра печатает подпись вида и индикаторы.
+    // Общая «последняя строка» перестаёт быть сообщением, но история по
+    // ZX-строкам сохраняет строку прыжка.
+    let mut f = open();
+    let mut tap = GameMsgTap::default();
+    tap.enabled = true;
+    for (i, c) in b"HYPERSPACE -- LAVE".iter().enumerate() {
+        tap.push_char(*c, 13, 5 + i as u8);
+    }
+    // Следом — подпись вида в верхней строке и индикатор в другой строке.
+    for (i, c) in b"FRONT VIEW".iter().enumerate() {
+        tap.push_char(*c, 1, i as u8);
+    }
+    for (i, c) in b"FUEL".iter().enumerate() {
+        tap.push_char(*c, 20, i as u8);
+    }
+    f.sync_game_msg(&tap);
+    assert_eq!(f.messages.top_label(f.view_dir), "Front View");
+    assert_eq!(f.messages.jump_label(), Some("HYPERSPACE -- LAVE"));
 }
 
 #[test]

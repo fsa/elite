@@ -893,6 +893,39 @@ fn message_capture_collects_token_string() {
     assert_eq!(n.game_msg.frames, 0);
 }
 
+/// Строка гиперпрыжка из настоящей таблицы токенов: `msgNumber = 0xC0`
+/// раскрывается в `HYPERSPACE -- <PlanetName>`. Печать идёт в ZX-строку 13,
+/// как её ставит `sub_DAB4`, и остаётся в истории строк.
+#[test]
+fn message_capture_collects_hyperspace_line() {
+    let mut n = kladov();
+    install(&mut n, true);
+    n.game_msg.enabled = true;
+
+    // Имя планеты (`PlanetName`), которое печатает управляющий код 3
+    // внутри токена.
+    n.mem[0xDEED..0xDEF6].copy_from_slice(b"LAVE\0\0\0\0\0");
+    // Курсор `sub_DAB4`: строка 13, колонка 5.
+    n.mem[KLADOV_CRD_X_PRN_SYMBOL] = 5;
+    n.mem[KLADOV_CRD_X_PRN_SYMBOL + 1] = 13;
+
+    set(&mut n.cpu, 0xC0, 0x1234, 0x5678, 0x00);
+    n.cpu.b = 0x11;
+    n.cpu.c = 0x22;
+    n.cpu.r = 0x3E;
+    run_until_ret(&mut n, 0xD425, 0x4116, true);
+
+    assert_eq!(n.game_msg.text, "HYPERSPACE -- LAVE");
+    let line = n
+        .game_msg
+        .lines
+        .iter()
+        .find(|l| l.row == 13)
+        .expect("строка гиперпрыжка не попала в историю");
+    assert_eq!(line.text, "HYPERSPACE -- LAVE");
+    assert_eq!(line.col, 5);
+}
+
 /// Пара машин (чистый Z80 и с хуками) с одинаковым детерминированным
 /// паттерном памяти везде, кроме кода и таблицы звуковой рутины
 /// (`0x9560..0x96C0`): данные эффектов (`HL`), переменные автомата и

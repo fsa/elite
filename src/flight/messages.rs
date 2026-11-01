@@ -1,7 +1,7 @@
 //! Надписи вида: перехваченные сообщения игры, подписи направления и отсчёт.
 //!
 //! Текст сообщений печатает сама игра через `sub_D499`; нативный вид только
-//! сохраняет последнюю строку и показывает её тем же шрифтом, что заголовок
+//! сохраняет напечатанные строки и показывает их тем же шрифтом, что заголовок
 //! заставки. Когда свежего сообщения нет, на его месте держится подпись
 //! направления вида.
 
@@ -27,10 +27,13 @@ pub(super) struct CapturedMsg {
     pub(super) frames: u32,
 }
 
-/// Последнее перехваченное сообщение игры.
+/// Перехваченные сообщения игры.
 #[derive(Default)]
 pub(super) struct Messages {
+    /// Последняя напечатанная строка (для верхней надписи вида).
     pub(super) tap: Option<CapturedMsg>,
+    /// Строка гиперпрыжка, выбранная из истории печати по строкам ZX.
+    pub(super) jump: Option<CapturedMsg>,
 }
 
 impl Messages {
@@ -40,19 +43,37 @@ impl Messages {
 
     pub(super) fn reset(&mut self) {
         self.tap = None;
+        self.jump = None;
     }
 
     /// Забрать перехваченное игровое сообщение (заполняет хук печати
     /// `sub_D499`; см. [`crate::machine::GameMsgTap`]).
+    ///
+    /// Игра печатает строку гиперпрыжка в отдельную ZX-строку (13), а следом
+    /// за ней — индикаторы и подписи в другие строки. Поэтому общая «последняя
+    /// строка» `tap.text` уже не содержит `HYPERSPACE`; саму строку прыжка
+    /// берём из истории по ZX-строкам.
     pub(super) fn sync(&mut self, tap: &GameMsgTap) {
-        if !tap.enabled || tap.text.trim().is_empty() {
+        if !tap.enabled {
             return;
         }
-        self.tap = Some(CapturedMsg {
-            text: tap.text.clone(),
-            row: tap.row,
-            frames: tap.frames,
-        });
+        if !tap.text.trim().is_empty() {
+            self.tap = Some(CapturedMsg {
+                text: tap.text.clone(),
+                row: tap.row,
+                frames: tap.frames,
+            });
+        }
+        self.jump = tap
+            .lines
+            .iter()
+            .filter(|l| l.row > MSG_TOP_ROWS && l.text.contains("HYPERSPACE"))
+            .min_by_key(|l| l.frames)
+            .map(|l| CapturedMsg {
+                text: l.text.clone(),
+                row: l.row,
+                frames: l.frames,
+            });
     }
 
     /// Текст верхней надписи: свежее сообщение игры из верхней зоны вида,
@@ -67,17 +88,14 @@ impl Messages {
             .unwrap_or_else(|| view_label(view_dir).to_string())
     }
 
-    /// Свежая строка, напечатанная игрой ниже верхней зоны вида.
+    /// Свежая строка гиперпрыжка, напечатанная игрой.
     ///
-    /// Во время отсчёта гиперпрыжка оригинал печатает там сообщение
-    /// `HYPERSPACE -- <планета>` (токен `msgNumber` из `GoJump`). Нативный
-    /// вид показывает именно перехваченный текст, а не собирает строку сам.
+    /// Во время отсчёта гиперпрыжка оригинал печатает `HYPERSPACE -- <планета>`
+    /// в отдельную ZX-строку (токен `msgNumber` из `GoJump`). Нативный вид
+    /// показывает именно перехваченный текст, а не собирает строку сам.
     pub(super) fn jump_label(&self) -> Option<&str> {
-        let m = self.tap.as_ref()?;
-        if m.frames > MSG_MAX_AGE
-            || m.row <= MSG_TOP_ROWS
-            || !m.text.contains("HYPERSPACE")
-        {
+        let m = self.jump.as_ref()?;
+        if m.frames > MSG_MAX_AGE || m.row <= MSG_TOP_ROWS || !m.text.contains("HYPERSPACE") {
             return None;
         }
         Some(m.text.trim())

@@ -77,4 +77,40 @@ fn tap_clear_resets_line() {
     t.clear();
     assert!(t.text.is_empty());
     assert_eq!(t.frames, 0);
+    assert!(t.lines.is_empty());
+}
+
+#[test]
+fn tap_keeps_last_line_of_each_row() {
+    let mut t = GameMsgTap::default();
+    t.enabled = true;
+    for (i, c) in b"HYPERSPACE".iter().enumerate() {
+        t.push_char(*c, 13, 5 + i as u8);
+    }
+    for (i, c) in b"FRONT".iter().enumerate() {
+        t.push_char(*c, 1, i as u8);
+    }
+    // «Последняя» строка — верхняя подпись, но строка прыжка осталась в истории.
+    assert_eq!(t.text, "FRONT");
+    let jump = t
+        .lines
+        .iter()
+        .find(|l| l.row == 13)
+        .expect("строка гиперпрыжка потерялась");
+    assert_eq!(jump.text, "HYPERSPACE");
+    assert_eq!(jump.col, 5);
+
+    // Повторная печать в ту же строку начинает её заново, не трогая другие.
+    t.push_char(b'X', 13, 0);
+    assert_eq!(
+        t.lines
+            .iter()
+            .find(|l| l.row == 13)
+            .map(|l| l.text.as_str()),
+        Some("X")
+    );
+    assert_eq!(
+        t.lines.iter().find(|l| l.row == 1).map(|l| l.text.as_str()),
+        Some("FRONT")
+    );
 }
