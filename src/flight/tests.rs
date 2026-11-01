@@ -10,7 +10,7 @@ use super::memory::{
 use super::messages::{
     countdown_number, pretty_title, view_label, CapturedMsg, MSG_MAX_AGE, MSG_TOP_ROWS,
 };
-use super::palette::{CYAN, ENEMY_BEAM};
+use super::palette::{CYAN, ENEMY_BEAM, planet_rim};
 use super::render::scene::draw_stars_view;
 use super::scene::{BodyKind, PLANET_RADIUS, SUN_RADIUS};
 use super::stars::{star_count_for, Star, SPEED_MAX, STAR_COUNT, STAR_COUNT_MAX, STAR_FIELD_RADIUS};
@@ -242,6 +242,14 @@ fn planet_is_dark_green_and_smaller_than_sun() {
     let color = planet_green(0xFF40_80C0);
     assert_eq!(color & 0x00FF_00FF, 0, "у планеты не зелёный цвет");
     assert!((color >> 8) & 0xFF > 0, "планета слишком тёмная");
+    // У планеты есть более яркий ободок: тёмная заливка остаётся, но диск
+    // не сливается с чёрным космосом и сохраняет рамку оригинала.
+    let rim = planet_rim(color);
+    assert_eq!(rim & 0x00FF_00FF, 0, "ободок планеты не зелёный");
+    assert!(
+        (rim >> 8) & 0xFF > (color >> 8) & 0xFF,
+        "ободок не ярче заливки"
+    );
     assert!(
         PLANET_RADIUS < SUN_RADIUS,
         "планета не должна быть больше солнца"

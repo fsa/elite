@@ -3,7 +3,7 @@
 use crate::display::Frame;
 use crate::render3d::{self, Rotation, Screen};
 
-use super::super::palette::{CYAN, ENEMY_BEAM, RED};
+use super::super::palette::{CYAN, ENEMY_BEAM, RED, planet_rim};
 use super::super::scene::{Body, BodyKind};
 use super::super::stars::Star;
 use super::super::view::{self, ViewDir};
@@ -19,7 +19,7 @@ pub(super) fn draw_flight_scene(
     s: i32,
 ) {
     draw_stars_view(frame, screen, &f.stars.stars, view_rot, f.stars.streak());
-    draw_bodies_view(f, frame, screen, view_rot);
+    draw_bodies_view(f, frame, screen, view_rot, s);
     draw_enemy_shots_view(f, frame, screen, 0, view_bottom, view_rot);
     if f.view_dir == ViewDir::Forward {
         draw_crosshair(frame, screen.cx, screen.cy, s);
@@ -86,7 +86,7 @@ pub(crate) fn draw_stars_view(
     }
 }
 
-fn draw_bodies_view(f: &Flight, frame: &mut Frame, screen: &Screen, view_rot: &Rotation) {
+fn draw_bodies_view(f: &Flight, frame: &mut Frame, screen: &Screen, view_rot: &Rotation, s: i32) {
     let cam = view_rot.transpose();
     // Дальние объекты рисуются первыми, ближние перекрывают их.
     let mut order: Vec<(f32, usize)> = f
@@ -110,7 +110,7 @@ fn draw_bodies_view(f: &Flight, frame: &mut Frame, screen: &Screen, view_rot: &R
                 let Some((x, y, r, _)) = project_view(b, screen, &cam) else {
                     continue;
                 };
-                fill_disc(frame, x, y, r, b.color);
+                draw_planet(frame, x, y, r, b.color, s);
             }
             BodyKind::Sun => {
                 let Some((x, y, r, _)) = project_view(b, screen, &cam) else {
@@ -126,6 +126,21 @@ fn draw_bodies_view(f: &Flight, frame: &mut Frame, screen: &Screen, view_rot: &R
                 render3d::draw_ship(frame, model, &vrot, vpos, screen, render3d::SHIP_COLOR);
             }
         }
+    }
+}
+
+/// Нарисовать планету: тёмно-зелёная заливка и более яркий ободок.
+///
+/// Толщина ободка масштабируется вместе с видом (`s`), чтобы на большом окне
+/// рамка не превращалась в волосяную линию. У очень маленькой планеты
+/// ободок занимает весь диск — как в оригинале, где планета рисовалась
+/// только контуром.
+fn draw_planet(frame: &mut Frame, x: f32, y: f32, r: f32, color: u32, s: i32) {
+    let rim = planet_rim(color);
+    let thickness = s.max(1) as f32;
+    fill_disc(frame, x, y, r, rim);
+    if r > thickness {
+        fill_disc(frame, x, y, r - thickness, color);
     }
 }
 
