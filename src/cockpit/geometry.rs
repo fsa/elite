@@ -358,9 +358,10 @@ impl CockpitGeom {
 
     /// Клетка пары `E`/`S` в правом нижнем углу центральной клетки.
     ///
-    /// `E` стоит слева, `S` справа — вместе они читаются как `ES`. Правый
-    /// край `S` совпадает с правым краем верхнего кружка компаса, а нижний
-    /// отступ такой же, как верхний отступ кружков.
+    /// `E` стоит слева, `S` справа — вместе они читаются как `ES`. `S`
+    /// центрирована по воображаемому кружку под верхним компасом: её центр
+    /// совпадает по X с центром компаса и зеркален ему по Y. Самих кружков
+    /// внизу нет.
     fn status_pair(&self) -> Rect {
         let center = self.center_cell();
         if center.is_empty() {
@@ -373,14 +374,16 @@ impl CockpitGeom {
         }
         let gap = self.top_gap();
         let glyph = self.status_glyph();
-        let w = (glyph * 2).min((center.w - 2 * gap).max(0));
-        let h = glyph.min((center.h - 2 * gap).max(0));
-        Rect {
-            x: center.x + center.w - gap - w,
-            y: center.y + center.h - gap - h,
-            w,
-            h,
-        }
+        let w = (glyph * 2).min(center.w);
+        let h = glyph.min(center.h);
+        let compass = self.compass_cell();
+        // Центр воображаемого нижнего кружка под компасом.
+        let cx = compass.x + compass.w / 2;
+        let cy = center.y + center.h - gap - compass.w / 2;
+        // S — правая половина пары, её центр должен попасть в (cx, cy).
+        let x = (cx - w * 3 / 4).clamp(center.x, (center.x + center.w - w).max(center.x));
+        let y = (cy - h / 2).clamp(center.y, (center.y + center.h - h).max(center.y));
+        Rect { x, y, w, h }
     }
 
     /// Клетка символа `E` (ECM) — левая половина пары `ES`.

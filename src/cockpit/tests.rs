@@ -1091,10 +1091,10 @@ fn layout_reads_station_and_ecm_flags() {
     assert!(v.ecm_on, "время работы ECM не прочитано");
 }
 
-/// `E` и `S` стоят рядом как `ES` в правом нижнем углу, `S` зеркален
-/// верхнему компасу, а пара не пересекает овал радара.
+/// `E` и `S` стоят рядом как `ES`, а `S` центрирована по воображаемому
+/// нижнему кружку под компасом. Самих нижних кружков нет.
 #[test]
-fn status_pair_reads_es_and_mirrors_compass() {
+fn status_pair_centers_s_under_compass() {
     for (w, h) in [(1280, 960), (640, 480), (256, 192), (1920, 1080)] {
         let g = panel_geometry(w, h);
         let ecm = g.ecm_cell();
@@ -1113,14 +1113,14 @@ fn status_pair_reads_es_and_mirrors_compass() {
             "{w}x{h}: E должна быть слева от S без зазора"
         );
         assert_eq!(
-            station.right(),
-            compass.right(),
-            "{w}x{h}: S не под кружком компаса"
+            station.x + station.w / 2,
+            compass.x + compass.w / 2,
+            "{w}x{h}: S не по центру воображаемого кружка под компасом"
         );
         assert_eq!(
-            center.y + center.h - (ecm.y + ecm.h),
-            danger.y - center.y,
-            "{w}x{h}: нижний отступ не зеркален верхнему"
+            center.y + center.h - (station.y + station.h / 2),
+            compass.y + compass.h / 2 - center.y,
+            "{w}x{h}: S не зеркальна компас по вертикали"
         );
         assert!(
             ecm.w >= danger.w / 2,
