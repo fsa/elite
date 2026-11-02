@@ -56,7 +56,7 @@
 
 use crate::display::Frame;
 
-pub use self::geometry::{CockpitGeom, Rect, panel_geometry};
+pub use self::geometry::{CockpitGeom, LINE, Rect, panel_geometry};
 pub use self::layout::KLADOV_COCKPIT;
 pub use self::palette::{
     BACKGROUND, BAR_MAGENTA, BAR_RED, CockpitStyle, DANGER_COLOR, FRAME_COLOR,
@@ -66,7 +66,7 @@ pub use self::values::CockpitValues;
 // Элементы ниже нужны только тестам модуля: боевой код обращается к
 // подмодулям напрямую.
 #[cfg(test)]
-pub use self::geometry::{BAR_WIDTH_FRAC, LABEL_WIDTH_PER_ROW_PCT, LINE};
+pub use self::geometry::{BAR_WIDTH_FRAC, LABEL_WIDTH_PER_ROW_PCT};
 #[cfg(test)]
 pub use self::labels::{LEFT_LABELS, RIGHT_LABELS};
 #[cfg(test)]

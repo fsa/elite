@@ -34,6 +34,22 @@ impl App<'_> {
         }
     }
 
+    /// Синхронизировать нативный полёт с состоянием Z80 после кадров
+    /// эмулятора. Под картой полёт не рисуется, но продолжает жить: при
+    /// закрытии карты не должно быть скачка звёзд и переходов.
+    fn sync_flight_after_frames(&mut self, frames: u64) {
+        if !self.flight.active {
+            return;
+        }
+        self.follow_flight_screen();
+        self.flight.sync_from_z80(&self.machine.mem);
+        self.flight.sync_game_msg(&self.machine.game_msg);
+        for _ in 0..frames {
+            self.machine.game_msg.next_frame();
+        }
+        self.flight.tick(frames as f32 / 50.0);
+    }
+
     /// Один кадр: ввод, эмуляция, звук, отрисовка и показ.
     pub(super) fn frame(&mut self) {
         let Some(window) = self.window.clone() else {
@@ -54,14 +70,30 @@ impl App<'_> {
         let layout = display::layout(size.width, size.height);
         if self.hdmap.active || self.shop.active || self.machine.intro_seen || self.flight.active {
             // Отдельный нативный экран (карта/закупка/заставка/полёт): HD-слой
-            // во всё окно. Карта, закупка и заставка ставят игру на паузу; под
-            // экраном полёта эмулятор продолжает работать. Слой непрозрачный и
-            // покрывает окно целиком, поэтому композитится в угол (0, 0).
+            // во всё окно. Закупка и заставка ставят игру на паузу; под картой
+            // и экраном полёта эмулятор продолжает работать. Слой непрозрачный
+            // и покрывает окно целиком, поэтому композитится в угол (0, 0).
             self.machine
                 .hd
                 .resize(size.width as usize, size.height as usize);
             self.machine.hd.clear(display::TRANSPARENT);
-            if self.flight.active {
+            if self.hdmap.active {
+                // Карта — только наложение: Z80 продолжает идти обычным ходом,
+                // как и в полёте. Клавиши принадлежат карте, поэтому в игру
+                // ввод не передаётся.
+                self.machine.release_all_keys();
+                self.machine.release_joystick();
+                if !self.menu {
+                    let frames = self.emulation_frames();
+                    self.machine.run_frames(frames);
+                    self.sync_flight_after_frames(frames);
+                    self.play_frame_audio();
+                }
+            } else if self.shop.active {
+                // Закупка по-прежнему ставит игру на паузу.
+                self.machine.release_all_keys();
+                self.machine.release_joystick();
+            } else if self.flight.active {
                 // Экран полёта: рисует то, что посчитал Z80, поэтому эмулятор
                 // продолжает работать, а ввод идёт в игру. На паузе (меню)
                 // симуляция замирает.
@@ -69,13 +101,7 @@ impl App<'_> {
                     let frames = self.emulation_frames();
                     self.forward_input();
                     self.machine.run_frames(frames);
-                    self.follow_flight_screen();
-                    self.flight.sync_from_z80(&self.machine.mem);
-                    self.flight.sync_game_msg(&self.machine.game_msg);
-                    for _ in 0..frames {
-                        self.machine.game_msg.next_frame();
-                    }
-                    self.flight.tick(frames as f32 / 50.0);
+                    self.sync_flight_after_frames(frames);
                     self.play_frame_audio();
                 } else {
                     self.machine.release_all_keys();
@@ -120,7 +146,9 @@ impl App<'_> {
         self.mouse_wheel_up = false;
         self.mouse_wheel_down = false;
         self.machine.render_rgba(&mut self.buf);
-        if self.flight.active {
+        if self.hdmap.active {
+            self.hdmap.draw(&mut self.machine.hd, ZX_FONT);
+        } else if self.flight.active {
             // Экран полёта: нативный вид в верхней части окна (по данным Z80)
             // и тот же кокпит, что на заставке, — внизу.
             let g = cockpit::panel_geometry(size.width, size.height);
@@ -139,8 +167,6 @@ impl App<'_> {
             if self.menu {
                 draw_pause_menu(&mut self.machine.hd, ZX_FONT, self.menu_sel, false);
             }
-        } else if self.hdmap.active {
-            self.hdmap.draw(&mut self.machine.hd, ZX_FONT);
         } else if self.shop.active {
             self.shop
                 .draw(&mut self.machine.hd, ZX_FONT, &self.machine.mem);

@@ -29,12 +29,8 @@ impl Map {
         let place =
             |x: i32, row: i32| -> Option<(i32, i32)> { self.place_planet(&l, x, row, margin) };
 
-        // Поле галактики и его рамка.
-        f.fill_rect(l.fx0, l.fy0, l.fw as usize, l.fh as usize, FIELD_BG);
-        f.hline(l.fx0, l.fy0, l.fw as usize, BORDER);
-        f.hline(l.fx0, l.fy0 + l.fh - 1, l.fw as usize, BORDER);
-        f.vline(l.fx0, l.fy0, l.fh as usize, BORDER);
-        f.vline(l.fx0 + l.fw - 1, l.fy0, l.fh as usize, BORDER);
+        // Поле галактики на чёрном фоне, без собственной рамки: единственная
+        // рамка — белая рамка экрана.
 
         // Круг дальности прыжка вокруг текущей системы (как в карте I).
         let range = self.range_px(l.scale);
@@ -96,22 +92,29 @@ impl Map {
 
         f.clear_clip();
 
-        // Заголовок: как в оригинале — «GALACTIC CHART <номер галактики>».
+        // Верхняя ячейка таблицы: красная шапка во всю ширину, отделённая
+        // белой рамкой. Заголовок — как в оригинале, «GALACTIC CHART <n>».
+        let inner_x = l.margin + l.frame;
+        let inner_w = (f.width as i32 - 2 * inner_x).max(0);
+        f.fill_rect(
+            inner_x,
+            l.header_y,
+            inner_w as usize,
+            l.header_h.max(0) as usize,
+            HEADER_BG,
+        );
         let title = format!("GALACTIC CHART {}", self.galaxy_number());
         let tw = title.len() as i32 * 8 * ts as i32;
-        let tx0 = ((f.width as i32 - tw) / 2).max(8 * ts as i32);
-        f.draw_text(font, tx0, l.title_y, &title, TEXT, ts);
-        // Индикатор зума справа.
-        let zs = format!("x{:.2}", self.zoom());
-        let zx = (f.width as i32 - 8 * ts as i32 - zs.len() as i32 * 8 * ts as i32).max(0);
-        f.draw_text(font, zx, l.title_y, &zs, TEXT_DIM, ts);
+        let tx0 = inner_x + ((inner_w - tw) / 2).max(0);
+        f.draw_text(font, tx0, l.title_y, &title, HEADER_TEXT, ts);
 
-        // Панель внизу: текущая система и выбранная планета с расстоянием.
-        let panel_h = f.height as i32 - l.panel_y;
+        // Панель внизу — ячейка таблицы с чёрным фоном: сверху её отделяет
+        // белый разделитель, остальные края — внешняя рамка экрана.
+        let panel_bottom = (f.height as i32 - l.margin - l.frame).max(l.panel_y);
+        let panel_h = panel_bottom - l.panel_y;
         let py = l.panel_y;
-        f.fill_rect(0, py, f.width, panel_h as usize, 0xFF00_0000);
-        f.hline(0, py, f.width, BORDER);
-        let tx = 8 * ts as i32;
+        f.fill_rect(inner_x, py, inner_w as usize, panel_h.max(0) as usize, BG);
+        let tx = inner_x + 8 * ts as i32;
         let mut ty = py + 4 * ts as i32;
         if let Some(i) = sys {
             let s = format!("SYSTEM   {:<8}", self.name_of(i));
@@ -136,13 +139,46 @@ impl Map {
             f.draw_text(font, tx + 8 * ts as i32, ty, &s, NEAR_RING, ts);
         }
         ty += line + 2;
-        f.draw_text(
-            font,
-            tx,
-            ty,
-            "F10/Esc back   mouse: point/pick   wheel or +/-: zoom",
-            TEXT_DIM,
-            ts,
+        let help = format!(
+            "F10/Esc back   mouse: point/pick   wheel or +/-: zoom x{:.2}",
+            self.zoom()
         );
+        f.draw_text(font, tx, ty, &help, TEXT_DIM, ts);
+
+        // Белая рамка вокруг всего экрана и разделитель под шапкой. Рисуется
+        // последней, чтобы линии не перекрывались содержимым.
+        draw_screen_frame(f, &l);
     }
+}
+
+/// Обвести экран белой рамкой и отделить верхнюю ячейку с заголовком.
+///
+/// Толщина линий и отступ от краёв взяты с кокпита, чтобы при переключении
+/// между экранами внешняя рамка не меняла положение и толщину.
+fn draw_screen_frame(f: &mut Frame, l: &MapLayout) {
+    let w = f.width as i32;
+    let h = f.height as i32;
+    let m = l.margin.max(0);
+    let fw = (w - 2 * m).max(0);
+    let fh = (h - 2 * m).max(0);
+    let t = l.frame.clamp(1, fw.min(fh).max(1)) as usize;
+    if fw <= 0 || fh <= 0 {
+        return;
+    }
+    // Верхняя и нижняя линии рамки.
+    f.fill_rect(m, m, fw as usize, t, FRAME);
+    f.fill_rect(m, m + fh - t as i32, fw as usize, t, FRAME);
+    // Боковые линии между ними.
+    let side_h = (fh - 2 * t as i32).max(0) as usize;
+    if side_h > 0 {
+        f.fill_rect(m, m + t as i32, t, side_h, FRAME);
+        f.fill_rect(m + fw - t as i32, m + t as i32, t, side_h, FRAME);
+    }
+    // Нижняя окантовка ячейки заголовка — общая горизонтальная линия.
+    let y = l.header_y + l.header_h;
+    f.fill_rect(m, y, fw as usize, t, FRAME);
+    // Верхняя окантовка нижней ячейки: панель тоже читается как ячейка
+    // таблицы, нижние и боковые края ей даёт внешняя рамка.
+    let py = l.panel_y - l.frame;
+    f.fill_rect(m, py, fw as usize, t, FRAME);
 }

@@ -2,12 +2,14 @@
 
 use super::*;
 
-/// Фон карты.
-pub(super) const BG: u32 = 0xFF00_0008;
-/// Фон поля галактики.
-pub(super) const FIELD_BG: u32 = 0xFF00_1018;
-/// Рамка поля.
-pub(super) const BORDER: u32 = 0xFF30_6070;
+/// Фон карты — чёрный, как поле оригинала.
+pub(super) const BG: u32 = 0xFF00_0000;
+/// Белая рамка вокруг всего экрана — как линии кокпита.
+pub(super) const FRAME: u32 = crate::cockpit::FRAME_COLOR;
+/// Фон верхней ячейки с заголовком — красный, как клетки Cobra Mk III.
+pub(super) const HEADER_BG: u32 = crate::cockpit::BAR_RED;
+/// Текст заголовка — белый, как линии кокпита.
+pub(super) const HEADER_TEXT: u32 = crate::cockpit::FRAME_COLOR;
 /// Радиус планеты: доля игрового радиуса (`3..5`) на единицу масштаба поля.
 pub(super) const PLANET_RADIUS: f32 = 0.16;
 /// Кольцо вокруг текущей системы (ЛАВЕ и т.п.).
@@ -41,6 +43,15 @@ pub(super) fn planet_px(p: &Planet, scale: f32) -> i32 {
 #[derive(Clone, Copy)]
 pub(super) struct View {
     pub(super) line: i32,
+    /// Отступ от краёв окна до внешней рамки — как у главной рамки кокпита.
+    pub(super) margin: i32,
+    /// Толщина белой рамки вокруг экрана и разделителя под заголовком —
+    /// та же, что у линий кокпита.
+    pub(super) frame: i32,
+    /// Высота ячейки заголовка (без рамки и разделителя).
+    pub(super) header_h: i32,
+    /// Верх ячейки заголовка (внутри верхней рамки).
+    pub(super) header_y: i32,
     pub(super) top: i32,
     pub(super) panel_y: i32,
     pub(super) vx0: i32,
@@ -59,21 +70,35 @@ pub(super) struct View {
 pub(super) fn view(w: u32, h: u32) -> View {
     let text = (h as f32 / 300.0).floor().max(1.0) as usize;
     let line = 8 * text as i32;
-    // Полоса под заголовок: строка текста плюс отступы сверху и снизу,
-    // чтобы заголовок не налезал на поле (важно при крупном шрифте —
-    // на 16:9/16:10 окнах `text` = 3 и больше).
-    let top = 12 * text as i32 + 8;
+    // Рамка и отступы берутся с экрана кокпита: при переключении между
+    // кокпитом и картой внешняя рамка остаётся на месте.
+    let frame = crate::cockpit::LINE.max(1);
+    let margin = crate::cockpit::panel_geometry(w, h).margin;
+    // Верхняя ячейка таблицы: две текстовые строки в высоту, как красная
+    // шапка карты в оригинале.
+    let header_h = 2 * line;
+    let header_y = margin + frame;
+    let inner_x = margin + frame;
+    let inner_w = (w as i32 - 2 * inner_x).max(1);
+    // Ниже ячейки — белый разделитель, затем поле галактики.
+    let top = header_y + header_h + frame;
     let panel_h = line * 3 + 8 * text as i32;
-    let panel_y = h as i32 - panel_h;
-    let vx0 = 0;
+    // Панель — такая же ячейка таблицы, но снизу: белый разделитель над ней
+    // и внешняя рамка вокруг. Поле заканчивается перед разделителем.
+    let panel_y = (h as i32 - margin - frame - panel_h).max(top + frame);
+    let vx0 = inner_x;
     let vy0 = top;
-    let vw = w as i32;
-    let vh = (panel_y - top).max(1);
-    let base = (w as f32 / 256.0)
+    let vw = inner_w;
+    let vh = (panel_y - frame - top).max(1);
+    let base = (vw as f32 / 256.0)
         .min(vh as f32 / FIELD_HEIGHT as f32)
         .max(1.0);
     View {
         line,
+        margin,
+        frame,
+        header_h,
+        header_y,
         top,
         panel_y,
         vx0,
@@ -81,7 +106,7 @@ pub(super) fn view(w: u32, h: u32) -> View {
         vw,
         vh,
         base,
-        vcx: vw as f32 / 2.0,
+        vcx: vx0 as f32 + vw as f32 / 2.0,
         vcy: vy0 as f32 + vh as f32 / 2.0,
         text,
     }
@@ -132,9 +157,17 @@ pub struct MapLayout {
     pub text: usize,
     /// Верхняя граница нижней панели.
     pub panel_y: i32,
-    /// Высота верхней полосы (под заголовок).
+    /// Толщина белой рамки и разделителя под заголовком.
+    pub frame: i32,
+    /// Отступ от краёв окна до внешней рамки (как у кокпита).
+    pub margin: i32,
+    /// Верх красной ячейки заголовка (внутри верхней рамки).
+    pub header_y: i32,
+    /// Высота красной ячейки заголовка.
+    pub header_h: i32,
+    /// Верхняя граница поля галактики (ниже ячейки и разделителя).
     pub top: i32,
-    /// Верх заголовка (по вертикали он центрируется в верхней полосе).
+    /// Верх заголовка (по вертикали он центрируется в ячейке).
     pub title_y: i32,
 }
 

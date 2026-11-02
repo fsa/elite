@@ -97,7 +97,7 @@ impl App<'_> {
         if code == KeyCode::F10 && !repeat {
             if self.hdmap.active {
                 self.hdmap.close();
-            } else if !self.machine.intro_seen && !self.flight.active {
+            } else if !self.machine.intro_seen {
                 self.hdmap.open(&self.machine.mem, galaxy::KLADOV_GALAXY);
                 if let Some(w) = &self.window {
                     let size = w.inner_size();
@@ -117,7 +117,8 @@ impl App<'_> {
             self.shop.close();
             return;
         }
-        // При открытой карте всё управление принадлежит ей (игра на паузе).
+        // При открытой карте всё управление принадлежит ей; Z80 при этом
+        // продолжает работать, но ввод в игру не передаётся.
         if self.hdmap.active {
             match code {
                 KeyCode::ArrowLeft | KeyCode::KeyN => self.hdmap.move_by(-4, 0),

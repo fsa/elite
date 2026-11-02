@@ -92,19 +92,47 @@ fn distance_to_cursor_matches_game() {
 }
 
 /// Поле 256x128 вписывается в окно с сохранением пропорций. Сверху и
-/// снизу зарезервированы полосы под заголовок и панель.
+/// снизу зарезервированы ячейка заголовка и панель, по краям — белая рамка.
 #[test]
 fn layout_keeps_field_proportions() {
     let map = Map::new();
     let l = map.layout(1024, 768);
-    // 1024/256 = 4, доступная высота больше -> узкое место — горизонталь.
-    assert_eq!(l.scale, 4.0);
-    assert_eq!((l.fx0, l.fw), (0, 1024));
-    assert_eq!(l.fh, 512);
+    // Внутри рамки 1002 пикселя: 1002/256 = 3.9140625 — узкое место —
+    // горизонталь, по высоте места больше.
+    assert!((l.scale - 1002.0 / 256.0).abs() < 1e-6);
+    assert_eq!((l.fx0, l.fw), (11, 1002));
+    assert_eq!(l.fh, 501);
     assert_eq!(l.text, 2);
+    assert_eq!(l.frame, crate::cockpit::LINE);
+    assert_eq!(l.margin, 8);
+    assert_eq!((l.header_y, l.header_h), (11, 32));
+    assert_eq!(l.top, 46);
     assert!(l.fy0 >= l.top, "поле заходит под заголовок");
     assert!(l.fy0 + l.fh <= l.panel_y, "поле заходит под панель");
-    assert!(l.panel_y < 768);
+    assert!(l.panel_y + l.frame + l.margin <= 768);
+}
+
+/// Толщина линий и отступ рамки карты совпадают с кокпитом: при переключении
+/// между полётом и картой внешняя рамка не прыгает.
+#[test]
+fn frame_matches_cockpit_geometry() {
+    let map = Map::new();
+    for &(w, h) in &[
+        (640u32, 480u32),
+        (1024, 768),
+        (1280, 720),
+        (1920, 1080),
+        (3840, 2160),
+    ] {
+        let l = map.layout(w, h);
+        let g = crate::cockpit::panel_geometry(w, h);
+        let main = g.main_frame();
+        assert_eq!(l.frame, crate::cockpit::LINE, "{w}x{h}: толщина линии");
+        assert_eq!(l.margin, g.margin, "{w}x{h}: отступ от края");
+        assert_eq!(l.margin, main.x, "{w}x{h}: левая рамка кокпита");
+        assert_eq!(l.margin, main.y, "{w}x{h}: верхняя рамка кокпита");
+        assert_eq!(main.w, w as i32 - 2 * l.margin, "{w}x{h}: ширина рамки");
+    }
 }
 
 /// На разных соотношениях сторон (16:9, 16:10, 4:3) поле не налезает
@@ -267,6 +295,57 @@ fn draw_fills_layer_and_marks_planets() {
     assert!(
         f.pixels().iter().any(|&p| p == RANGE),
         "нет круга дальности"
+    );
+}
+
+/// Экран обведён белой рамкой, а сверху — красная ячейка с белым заголовком,
+/// как шапка карты в оригинале.
+#[test]
+fn draw_frames_screen_and_red_title_cell() {
+    let mut map = opened();
+    let font = vec![0xFFu8; 0x300];
+    let mut f = Frame::new(1024, 768);
+    map.draw(&mut f, &font);
+    let l = map.layout(1024, 768);
+    let at = |f: &Frame, x: i32, y: i32| f.pixels()[y as usize * f.width + x as usize];
+    let (w, h) = (f.width as i32, f.height as i32);
+    let m = l.margin;
+    // Белая рамка по всем четырём краям — с тем же отступом, что у кокпита.
+    assert_eq!(at(&f, w / 2, m), FRAME, "нет верхней рамки");
+    assert_eq!(at(&f, w / 2, h - 1 - m), FRAME, "нет нижней рамки");
+    assert_eq!(at(&f, m, h / 2), FRAME, "нет левой рамки");
+    assert_eq!(at(&f, w - 1 - m, h / 2), FRAME, "нет правой рамки");
+    // Разделитель под ячейкой заголовка — тоже белый.
+    for x in [m, w / 2, w - 1 - m] {
+        assert_eq!(
+            at(&f, x, l.header_y + l.header_h),
+            FRAME,
+            "нет разделителя под заголовком"
+        );
+    }
+    // Фон ячейки — красный, как клетки кокпита Cobra Mk III.
+    assert_eq!(at(&f, l.margin + l.frame + 1, l.header_y + 1), HEADER_BG);
+    // В ячейке есть белые пиксели заголовка.
+    let mut title_px = 0;
+    for y in l.header_y..l.header_y + l.header_h {
+        for x in l.margin + l.frame..w - l.margin - l.frame {
+            if at(&f, x, y) == HEADER_TEXT {
+                title_px += 1;
+            }
+        }
+    }
+    assert!(title_px > 0, "заголовок не нарисован белым");
+    // Нижняя панель — ячейка таблицы с чёрным фоном: сверху белый
+    // разделитель, внутри чёрная заливка.
+    assert_eq!(
+        at(&f, w / 2, l.panel_y - l.frame),
+        FRAME,
+        "нет разделителя над нижней панелью"
+    );
+    assert_eq!(
+        at(&f, l.margin + l.frame + 1, l.panel_y + 1),
+        BG,
+        "фон нижней панели не чёрный"
     );
 }
 

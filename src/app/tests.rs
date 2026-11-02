@@ -335,9 +335,13 @@ use crate::world::{current_planet_color, save_layout_kladov, scene_markers};
             0,
             "F2 не передал игре клавишу 2"
         );
-        // Поверх полёта карта не открывается.
+        // Поверх полёта карта тоже открывается: полёт остаётся под ней и
+        // продолжается после закрытия карты.
         app.key_event(KeyCode::F10, true, false);
-        assert!(!app.hdmap.active, "F10 открыл карту поверх полёта");
+        assert!(app.hdmap.active, "F10 не открыл карту поверх полёта");
+        app.key_event(KeyCode::F10, true, false);
+        assert!(!app.hdmap.active, "F10 не закрыл карту");
+        assert!(app.flight.active, "закрытие карты выключило полёт");
 
         // Esc — пауза, но экран остаётся выбранным; Esc снова — продолжить.
         app.key_event(KeyCode::Escape, true, false);
