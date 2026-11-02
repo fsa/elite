@@ -3,7 +3,7 @@
 use crate::display::Frame;
 use crate::render3d::{self, Rotation, Screen};
 
-use super::super::palette::{CYAN, ENEMY_BEAM, RED, planet_rim};
+use super::super::palette::{planet_rim, CYAN, ENEMY_BEAM, RED};
 use super::super::scene::{Body, BodyKind};
 use super::super::stars::Star;
 use super::super::view::{self, ViewDir};
@@ -135,7 +135,7 @@ fn draw_bodies_view(f: &Flight, frame: &mut Frame, screen: &Screen, view_rot: &R
 /// рамка не превращалась в волосяную линию. У очень маленькой планеты
 /// ободок занимает весь диск — как в оригинале, где планета рисовалась
 /// только контуром.
-fn draw_planet(frame: &mut Frame, x: f32, y: f32, r: f32, color: u32, s: i32) {
+pub(super) fn draw_planet(frame: &mut Frame, x: f32, y: f32, r: f32, color: u32, s: i32) {
     let rim = planet_rim(color);
     let thickness = s.max(1) as f32;
     fill_disc(frame, x, y, r, rim);

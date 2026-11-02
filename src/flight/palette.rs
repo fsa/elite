@@ -28,6 +28,8 @@ pub(super) const TRANSITION_TEXT: u32 = 0xFF80_FFFF;
 pub(super) const VIEW_LABEL_COLOR: u32 = 0xFFD7_D7D7;
 /// Цвет тоннеля гиперпрыжка.
 pub(super) const WARP_RING_COLOR: u32 = 0xFF40_A0FF;
+/// Кольца тоннеля станции — белые, как в оригинале.
+pub(super) const STATION_RING_COLOR: u32 = 0xFFFF_FFFF;
 
 /// Очень тёмный зелёный оттенок планеты с небольшой вариацией яркости по
 /// системе.

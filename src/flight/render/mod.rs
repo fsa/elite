@@ -55,7 +55,7 @@ pub(super) fn draw(f: &mut Flight, frame: &mut Frame, geom: &CockpitGeom, font: 
     let current = f.transition.current;
     match current {
         Some(t) if t.kind == super::TransitionKind::Launch => {
-            transition::draw_launch(f, frame, font, &screen, vx, vy, vw, vh, s, t.elapsed);
+            transition::draw_station(frame, vx, vy, vw, vh, s, t.elapsed, true, f.planet_color);
         }
         Some(t) if t.kind == super::TransitionKind::Hyperspace && !t.warp => {
             // До нуля отсчёта показываем обычный полёт: игрок ещё может
@@ -73,10 +73,22 @@ pub(super) fn draw(f: &mut Flight, frame: &mut Frame, geom: &CockpitGeom, font: 
                 draw_jump_label(frame, font, vx, vy, vw, vh, s, label);
             }
         }
+        Some(t) if t.kind == super::TransitionKind::Docking => {
+            // Стыковка — тот же белый тоннель, но без планеты в конце.
+            transition::draw_station(
+                frame,
+                vx,
+                vy,
+                vw,
+                vh,
+                s,
+                t.warp_elapsed,
+                false,
+                f.planet_color,
+            );
+        }
         Some(t) => {
-            // У гиперпрыжка надписей нет: только тоннель и звёзды. Стыковка
-            // сохраняет заголовок оригинала.
-            let title = (t.kind != super::TransitionKind::Hyperspace).then_some("DOCKING");
+            // Гиперпрыжок: только тоннель и полосы звёзд, без надписей.
             transition::draw_warp(
                 f,
                 frame,
@@ -88,7 +100,7 @@ pub(super) fn draw(f: &mut Flight, frame: &mut Frame, geom: &CockpitGeom, font: 
                 vh,
                 s,
                 t.warp_elapsed,
-                title,
+                None,
             );
         }
         None => {

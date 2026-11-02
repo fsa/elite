@@ -1,72 +1,60 @@
-//! Отрисовка переходов: вылет со станции и тоннель гиперпрыжка/стыковки.
+//! Отрисовка переходов: тоннель станции и тоннель гиперпрыжка.
 
 use crate::display::Frame;
-use crate::render3d::{self, Rotation, Screen};
-use crate::shipdata::{self, Ship};
+use crate::render3d::{Rotation, Screen};
 
-use super::super::palette::{TRANSITION_TEXT, WARP_RING_COLOR};
+use super::super::palette::{STATION_RING_COLOR, TRANSITION_TEXT, WARP_RING_COLOR};
 use super::super::stars::Star;
-use super::super::transition::LAUNCH_TIME;
-use super::super::view::{self, ViewDir};
+use super::super::view;
 use super::super::Flight;
+use super::scene::draw_planet;
 use super::text::draw_centered_text;
 
-/// Анимация вылета: станция уходит назад, звёзды и кольца разгоняются.
+/// Скорость движения колец тоннеля станции (доля цикла в секунду).
+const STATION_TUNNEL_SPEED: f32 = 1.35;
+/// Сколько белых колец рисуется в тоннеле станции.
+const STATION_RING_COUNT: usize = 8;
+
+/// Тоннель станции: концентрические белые окружности, как в оригинале.
+///
+/// При вылете в центре тоннеля видна планета — та самая, к которой ведёт
+/// труба. При стыковке планеты нет: кольца просто уходят в точку.
 #[allow(clippy::too_many_arguments)]
-pub(super) fn draw_launch(
-    f: &Flight,
+pub(super) fn draw_station(
     frame: &mut Frame,
-    font: &[u8],
-    screen: &Screen,
     vx: i32,
     vy: i32,
     vw: i32,
     vh: i32,
     s: i32,
     elapsed: f32,
+    launch: bool,
+    planet_color: u32,
 ) {
-    let t = (elapsed / LAUNCH_TIME).clamp(0.0, 1.0);
-    let forward = view::rotation(ViewDir::Forward);
-    draw_star_streaks(
-        frame,
-        screen,
-        &f.stars.stars,
-        &forward,
-        vx,
-        vy,
-        vw,
-        vh,
-        60.0 + t * 520.0,
-    );
-    draw_tunnel_rings(frame, vx, vy, vw, vh, (t * 1.8).fract(), 4, 0xFF20_5060);
-    // Станция видна только в начале: потом она уже далеко за кормой.
-    if t < 0.7 {
-        if let Some(model) = coriolis_model() {
-            let k = (t / 0.7).clamp(0.0, 1.0);
-            let z = 260.0 + k * k * 5200.0;
-            let rot = Rotation::axis_angle([0.0, 1.0, 0.0], 0.35 + t * 1.1)
-                .mul(&Rotation::axis_angle([1.0, 0.0, 0.0], 0.15));
-            render3d::draw_ship(
-                frame,
-                model,
-                &rot,
-                [0.0, 0.0, z],
-                screen,
-                render3d::SHIP_COLOR,
-            );
-        }
+    if vw <= 0 || vh <= 0 {
+        return;
     }
-    let scale = (s * 2).max(1) as usize;
-    draw_centered_text(
+    let cx = vx + vw / 2;
+    let cy = vy + vh / 2;
+    let max_r = ((vw * vw + vh * vh) as f32).sqrt() * 0.5;
+    let planet_r = if launch {
+        (vw.min(vh) as f32 * 0.16).max(4.0)
+    } else {
+        0.0
+    };
+    draw_station_rings(
         frame,
-        font,
-        vx,
-        vy + 4 * s,
-        vw,
-        "LAUNCH",
-        TRANSITION_TEXT,
-        scale,
+        cx,
+        cy,
+        max_r,
+        planet_r,
+        (elapsed * STATION_TUNNEL_SPEED).fract(),
+        s,
     );
+    // Планета закрывает начало тоннеля: кольца как будто выходят из неё.
+    if launch {
+        draw_planet(frame, cx as f32, cy as f32, planet_r, planet_color, s);
+    }
 }
 
 /// Тоннель гиперпрыжка/стыковки: полосы звёзд и расходящиеся кольца.
@@ -195,7 +183,31 @@ fn draw_tunnel_rings(
     }
 }
 
-/// Модель станции для анимации вылета.
-fn coriolis_model() -> Option<&'static Ship> {
-    shipdata::SHIPS.iter().find(|s| s.name == "d_Coriolis")
+/// Белые кольца тоннеля станции.
+///
+/// Кольца стартуют у края планеты (`inner_r`) и расходятся к краям вида.
+/// Так центральная окружность читается как конец трубы, а не как её
+/// продолжение.
+fn draw_station_rings(
+    frame: &mut Frame,
+    cx: i32,
+    cy: i32,
+    max_r: f32,
+    inner_r: f32,
+    phase: f32,
+    s: i32,
+) {
+    let span = (max_r - inner_r).max(0.0);
+    let thickness = (s / 2).max(1);
+    for i in 0..STATION_RING_COUNT {
+        let t = (i as f32 / STATION_RING_COUNT as f32 + phase).fract();
+        // Кольца ускоряются к краю экрана — эффект полёта сквозь трубу.
+        let r = inner_r + span * t * t;
+        let r = r.round() as i32;
+        for k in 0..thickness {
+            if r - k > 1 {
+                frame.circle(cx, cy, r - k, STATION_RING_COLOR);
+            }
+        }
+    }
 }
