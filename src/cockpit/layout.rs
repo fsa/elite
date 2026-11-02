@@ -60,6 +60,10 @@ pub struct CockpitLayout {
     pub missile_slot: u16,
     /// Флаг доступности J-драйва у станции (`J_Drive_Coriolis`).
     pub j_drive_coriolis: u16,
+    /// Признак близости станции (`CoriolisNear`), включает символ `S`.
+    pub coriolis_near: u16,
+    /// Оставшееся время работы ECM (`TimeWorkECM`), `0` — выключена.
+    pub ecm_time: u16,
 }
 
 /// Раскладка переменных панели для оригинальной версии (`elite.bin`).
@@ -84,6 +88,8 @@ pub const ELITE_COCKPIT: CockpitLayout = CockpitLayout {
     ship_slot0: 0x5FCD,
     missile_slot: 0x60B7,
     j_drive_coriolis: 0x707B,
+    coriolis_near: 0x7077,
+    ecm_time: 0xDA16,
 };
 
 /// Раскладка переменных панели для версии Кладова (`kladov.bin`), +0xA2.
@@ -107,6 +113,8 @@ pub const KLADOV_COCKPIT: CockpitLayout = CockpitLayout {
     ship_slot0: 0x606F,
     missile_slot: 0x6159,
     j_drive_coriolis: 0x711D,
+    coriolis_near: 0x711C,
+    ecm_time: 0x9C9B,
 };
 
 impl CockpitLayout {
@@ -145,6 +153,8 @@ impl CockpitLayout {
             danger: read_danger(mem),
             compass: self.read_compass(mem),
             radar: self.read_radar(mem),
+            station_near: byte(self.coriolis_near) != 0,
+            ecm_on: byte(self.ecm_time) != 0,
             blink: true,
         }
     }

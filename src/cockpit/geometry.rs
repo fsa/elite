@@ -338,6 +338,28 @@ impl CockpitGeom {
         fit_aspect(self.radar_area(), OVAL_RADAR_ASPECT_NUM, OVAL_RADAR_ASPECT_DEN)
     }
 
+    /// Клетка пары индикаторов `E` (ECM) и `S` (станция).
+    ///
+    /// В оригинале оба символа стоят у правого нижнего края сканера: `E`
+    /// слева, `S` справа. Здесь пара прижата к правому нижнему углу
+    /// центральной клетки, сразу за овалом радара.
+    pub fn status_cell(&self) -> Rect {
+        let center = self.center_cell();
+        if center.is_empty() {
+            return center;
+        }
+        let gap = self.radar_gap();
+        let glyph = (self.side_row(0).h / 8).max(1) * 8;
+        let w = (glyph * 2).min((center.w - gap).max(0));
+        let h = glyph.min((center.h - gap).max(0));
+        Rect {
+            x: (center.x + center.w - gap - w).max(center.x),
+            y: (center.y + center.h - gap - h).max(center.y),
+            w,
+            h,
+        }
+    }
+
     /// Зазор вокруг радара.
     fn radar_gap(&self) -> i32 {
         (self.side_row(0).h / 3).max(LINE)

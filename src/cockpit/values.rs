@@ -202,6 +202,11 @@ pub struct CockpitValues {
     pub compass: Compass,
     /// Контакты радара в системе координат игрока.
     pub radar: RadarContacts,
+    /// Станция рядом (`CoriolisNear`): на панели виден символ `S` и доступен
+    /// стыковочный компьютер.
+    pub station_near: bool,
+    /// Работает ECM (`TimeWorkECM <> 0`): на панели виден символ `E`.
+    pub ecm_on: bool,
     /// Фаза мигания для [`Danger::BlinkingRed`].
     pub blink: bool,
 }
@@ -241,6 +246,8 @@ impl CockpitValues {
             danger: Danger::Green,
             compass: Compass::centered(),
             radar: RadarContacts::empty(),
+            station_near: false,
+            ecm_on: false,
             blink: true,
         }
     }

@@ -39,6 +39,8 @@ fn values(missiles: u8) -> CockpitValues {
         danger: Danger::Off,
         compass: Compass::centered(),
         radar: RadarContacts::empty(),
+        station_near: false,
+        ecm_on: false,
         blink: true,
     }
 }
@@ -1066,6 +1068,110 @@ fn cockpit_style_matches_original() {
     assert!(light > 0, "панель не содержит белых линий");
     assert!(red > 0, "нет красных клеток");
     assert!(black > light + red, "панель слишком заполнена");
+}
+
+/// Флаги `S` (станция рядом) и `E` (ECM) читаются из памяти версии Кладова.
+#[test]
+fn layout_reads_station_and_ecm_flags() {
+    let l = KLADOV_COCKPIT;
+    let mut mem = vec![0u8; 0x10000];
+    let v = l.read(&mem);
+    assert!(!v.station_near, "станция не должна быть рядом на старте");
+    assert!(!v.ecm_on, "ECM не должна работать на старте");
+
+    mem[l.coriolis_near as usize] = 1;
+    let v = l.read(&mem);
+    assert!(v.station_near, "флаг близости станции не прочитан");
+    assert!(!v.ecm_on);
+
+    mem[l.coriolis_near as usize] = 0;
+    mem[l.ecm_time as usize] = 7;
+    let v = l.read(&mem);
+    assert!(!v.station_near);
+    assert!(v.ecm_on, "время работы ECM не прочитано");
+}
+
+/// Пара `E`/`S` стоит в правом нижнем углу центральной клетки, правее
+/// овала радара, и не пересекает его.
+#[test]
+fn status_cell_is_right_of_radar() {
+    for (w, h) in [(1280, 960), (640, 480), (256, 192), (1920, 1080)] {
+        let g = panel_geometry(w, h);
+        let cell = g.status_cell();
+        let center = g.center_cell();
+        let radar = g.oval_radar_cell();
+        assert!(!cell.is_empty(), "{w}x{h}: пустая клетка статуса");
+        assert!(cell.x >= center.x, "{w}x{h}: левее центра");
+        assert!(
+            cell.x + cell.w <= center.x + center.w,
+            "{w}x{h}: правее центра"
+        );
+        assert!(
+            cell.y + cell.h <= center.y + center.h,
+            "{w}x{h}: ниже центра"
+        );
+        assert!(
+            cell.x >= radar.x + radar.w,
+            "{w}x{h}: клетка статуса перекрывает радар"
+        );
+    }
+}
+
+/// Неактивный символ не рисуется, активный — в своей половине клетки.
+#[test]
+fn ecm_and_station_symbols_follow_flags() {
+    let g = panel_geometry(1280, 960);
+    let cell = g.status_cell();
+    let half = cell.w / 2;
+    let lit = |f: &Frame, x0: i32, x1: i32| {
+        let mut n = 0;
+        for y in cell.y..cell.y + cell.h {
+            for x in x0..x1 {
+                if f.pixels()[y as usize * 1280 + x as usize] == FRAME_COLOR {
+                    n += 1;
+                }
+            }
+        }
+        n
+    };
+    let draw = |station_near: bool, ecm_on: bool| {
+        let mut f = Frame::new(1280, 960);
+        let mut v = values(MISSILE_SLOTS as u8);
+        v.station_near = station_near;
+        v.ecm_on = ecm_on;
+        Cockpit::new().draw(&mut f, &font(), CockpitStyle::COBRA_MK3, &v);
+        f
+    };
+
+    let none = draw(false, false);
+    assert_eq!(lit(&none, cell.x, cell.x + half), 0, "E без ECM");
+    assert_eq!(
+        lit(&none, cell.x + half, cell.x + cell.w),
+        0,
+        "S без станции"
+    );
+
+    let ecm = draw(false, true);
+    assert!(lit(&ecm, cell.x, cell.x + half) > 0, "E не нарисован");
+    assert_eq!(
+        lit(&ecm, cell.x + half, cell.x + cell.w),
+        0,
+        "S нарисован без станции"
+    );
+
+    let station = draw(true, false);
+    assert_eq!(lit(&station, cell.x, cell.x + half), 0, "E без ECM");
+    assert!(
+        lit(&station, cell.x + half, cell.x + cell.w) > 0,
+        "S не нарисован"
+    );
+
+    let both = draw(true, true);
+    assert!(lit(&both, cell.x, cell.x + half) > 0, "E не нарисован");
+    assert!(
+        lit(&both, cell.x + half, cell.x + cell.w) > 0,
+        "S не нарисован"
+    );
 }
 
 /// Геометрия не выходит за пределы окна.

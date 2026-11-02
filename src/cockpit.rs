@@ -51,7 +51,8 @@
 //! - [`indicators`] — шкалы, отклонения и запас ракет;
 //! - [`danger`] — индикатор опасности;
 //! - [`compass`] — кольцо и указатель компаса;
-//! - [`radar`] — классический овальный сканер (радар Кладова временно отключён).
+//! - [`radar`] — классический овальный сканер (радар Кладова временно отключён);
+//! - [`status`] — символы `E` (ECM) и `S` (близость станции).
 
 use crate::display::Frame;
 
@@ -85,6 +86,7 @@ mod labels;
 mod layout;
 mod palette;
 mod radar;
+mod status;
 mod table;
 #[cfg(test)]
 mod tests;
@@ -144,6 +146,7 @@ impl Cockpit {
         danger::draw(f, g, values);
         compass::draw(f, g, style, values);
         radar::draw(f, g, style, values);
+        status::draw(f, g, style, values);
     }
 }
 
