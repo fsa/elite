@@ -1091,10 +1091,10 @@ fn layout_reads_station_and_ecm_flags() {
     assert!(v.ecm_on, "время работы ECM не прочитано");
 }
 
-/// `E` и `S` стоят в нижних углах центральной клетки зеркально верхним
-/// кружкам, крупнее прежних и не пересекают овал радара.
+/// `E` и `S` стоят рядом как `ES` в правом нижнем углу, `S` зеркален
+/// верхнему компасу, а пара не пересекает овал радара.
 #[test]
-fn status_cells_are_symmetric_and_clear_of_radar() {
+fn status_pair_reads_es_and_mirrors_compass() {
     for (w, h) in [(1280, 960), (640, 480), (256, 192), (1920, 1080)] {
         let g = panel_geometry(w, h);
         let ecm = g.ecm_cell();
@@ -1106,7 +1106,12 @@ fn status_cells_are_symmetric_and_clear_of_radar() {
         assert!(!ecm.is_empty(), "{w}x{h}: пустая клетка E");
         assert!(!station.is_empty(), "{w}x{h}: пустая клетка S");
         assert_eq!(ecm.y, station.y, "{w}x{h}: символы на разной высоте");
-        assert_eq!(ecm.x, danger.x, "{w}x{h}: E не под кружком опасности");
+        assert_eq!(ecm.h, station.h, "{w}x{h}: символы разной высоты");
+        assert_eq!(
+            ecm.right() + 1,
+            station.x,
+            "{w}x{h}: E должна быть слева от S без зазора"
+        );
         assert_eq!(
             station.right(),
             compass.right(),
@@ -1122,17 +1127,16 @@ fn status_cells_are_symmetric_and_clear_of_radar() {
             "{w}x{h}: буквы слишком мелкие ({})",
             ecm.w
         );
+        assert!(ecm.x >= center.x, "{w}x{h}: пара ES левее центра");
         assert!(
-            ecm.x + ecm.w <= center.x + center.w,
-            "{w}x{h}: E правее центра"
+            station.right() <= center.x + center.w - 1,
+            "{w}x{h}: пара ES правее центра"
         );
-        assert!(station.x >= center.x, "{w}x{h}: S левее центра");
-        assert!(ecm.right() <= radar.x, "{w}x{h}: E перекрывает радар");
-        assert!(station.x >= radar.right(), "{w}x{h}: S перекрывает радар");
+        assert!(ecm.x >= radar.right(), "{w}x{h}: пара ES перекрывает радар");
     }
 }
 
-/// Неактивный символ не рисуется, активный — в своём нижнем углу.
+/// Неактивный символ не рисуется, активный — на своём месте в паре `ES`.
 #[test]
 fn ecm_and_station_symbols_follow_flags() {
     let g = panel_geometry(1280, 960);

@@ -356,21 +356,12 @@ impl CockpitGeom {
         ((d / 2 + 4) / 8).max(1) * 8
     }
 
-    /// Клетка символа `E` (ECM) в левом нижнем углу центральной клетки.
-    pub fn ecm_cell(&self) -> Rect {
-        self.status_cell_at(false)
-    }
-
-    /// Клетка символа `S` (станция рядом) в правом нижнем углу.
+    /// Клетка пары `E`/`S` в правом нижнем углу центральной клетки.
     ///
-    /// Символ зеркален верхнему правому кружку компаса: тот же отступ от
-    /// правого края и такой же отступ от нижнего, как у кружков от верхнего.
-    pub fn station_cell(&self) -> Rect {
-        self.status_cell_at(true)
-    }
-
-    /// Нижний угловой символ `E` (`right == false`) или `S` (`right == true`).
-    fn status_cell_at(&self, right: bool) -> Rect {
+    /// `E` стоит слева, `S` справа — вместе они читаются как `ES`. Правый
+    /// край `S` совпадает с правым краем верхнего кружка компаса, а нижний
+    /// отступ такой же, как верхний отступ кружков.
+    fn status_pair(&self) -> Rect {
         let center = self.center_cell();
         if center.is_empty() {
             return Rect {
@@ -382,17 +373,36 @@ impl CockpitGeom {
         }
         let gap = self.top_gap();
         let glyph = self.status_glyph();
-        let w = glyph.min((center.w - 2 * gap).max(0));
+        let w = (glyph * 2).min((center.w - 2 * gap).max(0));
         let h = glyph.min((center.h - 2 * gap).max(0));
         Rect {
-            x: if right {
-                center.x + center.w - gap - w
-            } else {
-                center.x + gap
-            },
+            x: center.x + center.w - gap - w,
             y: center.y + center.h - gap - h,
             w,
             h,
+        }
+    }
+
+    /// Клетка символа `E` (ECM) — левая половина пары `ES`.
+    pub fn ecm_cell(&self) -> Rect {
+        let pair = self.status_pair();
+        Rect {
+            x: pair.x,
+            y: pair.y,
+            w: pair.w / 2,
+            h: pair.h,
+        }
+    }
+
+    /// Клетка символа `S` (станция рядом) — правая половина пары `ES`.
+    pub fn station_cell(&self) -> Rect {
+        let pair = self.status_pair();
+        let half = pair.w / 2;
+        Rect {
+            x: pair.x + half,
+            y: pair.y,
+            w: pair.w - half,
+            h: pair.h,
         }
     }
 
