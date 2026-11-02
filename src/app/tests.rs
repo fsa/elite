@@ -19,13 +19,14 @@ use crate::cockpit;
 use crate::display;
 use crate::equip;
 use crate::flight;
+use crate::font::ZX_FONT;
 use crate::galaxy;
 use crate::headless::write_ppm;
 use crate::keys::{MATRIX_MAP, kempston_bit, matrix_pos};
 use crate::machine::Spectrum;
 use crate::native;
 use crate::splash;
-use crate::ui::menu::{PAUSE_FONT_ADDR, PAUSE_FONT_LEN, draw_pause_menu};
+use crate::ui::menu::draw_pause_menu;
 use crate::ui::present::{SRC_H, SRC_W, blit_zx_frame};
 use crate::world::{current_planet_color, save_layout_kladov, scene_markers};
 
@@ -79,7 +80,7 @@ use crate::world::{current_planet_color, save_layout_kladov, scene_markers};
     fn pause_menu_overlay_renders() {
         let m = boot();
         let mut hd = display::Frame::new(256 * 5, 192 * 5);
-        let font = &m.mem[PAUSE_FONT_ADDR..PAUSE_FONT_ADDR + PAUSE_FONT_LEN];
+        let font = ZX_FONT;
         draw_pause_menu(&mut hd, font, 0, false);
 
         const WHITE: u32 = 0xFFD7_D7D7;
@@ -989,9 +990,8 @@ use crate::world::{current_planet_color, save_layout_kladov, scene_markers};
     /// сохраняет слой в PPM для визуальной проверки.
     #[test]
     fn splash_overlay_renders() {
-        let m = boot();
         let mut hd = display::Frame::new(256 * 5, 192 * 5);
-        let font = &m.mem[PAUSE_FONT_ADDR..PAUSE_FONT_ADDR + PAUSE_FONT_LEN];
+        let font = ZX_FONT;
         let st = splash::Splash::new();
         st.draw(&mut hd, font);
         // Фон полностью непрозрачный.
@@ -1013,8 +1013,7 @@ use crate::world::{current_planet_color, save_layout_kladov, scene_markers};
     #[test]
     fn cockpit_overlay_renders() {
         let base = env!("CARGO_MANIFEST_DIR");
-        let m = boot();
-        let font = &m.mem[PAUSE_FONT_ADDR..PAUSE_FONT_ADDR + PAUSE_FONT_LEN];
+        let font = ZX_FONT;
         let (w, h) = (256 * 5, 192 * 5);
         let mut hd = display::Frame::new(w, h);
         let g = cockpit::panel_geometry(w as u32, h as u32);
@@ -1141,7 +1140,7 @@ use crate::world::{current_planet_color, save_layout_kladov, scene_markers};
     fn flight_screen_combines_view_and_cockpit() {
         let base = env!("CARGO_MANIFEST_DIR");
         let m = boot();
-        let font = &m.mem[PAUSE_FONT_ADDR..PAUSE_FONT_ADDR + PAUSE_FONT_LEN];
+        let font = ZX_FONT;
         let mut fl = flight::Flight::new();
         fl.open(current_planet_color(&m.mem));
         fl.sync_from_z80(&m.mem);
@@ -1183,8 +1182,7 @@ use crate::world::{current_planet_color, save_layout_kladov, scene_markers};
     /// Меню паузы рисует затемнённый пункт SAVE на заставке.
     #[test]
     fn intro_pause_menu_dims_save() {
-        let m = boot();
-        let font = &m.mem[PAUSE_FONT_ADDR..PAUSE_FONT_ADDR + PAUSE_FONT_LEN];
+        let font = ZX_FONT;
         // Цвета пунктов SAVE: затемнённый на заставке и обычный в игре.
         let counts = |intro: bool| {
             let mut hd = display::Frame::new(256 * 5, 192 * 5);

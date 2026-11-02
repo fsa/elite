@@ -206,7 +206,15 @@ impl Frame {
         }
     }
 
-    /// Нарисовать строку шрифтом ПЗУ ZX (8x8, коды 0x20..0x7F), увеличенной
+    /// Нарисовать строку встроенным шрифтом ZX (8x8, коды 0x20..0x7F),
+    /// увеличенной в `scale` раз. Рисуются только установленные биты (фон
+    /// прозрачный).
+    #[allow(dead_code)] // удобный API для будущих нативных экранов
+    pub fn draw_text_zx(&mut self, x: i32, y: i32, s: &str, color: u32, scale: usize) {
+        self.draw_text(crate::font::ZX_FONT, x, y, s, color, scale);
+    }
+
+    /// Нарисовать строку заданным шрифтом (8x8, коды 0x20..0x7F), увеличенным
     /// в `scale` раз. Рисуются только установленные биты (фон прозрачный).
     pub fn draw_text(&mut self, font: &[u8], x: i32, y: i32, s: &str, color: u32, scale: usize) {
         let scale = scale.max(1);

@@ -8,6 +8,7 @@ use winit::window::Window;
 use super::App;
 use crate::cockpit;
 use crate::display;
+use crate::font::ZX_FONT;
 use crate::storage;
 use crate::ui::menu::draw_pause_menu;
 use crate::ui::present::blit_zx_frame;
@@ -123,7 +124,7 @@ impl App<'_> {
             // Экран полёта: нативный вид в верхней части окна (по данным Z80)
             // и тот же кокпит, что на заставке, — внизу.
             let g = cockpit::panel_geometry(size.width, size.height);
-            self.flight.draw(&mut self.machine.hd, &g, &self.font);
+            self.flight.draw(&mut self.machine.hd, &g, ZX_FONT);
             let values = {
                 let mut values = cockpit::KLADOV_COCKPIT.read(&self.machine.mem);
                 values.blink = (self.machine.frames / 16) % 2 == 0;
@@ -134,34 +135,34 @@ impl App<'_> {
                 bar: self.flight.cockpit_bar_color(),
             };
             self.cockpit
-                .draw_with_geom(&mut self.machine.hd, &g, &self.font, style, &values);
+                .draw_with_geom(&mut self.machine.hd, &g, ZX_FONT, style, &values);
             if self.menu {
-                draw_pause_menu(&mut self.machine.hd, &self.font, self.menu_sel, false);
+                draw_pause_menu(&mut self.machine.hd, ZX_FONT, self.menu_sel, false);
             }
         } else if self.hdmap.active {
-            self.hdmap.draw(&mut self.machine.hd, &self.font);
+            self.hdmap.draw(&mut self.machine.hd, ZX_FONT);
         } else if self.shop.active {
             self.shop
-                .draw(&mut self.machine.hd, &self.font, &self.machine.mem);
+                .draw(&mut self.machine.hd, ZX_FONT, &self.machine.mem);
         } else if self.machine.intro_seen {
             // Нативная заставка; внизу — тот же кокпит, что в полёте.
             // Заголовок с фигурой занимают верхнюю область, поэтому не
             // заходят под панель.
             let g = cockpit::panel_geometry(size.width, size.height);
-            self.splash.draw_in(&mut self.machine.hd, &self.font, &g);
+            self.splash.draw_in(&mut self.machine.hd, ZX_FONT, &g);
             self.cockpit.draw_with_geom(
                 &mut self.machine.hd,
                 &g,
-                &self.font,
+                ZX_FONT,
                 cockpit::CockpitStyle::COBRA_MK3,
                 &self.splash_values,
             );
             if self.menu {
-                draw_pause_menu(&mut self.machine.hd, &self.font, self.menu_sel, true);
+                draw_pause_menu(&mut self.machine.hd, ZX_FONT, self.menu_sel, true);
             }
         } else if self.menu {
             // Меню паузы — в HD-слой, чтобы текст был чётким в любом окне.
-            draw_pause_menu(&mut self.machine.hd, &self.font, self.menu_sel, false);
+            draw_pause_menu(&mut self.machine.hd, ZX_FONT, self.menu_sel, false);
         }
         self.present(&window, &layout);
     }

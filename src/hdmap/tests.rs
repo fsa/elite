@@ -301,8 +301,8 @@ fn star_positions_are_scaled_field_coordinates() {
 /// Отладочный дамп карты в `tmp/hdmap.ppm` по слепку памяти реальной игры:
 /// `cargo test --release dump_map -- --ignored`. Затем, например,
 /// `convert tmp/hdmap.ppm tmp/hdmap.png`. В `tmp/wf/mem.bin` уже есть
-/// ПЗУ (0x0..0x4000), откуда берём шрифт. Переменная `ELITE_MAP_ZOOM`
-/// задаёт зум для дампа.
+/// ПЗУ (0x0..0x4000), откуда берутся данные игры; шрифт встроен в нативный
+/// код. Переменная `ELITE_MAP_ZOOM` задаёт зум для дампа.
 #[test]
 #[ignore]
 fn dump_map_to_tmp() {
@@ -319,7 +319,7 @@ fn dump_map_to_tmp() {
             }
         }
     }
-    let font = &mem[0x3D00..0x3D00 + 0x300];
+    let font = crate::font::ZX_FONT;
     let mut f = Frame::new(1280, 720);
     map.draw(&mut f, font);
     let mut out = Vec::with_capacity(f.width * f.height * 3 + 32);

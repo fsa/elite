@@ -26,7 +26,6 @@ use crate::flight;
 use crate::hdmap;
 use crate::machine::Spectrum;
 use crate::splash;
-use crate::ui::menu::{PAUSE_FONT_ADDR, PAUSE_FONT_LEN};
 use crate::ui::present::{SRC_H, SRC_W};
 
 mod frame;
@@ -62,7 +61,6 @@ pub(crate) fn run(machine: Spectrum, opts: &Options) {
 struct App<'a> {
     machine: Spectrum,
     opts: &'a Options,
-    font: Vec<u8>,
     audio: Option<Audio>,
     audio_buf: Vec<i16>,
     wav_samples: Option<Vec<i16>>,
@@ -131,13 +129,9 @@ struct App<'a> {
 
 impl<'a> App<'a> {
     pub(crate) fn new(machine: Spectrum, opts: &'a Options) -> Self {
-        // Шрифт знакогенератора из ПЗУ (0x3D00, коды 0x20..0x7F) — копируем один
-        // раз, чтобы наложение меню не зависело от содержимого памяти в рантайме.
-        let font = machine.mem[PAUSE_FONT_ADDR..PAUSE_FONT_ADDR + PAUSE_FONT_LEN].to_vec();
         Self {
             machine,
             opts,
-            font,
             audio: audio::start_output(opts.mute),
             audio_buf: Vec::new(),
             wav_samples: opts.wav.as_ref().map(|_| Vec::new()),

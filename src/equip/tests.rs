@@ -401,7 +401,7 @@ fn dump_equip_to_tmp() {
     mem[0x4000..0x4000 + img.len()].copy_from_slice(&img);
     let mut shop = Shop::new();
     shop.open(&mem, KLADOV_SHOP);
-    let font = &mem[0x3D00..0x3D00 + 0x300];
+    let font = crate::font::ZX_FONT;
     let mut f = Frame::new(1280, 720);
     shop.draw(&mut f, font, &mem);
     let mut out = Vec::with_capacity(f.width * f.height * 3 + 32);

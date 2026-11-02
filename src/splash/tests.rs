@@ -995,16 +995,14 @@ fn cube_ship() -> &'static Ship {
 /// Дамп кадров анимации заставки (`ELITE_DUMP_SPLASH_FRAMES=prefix` →
 /// `prefix_<номер>.ppm`, шаг 12 тиков = один шаг оригинала).
 ///
-/// Шрифт берётся из ПЗУ `zx_bin/48.rom`, чтобы кадры были с надписями.
+/// Шрифт встроен в нативный код, чтобы кадры были с надписями.
 #[test]
 #[ignore]
 fn dump_splash_frames() {
     let Ok(prefix) = std::env::var("ELITE_DUMP_SPLASH_FRAMES") else {
         return;
     };
-    let base = env!("CARGO_MANIFEST_DIR");
-    let rom = std::fs::read(format!("{base}/zx_bin/48.rom")).unwrap();
-    let font = &rom[0x3D00..0x3D00 + 0x300];
+    let font = crate::font::ZX_FONT;
     let mut st = Splash::new();
     let mut f = Frame::new(1280, 960);
     for i in 0..8 {
