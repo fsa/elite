@@ -116,6 +116,9 @@ struct App<'a> {
     ctrl: bool,
     /// Зажата ли Alt (для переключения полного экрана по Alt+Enter).
     alt: bool,
+    /// F12: ускорение эмуляции Z80 вдвое — за кадр показа прогоняются два
+    /// кадра Z80. На отрисовку и звук это не влияет, кроме темпа.
+    accelerated: bool,
     /// Позиция мыши в координатах экрана игры (0..255, 0..191)
     mouse_x: i32,
     mouse_y: i32,
@@ -160,6 +163,7 @@ impl<'a> App<'a> {
             kempston: [false; 5],
             ctrl: false,
             alt: false,
+            accelerated: false,
             mouse_x: -1,
             mouse_y: -1,
             mouse_left: false,

@@ -87,6 +87,12 @@ impl App<'_> {
         if !pressed {
             return;
         }
+        // F12 — ускорение эмуляции Z80 вдвое. Работает в любом режиме и в игру
+        // не передаётся (в матрице ZX такой клавиши нет).
+        if code == KeyCode::F12 && !repeat {
+            self.accelerated = !self.accelerated;
+            return;
+        }
         // F10 — отдельная нативная карта галактики.
         if code == KeyCode::F10 && !repeat {
             if self.hdmap.active {

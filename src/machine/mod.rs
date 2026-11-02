@@ -68,8 +68,11 @@ pub struct Spectrum {
     beeper_edges: Vec<(u64, bool)>,
     /// Уровень бипера на начало текущего кадра.
     beeper_frame_start: bool,
-    /// Такт CPU на начало текущего кадра.
+    /// Такт CPU на начало текущего кадра (или серии кадров при ускорении).
     audio_cycle_base: u64,
+    /// Длительность серии кадров, для которой собран звук: `CYCLES_PER_FRAME`
+    /// для обычного кадра и кратно больше при ускорении (F12).
+    audio_span_cycles: u64,
     /// Такт CPU на начало текущей инструкции (обновляется в `run_frame`).
     cycle_clock: u64,
     /// Нативные замены подпрограмм: `PC` → реализация на Rust.
@@ -147,6 +150,7 @@ impl Spectrum {
             beeper_edges: Vec::new(),
             beeper_frame_start: false,
             audio_cycle_base: 0,
+            audio_span_cycles: CYCLES_PER_FRAME,
             cycle_clock: 0,
             hooks: std::collections::BTreeMap::new(),
             hook_max: std::collections::BTreeMap::new(),
@@ -215,12 +219,33 @@ impl Spectrum {
     /// Run one PAL frame's worth of instructions, raising a maskable
     /// interrupt at the start of the frame (IM1 -> 0x0038).
     pub fn run_frame(&mut self) {
-        let target = self.frame_start + CYCLES_PER_FRAME;
-        let mut cpu = std::mem::take(&mut self.cpu);
-        self.frame_target = target;
+        self.run_frames(1);
+    }
+
+    /// Run `count` PAL frames in one go.
+    ///
+    /// Переходы бипера копятся за все кадры серии, чтобы
+    /// [`Spectrum::render_audio`] мог синтезировать весь отрезок в объём
+    /// одного кадра показа. Так ускорение эмуляции (F12) не теряет звук и
+    /// не копит задержку: звук просто проигрывается вдвое быстрее.
+    pub fn run_frames(&mut self, count: u64) {
+        if count == 0 {
+            return;
+        }
         self.beeper_edges.clear();
         self.beeper_frame_start = self.beeper;
         self.audio_cycle_base = self.frame_start;
+        self.audio_span_cycles = count * CYCLES_PER_FRAME;
+        for _ in 0..count {
+            self.run_frame_once();
+        }
+    }
+
+    /// Execute exactly one PAL frame (without resetting the audio span).
+    fn run_frame_once(&mut self) {
+        let target = self.frame_start + CYCLES_PER_FRAME;
+        let mut cpu = std::mem::take(&mut self.cpu);
+        self.frame_target = target;
         self.cycle_clock = cpu.cycles;
         cpu.interrupt(self, 0xFF);
         while cpu.cycles < target {

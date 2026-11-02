@@ -225,6 +225,29 @@ use crate::world::{current_planet_color, save_layout_kladov, scene_markers};
         assert!(!app.hdmap.active, "Esc не закрыл карту");
     }
 
+    /// F12 переключает ускорение эмуляции Z80 вдвое. Автоповтор не должен
+    /// мигать режимом, а за кадр показа при ускорении идёт два кадра Z80.
+    #[test]
+    fn f12_toggles_double_speed() {
+        let opts = test_options();
+        let mut app = App::new(boot(), &opts);
+        assert!(!app.accelerated);
+        assert_eq!(app.emulation_frames(), 1);
+
+        app.key_event(KeyCode::F12, true, false);
+        assert!(app.accelerated, "F12 не включил ускорение");
+        assert_eq!(app.emulation_frames(), 2);
+
+        // Автоповтор удерживаемой клавиши режим не переключает.
+        app.key_event(KeyCode::F12, true, true);
+        assert!(app.accelerated, "автоповтор F12 сбросил ускорение");
+
+        app.key_event(KeyCode::F12, false, false);
+        app.key_event(KeyCode::F12, true, false);
+        assert!(!app.accelerated, "F12 не выключил ускорение");
+        assert_eq!(app.emulation_frames(), 1);
+    }
+
     /// F4 — оригинальная клавиша 4 плюс нативный экран закупки: сначала
     /// эмулятору уходит клавиша 4 (игра переходит в equip ship), затем поверх
     /// открывается закупка. Esc/F4 возвращают экран игры.

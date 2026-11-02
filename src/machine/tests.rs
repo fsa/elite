@@ -20,6 +20,26 @@ fn beeper_edges_become_audio() {
 }
 
 #[test]
+fn run_frames_advances_double_and_keeps_audio_rate() {
+    let mut m = Spectrum::new(None);
+    let prog = [
+        0xF3, 0x3E, 0x10, 0xD3, 0xFE, 0x3E, 0x00, 0xD3, 0xFE, 0x18, 0xF6,
+    ];
+    m.load(0x8000, &prog);
+    m.cpu.pc = 0x8000;
+    m.run_frames(2);
+    assert_eq!(m.frame_start, 2 * CYCLES_PER_FRAME);
+    assert_eq!(m.frames, 2);
+    let mut out = Vec::new();
+    m.render_audio(&mut out);
+    // Ускорение не раздувает звуковой буфер: на кадр показа — один кадр
+    // звука, просто сжатый вдвое по времени.
+    assert_eq!(out.len(), m.audio_rate as usize / 50);
+    assert!(out.iter().any(|&s| s > 0), "no beeper-high samples");
+    assert!(out.iter().any(|&s| s < 0), "no beeper-low samples");
+}
+
+#[test]
 fn tap_assembles_line_by_position() {
     let mut t = GameMsgTap::default();
     t.enabled = true;

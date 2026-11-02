@@ -13,6 +13,12 @@ use crate::ui::menu::draw_pause_menu;
 use crate::ui::present::blit_zx_frame;
 
 impl App<'_> {
+    /// Сколько кадров Z80 прогнать за один кадр показа. `F12` включает
+    /// ускорение вдвое.
+    pub(super) fn emulation_frames(&self) -> u64 {
+        if self.accelerated { 2 } else { 1 }
+    }
+
     /// Синтезировать и отдать звук последнего кадра эмулятора.
     fn play_frame_audio(&mut self) {
         if self.audio.is_none() && self.wav_samples.is_none() {
@@ -59,13 +65,16 @@ impl App<'_> {
                 // продолжает работать, а ввод идёт в игру. На паузе (меню)
                 // симуляция замирает.
                 if !self.menu {
+                    let frames = self.emulation_frames();
                     self.forward_input();
-                    self.machine.run_frame();
+                    self.machine.run_frames(frames);
                     self.follow_flight_screen();
                     self.flight.sync_from_z80(&self.machine.mem);
                     self.flight.sync_game_msg(&self.machine.game_msg);
-                    self.machine.game_msg.next_frame();
-                    self.flight.tick(1.0 / 50.0);
+                    for _ in 0..frames {
+                        self.machine.game_msg.next_frame();
+                    }
+                    self.flight.tick(frames as f32 / 50.0);
                     self.play_frame_audio();
                 } else {
                     self.machine.release_all_keys();
@@ -79,7 +88,7 @@ impl App<'_> {
                 self.machine.release_all_keys();
                 self.machine.release_joystick();
                 if !self.menu {
-                    self.machine.run_frame();
+                    self.machine.run_frames(self.emulation_frames());
                 }
             } else {
                 self.machine.release_all_keys();
@@ -96,7 +105,7 @@ impl App<'_> {
                 self.machine.release_joystick();
             } else {
                 self.apply_input();
-                self.machine.run_frame();
+                self.machine.run_frames(self.emulation_frames());
                 self.open_pending_shop();
                 self.open_pending_flight();
                 if self.machine.save_requested {
