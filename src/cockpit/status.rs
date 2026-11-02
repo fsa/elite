@@ -4,6 +4,9 @@
 //! `PrnDangerEcmDock` только переключает их экранный атрибут (видимый белый
 //! или невидимый чёрный). Здесь глифы повторяют ту же форму и рисуются
 //! поверх панели только в активном состоянии.
+//!
+//! `E` стоит в левом нижнем углу центральной клетки, `S` — в правом нижнем,
+//! зеркально верхним кружкам опасности и компаса.
 
 use crate::display::Frame;
 
@@ -16,34 +19,17 @@ pub(super) const ECM_ICON: [u8; 8] = [0x7F, 0x63, 0x60, 0x64, 0x7C, 0x60, 0x63, 
 /// Растр символа `S` (станция рядом) из кокпита версии Кладова: 8×8.
 pub(super) const STATION_ICON: [u8; 8] = [0x3E, 0x63, 0x60, 0x38, 0x0E, 0x03, 0x63, 0x3E];
 
-/// Нарисовать `E` и `S` в правом нижнем углу центральной клетки.
+/// Нарисовать `E` и `S` в нижних углах центральной клетки.
 ///
-/// `E` слева, `S` справа — как в оригинальной панели. Неактивный символ не
+/// `E` слева, `S` справа — зеркально верхним кружкам. Неактивный символ не
 /// рисуется: фон панели уже чёрный, а в оригинале он становится невидимым
 /// через атрибут.
 pub(super) fn draw(f: &mut Frame, g: &CockpitGeom, style: CockpitStyle, values: &CockpitValues) {
-    let cell = g.status_cell();
-    if cell.is_empty() || cell.w < 2 {
-        return;
-    }
-    let half = cell.w / 2;
-    let ecm = Rect {
-        x: cell.x,
-        y: cell.y,
-        w: half,
-        h: cell.h,
-    };
-    let station = Rect {
-        x: cell.x + half,
-        y: cell.y,
-        w: cell.w - half,
-        h: cell.h,
-    };
     if values.ecm_on {
-        draw_icon(f, ecm, &ECM_ICON, style.line);
+        draw_icon(f, g.ecm_cell(), &ECM_ICON, style.line);
     }
     if values.station_near {
-        draw_icon(f, station, &STATION_ICON, style.line);
+        draw_icon(f, g.station_cell(), &STATION_ICON, style.line);
     }
 }
 
@@ -52,7 +38,7 @@ fn draw_icon(f: &mut Frame, area: Rect, icon: &[u8; 8], color: u32) {
     if area.is_empty() {
         return;
     }
-    let scale = (area.h / 8).max(1);
+    let scale = (area.h / 8).min(area.w / 8).max(1);
     let w = 8 * scale;
     let h = 8 * scale;
     let x = area.x + (area.w - w) / 2;

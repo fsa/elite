@@ -1091,42 +1091,57 @@ fn layout_reads_station_and_ecm_flags() {
     assert!(v.ecm_on, "время работы ECM не прочитано");
 }
 
-/// Пара `E`/`S` стоит в правом нижнем углу центральной клетки, правее
-/// овала радара, и не пересекает его.
+/// `E` и `S` стоят в нижних углах центральной клетки зеркально верхним
+/// кружкам, крупнее прежних и не пересекают овал радара.
 #[test]
-fn status_cell_is_right_of_radar() {
+fn status_cells_are_symmetric_and_clear_of_radar() {
     for (w, h) in [(1280, 960), (640, 480), (256, 192), (1920, 1080)] {
         let g = panel_geometry(w, h);
-        let cell = g.status_cell();
+        let ecm = g.ecm_cell();
+        let station = g.station_cell();
         let center = g.center_cell();
         let radar = g.oval_radar_cell();
-        assert!(!cell.is_empty(), "{w}x{h}: пустая клетка статуса");
-        assert!(cell.x >= center.x, "{w}x{h}: левее центра");
-        assert!(
-            cell.x + cell.w <= center.x + center.w,
-            "{w}x{h}: правее центра"
+        let danger = g.danger_cell();
+        let compass = g.compass_cell();
+        assert!(!ecm.is_empty(), "{w}x{h}: пустая клетка E");
+        assert!(!station.is_empty(), "{w}x{h}: пустая клетка S");
+        assert_eq!(ecm.y, station.y, "{w}x{h}: символы на разной высоте");
+        assert_eq!(ecm.x, danger.x, "{w}x{h}: E не под кружком опасности");
+        assert_eq!(
+            station.right(),
+            compass.right(),
+            "{w}x{h}: S не под кружком компаса"
+        );
+        assert_eq!(
+            center.y + center.h - (ecm.y + ecm.h),
+            danger.y - center.y,
+            "{w}x{h}: нижний отступ не зеркален верхнему"
         );
         assert!(
-            cell.y + cell.h <= center.y + center.h,
-            "{w}x{h}: ниже центра"
+            ecm.w >= danger.w / 2,
+            "{w}x{h}: буквы слишком мелкие ({})",
+            ecm.w
         );
         assert!(
-            cell.x >= radar.x + radar.w,
-            "{w}x{h}: клетка статуса перекрывает радар"
+            ecm.x + ecm.w <= center.x + center.w,
+            "{w}x{h}: E правее центра"
         );
+        assert!(station.x >= center.x, "{w}x{h}: S левее центра");
+        assert!(ecm.right() <= radar.x, "{w}x{h}: E перекрывает радар");
+        assert!(station.x >= radar.right(), "{w}x{h}: S перекрывает радар");
     }
 }
 
-/// Неактивный символ не рисуется, активный — в своей половине клетки.
+/// Неактивный символ не рисуется, активный — в своём нижнем углу.
 #[test]
 fn ecm_and_station_symbols_follow_flags() {
     let g = panel_geometry(1280, 960);
-    let cell = g.status_cell();
-    let half = cell.w / 2;
-    let lit = |f: &Frame, x0: i32, x1: i32| {
+    let ecm_cell = g.ecm_cell();
+    let station_cell = g.station_cell();
+    let lit = |f: &Frame, cell: Rect| {
         let mut n = 0;
         for y in cell.y..cell.y + cell.h {
-            for x in x0..x1 {
+            for x in cell.x..cell.x + cell.w {
                 if f.pixels()[y as usize * 1280 + x as usize] == FRAME_COLOR {
                     n += 1;
                 }
@@ -1144,34 +1159,20 @@ fn ecm_and_station_symbols_follow_flags() {
     };
 
     let none = draw(false, false);
-    assert_eq!(lit(&none, cell.x, cell.x + half), 0, "E без ECM");
-    assert_eq!(
-        lit(&none, cell.x + half, cell.x + cell.w),
-        0,
-        "S без станции"
-    );
+    assert_eq!(lit(&none, ecm_cell), 0, "E без ECM");
+    assert_eq!(lit(&none, station_cell), 0, "S без станции");
 
     let ecm = draw(false, true);
-    assert!(lit(&ecm, cell.x, cell.x + half) > 0, "E не нарисован");
-    assert_eq!(
-        lit(&ecm, cell.x + half, cell.x + cell.w),
-        0,
-        "S нарисован без станции"
-    );
+    assert!(lit(&ecm, ecm_cell) > 0, "E не нарисован");
+    assert_eq!(lit(&ecm, station_cell), 0, "S нарисован без станции");
 
     let station = draw(true, false);
-    assert_eq!(lit(&station, cell.x, cell.x + half), 0, "E без ECM");
-    assert!(
-        lit(&station, cell.x + half, cell.x + cell.w) > 0,
-        "S не нарисован"
-    );
+    assert_eq!(lit(&station, ecm_cell), 0, "E без ECM");
+    assert!(lit(&station, station_cell) > 0, "S не нарисован");
 
     let both = draw(true, true);
-    assert!(lit(&both, cell.x, cell.x + half) > 0, "E не нарисован");
-    assert!(
-        lit(&both, cell.x + half, cell.x + cell.w) > 0,
-        "S не нарисован"
-    );
+    assert!(lit(&both, ecm_cell) > 0, "E не нарисован");
+    assert!(lit(&both, station_cell) > 0, "S не нарисован");
 }
 
 /// Геометрия не выходит за пределы окна.

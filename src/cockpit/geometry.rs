@@ -293,7 +293,7 @@ impl CockpitGeom {
                 h: 0,
             };
         }
-        let gap = (self.side_row(0).h / 2).max(LINE);
+        let gap = self.top_gap();
         let d = diameter.min(center.w / 3).min(center.h / 2).max(0);
         Rect {
             x: if right {
@@ -305,6 +305,14 @@ impl CockpitGeom {
             w: d,
             h: d,
         }
+    }
+
+    /// Отступ кружков и символов от краёв центральной клетки.
+    ///
+    /// Один и тот же зазор у верхних кружков и у нижних `E`/`S`, поэтому
+    /// нижняя пара зеркальна верхней.
+    fn top_gap(&self) -> i32 {
+        (self.side_row(0).h / 2).max(LINE)
     }
 
     /// Кружок индикатора опасности (верхний левый в центральной клетке).
@@ -338,23 +346,51 @@ impl CockpitGeom {
         fit_aspect(self.radar_area(), OVAL_RADAR_ASPECT_NUM, OVAL_RADAR_ASPECT_DEN)
     }
 
-    /// Клетка пары индикаторов `E` (ECM) и `S` (станция).
+    /// Размер глифа `E`/`S`.
     ///
-    /// В оригинале оба символа стоят у правого нижнего края сканера: `E`
-    /// слева, `S` справа. Здесь пара прижата к правому нижнему углу
-    /// центральной клетки, сразу за овалом радара.
-    pub fn status_cell(&self) -> Rect {
+    /// Буквы примерно вдвое меньше диаметра кружка опасности (как 8×8
+    /// символы против 16×16 кружка в оригинале), но не меньше одного
+    /// знакоместа. Размер кратен 8, чтобы растр 8×8 не размывался.
+    fn status_glyph(&self) -> i32 {
+        let d = self.danger_cell().w.max(1);
+        ((d / 2 + 4) / 8).max(1) * 8
+    }
+
+    /// Клетка символа `E` (ECM) в левом нижнем углу центральной клетки.
+    pub fn ecm_cell(&self) -> Rect {
+        self.status_cell_at(false)
+    }
+
+    /// Клетка символа `S` (станция рядом) в правом нижнем углу.
+    ///
+    /// Символ зеркален верхнему правому кружку компаса: тот же отступ от
+    /// правого края и такой же отступ от нижнего, как у кружков от верхнего.
+    pub fn station_cell(&self) -> Rect {
+        self.status_cell_at(true)
+    }
+
+    /// Нижний угловой символ `E` (`right == false`) или `S` (`right == true`).
+    fn status_cell_at(&self, right: bool) -> Rect {
         let center = self.center_cell();
         if center.is_empty() {
-            return center;
+            return Rect {
+                x: center.x,
+                y: center.y,
+                w: 0,
+                h: 0,
+            };
         }
-        let gap = self.radar_gap();
-        let glyph = (self.side_row(0).h / 8).max(1) * 8;
-        let w = (glyph * 2).min((center.w - gap).max(0));
-        let h = glyph.min((center.h - gap).max(0));
+        let gap = self.top_gap();
+        let glyph = self.status_glyph();
+        let w = glyph.min((center.w - 2 * gap).max(0));
+        let h = glyph.min((center.h - 2 * gap).max(0));
         Rect {
-            x: (center.x + center.w - gap - w).max(center.x),
-            y: (center.y + center.h - gap - h).max(center.y),
+            x: if right {
+                center.x + center.w - gap - w
+            } else {
+                center.x + gap
+            },
+            y: center.y + center.h - gap - h,
             w,
             h,
         }
