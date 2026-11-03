@@ -5,7 +5,6 @@ use winit::window::Fullscreen;
 
 use super::App;
 use crate::flight;
-use crate::galaxy;
 use crate::keys::{
     digit_of, function_game_key, function_view, is_game_key, kempston_bit, matrix_pos,
 };
@@ -28,12 +27,14 @@ impl App<'_> {
         let Some(dir) = function_view(code) else {
             return;
         };
+        // Сначала вернуть экран игры: под картой в памяти стоит `SHORT RANGE
+        // CHART`, и состояние полёта надо читать уже после восстановления.
+        self.close_hdmap();
         let mem = &self.machine.mem;
         let docked = flight::z80_is_docked(mem);
         let in_cockpit = flight::z80_in_cockpit(mem);
         let in_transition = flight::z80_in_transition(mem);
 
-        self.hdmap.close();
         self.shop.close();
         self.menu = false;
         self.pending_shop = false;
@@ -96,18 +97,9 @@ impl App<'_> {
         // F10 — отдельная нативная карта галактики.
         if code == KeyCode::F10 && !repeat {
             if self.hdmap.active {
-                self.hdmap.close();
+                self.close_hdmap();
             } else if !self.machine.intro_seen {
-                self.hdmap.open(&self.machine.mem, galaxy::KLADOV_GALAXY);
-                if let Some(w) = &self.window {
-                    let size = w.inner_size();
-                    self.hdmap.resize(size.width, size.height);
-                }
-                self.shop.close();
-                self.menu = false;
-                self.pending_key = None;
-                self.pending_flight = None;
-                self.pending_launch = false;
+                self.open_hdmap();
             }
             return;
         }
@@ -121,14 +113,34 @@ impl App<'_> {
         // продолжает работать, но ввод в игру не передаётся.
         if self.hdmap.active {
             match code {
-                KeyCode::ArrowLeft | KeyCode::KeyN => self.hdmap.move_by(-4, 0),
-                KeyCode::ArrowRight | KeyCode::KeyM => self.hdmap.move_by(4, 0),
-                KeyCode::ArrowUp | KeyCode::KeyS => self.hdmap.move_by(0, -4),
-                KeyCode::ArrowDown | KeyCode::KeyX => self.hdmap.move_by(0, 4),
+                KeyCode::ArrowLeft | KeyCode::KeyN => {
+                    self.hdmap.move_by(-4, 0);
+                    self.sync_hdmap_target();
+                }
+                KeyCode::ArrowRight | KeyCode::KeyM => {
+                    self.hdmap.move_by(4, 0);
+                    self.sync_hdmap_target();
+                }
+                KeyCode::ArrowUp | KeyCode::KeyS => {
+                    self.hdmap.move_by(0, -4);
+                    self.sync_hdmap_target();
+                }
+                KeyCode::ArrowDown | KeyCode::KeyX => {
+                    self.hdmap.move_by(0, 4);
+                    self.sync_hdmap_target();
+                }
                 KeyCode::Enter | KeyCode::Space => {
                     // На автоповторе не подтверждаем выбор повторно.
                     if !repeat {
                         self.hdmap.snap_to_nearest();
+                        self.sync_hdmap_target();
+                    }
+                }
+                // `D` — как в оригинале: выбрать ближайшую планету.
+                KeyCode::KeyD => {
+                    if !repeat {
+                        self.hdmap.snap_to_nearest();
+                        self.sync_hdmap_target();
                     }
                 }
                 // Ctrl+F1 — временный чит: телепорт «на станцию» выбранной
@@ -143,7 +155,7 @@ impl App<'_> {
                             x,
                             y,
                         );
-                        self.hdmap.close();
+                        self.close_hdmap();
                     }
                 }
                 // F1-F4 — те же клавиши 1-4 оригинала: карта закрывается,
@@ -152,15 +164,21 @@ impl App<'_> {
                 KeyCode::F1 | KeyCode::F2 | KeyCode::F3 | KeyCode::F4 if !repeat => {
                     self.function_key(code);
                 }
-                KeyCode::Equal | KeyCode::NumpadAdd => self.hdmap.zoom_by(1),
-                KeyCode::Minus | KeyCode::NumpadSubtract => self.hdmap.zoom_by(-1),
-                KeyCode::Escape if !repeat => self.hdmap.close(),
+                KeyCode::Equal | KeyCode::NumpadAdd => {
+                    self.hdmap.zoom_by(1);
+                    self.sync_hdmap_target();
+                }
+                KeyCode::Minus | KeyCode::NumpadSubtract => {
+                    self.hdmap.zoom_by(-1);
+                    self.sync_hdmap_target();
+                }
+                KeyCode::Escape if !repeat => self.close_hdmap(),
                 // Игровая клавиша: закрываем карту и отдаём нажатие игре,
                 // чтобы из карты сразу перейти к экранам игры (командир,
                 // станция и т.п.), не закрывая её вручную.
                 _ => {
                     if is_game_key(code) {
-                        self.hdmap.close();
+                        self.close_hdmap();
                         self.pending_key = matrix_pos(code);
                     }
                 }

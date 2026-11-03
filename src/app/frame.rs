@@ -41,7 +41,12 @@ impl App<'_> {
         if !self.flight.active {
             return;
         }
-        self.follow_flight_screen();
+        // Под картой игра специально находится на экране локальной карты
+        // (`SHORT RANGE CHART`), поэтому не закрываем нативный полёт по её
+        // состоянию — он должен пережить открытие и закрытие карты.
+        if !self.hdmap.active {
+            self.follow_flight_screen();
+        }
         self.flight.sync_from_z80(&self.machine.mem);
         self.flight.sync_game_msg(&self.machine.game_msg);
         for _ in 0..frames {

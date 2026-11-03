@@ -54,6 +54,10 @@ pub struct Map {
     /// Размер области рисования прошлого кадра (для попадания мышью).
     win_w: u32,
     win_h: u32,
+    /// Последняя позиция указателя мыши в координатах окна. Обновляется и
+    /// когда карта закрыта, чтобы первый же клик после открытия попал в цель.
+    /// Само движение мыши курсор карты не двигает — позиция нужна только ЛКМ.
+    pointer: Option<(f64, f64)>,
 }
 
 impl Map {
@@ -72,6 +76,7 @@ impl Map {
             zoom: ZOOM_MIN,
             win_w: 0,
             win_h: 0,
+            pointer: None,
         }
     }
 
@@ -261,17 +266,33 @@ impl Map {
         )
     }
 
-    /// Поставить курсор по координатам окна (наведение мышью).
-    pub fn point_at(&mut self, win_x: f64, win_y: f64) {
+    /// Запомнить позицию указателя мыши (в координатах окна). Сама по себе
+    /// мышь курсор карты не двигает — это делает только ЛКМ (см. [`Self::click`]).
+    pub fn pointer_moved(&mut self, win_x: f64, win_y: f64) {
+        self.pointer = Some((win_x, win_y));
+    }
+
+    /// ЛКМ: перепрыгнуть курсором на звезду под указателем мыши. Клик вне
+    /// видимой области поля (заголовок, панель, рамка) игнорируется.
+    pub fn click(&mut self) {
+        let Some((win_x, win_y)) = self.pointer else {
+            return;
+        };
         let l = self.layout(self.win_w.max(1), self.win_h.max(1));
+        let (x0, y0, x1, y1) = l.visible_rect();
+        let (px, py) = (win_x.round() as i32, win_y.round() as i32);
+        if px < x0 || px >= x1 || py < y0 || py >= y1 {
+            return;
+        }
         let (fx, frow) = l.field_at(win_x, win_y);
         self.cursor_x = fx.round().clamp(0.0, 255.0) as i32;
         // Поле вертикали: строка = (y_raw >> 1), значит y_raw = 2 * строка.
         self.cursor_y_raw = (frow * 2.0).round().clamp(0.0, 255.0) as i32;
         self.clamp_cursor_to_view();
+        self.snap_to_nearest();
     }
 
-    /// Поставить курсор точно на ближайшую звезду (клик ЛКМ).
+    /// Поставить курсор точно на ближайшую звезду (ЛКМ, `Enter`/`Space`, `D`).
     pub fn snap_to_nearest(&mut self) {
         if let Some(p) = galaxy::nearest(
             &self.planets,

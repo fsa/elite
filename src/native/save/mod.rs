@@ -255,3 +255,21 @@ pub fn request_load(m: &mut Spectrum, layout: SaveLayout) {
 pub(crate) const CRD_Y_SYSTEM_OFF: usize = 0x43;
 /// Смещение `Pilot_CrdXSystem` в блоке командира (`PilotName`).
 pub(crate) const CRD_X_SYSTEM_OFF: usize = 0x45;
+/// Смещение `Pilot_CrdXTarget` в блоке командира (`PilotName`).
+///
+/// У Кладова `0xD0BB - 0xD054`. Это координата, на которую указывает курсор
+/// карты: её читает родная карта (`O`) и по ней ищет ближайшую планету.
+pub(crate) const CRD_X_TARGET_OFF: usize = 0x67;
+/// Смещение `Pilot_CrdYTarget` в блоке командира (`PilotName`).
+pub(crate) const CRD_Y_TARGET_OFF: usize = 0x68;
+
+/// Передать игре точку, выбранную на нативной карте (`hdmap`): координаты
+/// курсора в поле `256x128` (`y` — «сырая» вертикаль `0..255`).
+///
+/// Пишем в живой блок командира — ровно туда, откуда их читает родная карта.
+/// Цель — временное состояние навигации, в теневой блок она не входит.
+pub fn set_map_target(m: &mut Spectrum, layout: SaveLayout, x: u8, y: u8) {
+    let live = layout.pilot_name as usize;
+    m.mem[live + CRD_X_TARGET_OFF] = x;
+    m.mem[live + CRD_Y_TARGET_OFF] = y;
+}

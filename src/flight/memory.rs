@@ -13,6 +13,8 @@ pub(super) const Z80_MEM_MIN: usize = 0x7EE0;
 /// (вперёд, назад, влево, вправо), остальные значения — станция и её меню,
 /// карты, инвентарь и прочие экраны оригинала.
 pub const Z80_WHAT_ON_SCREEN: usize = 0x70E3;
+/// `WhatOnScreen` для локальной карты (`SHORT RANGE CHART`).
+pub const Z80_SCREEN_LOCAL_MAP: u8 = 8;
 /// `IndDanger`: `0` — корабль пристыкован к станции, иначе — в полёте.
 pub const Z80_IND_DANGER: usize = 0x7104;
 /// `JumpDocking`: `1` — прыжок/стыковка, `2` — межгалактический прыжок.

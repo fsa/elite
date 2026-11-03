@@ -196,34 +196,55 @@ use crate::world::{current_planet_color, save_layout_kladov, scene_markers};
         assert_eq!(out[last * w + l.x as usize] & 0xFF, (SRC_H - 1) as u32);
     }
 
-    /// F10 открывает отдельную нативную карту галактики: игра на паузе, ввод
-    /// уходит карте, повторный F10/Esc возвращает экран игры.
+    /// F10 открывает отдельную нативную карту галактики: игра не встаёт, но
+    /// переходит в режим `SHORT RANGE CHART`, ввод уходит карте, повторный
+    /// F10/Esc возвращает экран игры.
     #[test]
     fn f10_opens_and_closes_galaxy_map() {
         let opts = test_options();
         let mut app = App::new(boot(), &opts);
+        let prev_screen = app.machine.mem[flight::Z80_WHAT_ON_SCREEN];
         assert!(!app.hdmap.active);
         app.key_event(KeyCode::F10, true, false);
         assert!(app.hdmap.active, "F10 не открыл карту");
         assert_eq!(app.hdmap.planet_count(), galaxy::COUNT);
-        // Курсор карты стартует на текущей системе (из памяти игры).
+        // Пока карта открыта, игра считает, что на экране локальная карта.
+        assert_eq!(
+            app.machine.mem[flight::Z80_WHAT_ON_SCREEN],
+            flight::Z80_SCREEN_LOCAL_MAP
+        );
+        // Курсор карты стартует на текущей системе (из памяти игры), и эта
+        // точка сразу передана в эмулятор как цель карты.
         let sys_x = app.machine.mem[galaxy::KLADOV_GALAXY.sys_x] as i32;
         let sys_y = app.machine.mem[galaxy::KLADOV_GALAXY.sys_y] as i32;
         assert_eq!(app.hdmap.cursor(), (sys_x, sys_y));
-        // Стрелка двигает курсор карты, а не корабль.
+        let live = save_layout_kladov().pilot_name as usize;
+        assert_eq!(app.machine.mem[live + native::CRD_X_TARGET_OFF], sys_x as u8);
+        assert_eq!(app.machine.mem[live + native::CRD_Y_TARGET_OFF], sys_y as u8);
+        // Стрелка двигает курсор карты, а не корабль, и обновляет цель.
         app.key_event(KeyCode::ArrowRight, true, false);
-        assert_eq!(app.hdmap.cursor().0, (sys_x + 4).min(255));
+        let moved_x = (sys_x + 4).min(255);
+        assert_eq!(app.hdmap.cursor().0, moved_x);
+        assert_eq!(app.machine.mem[live + native::CRD_X_TARGET_OFF], moved_x as u8);
+        // `D` ставит курсор точно на ближайшую звезду.
+        app.key_event(KeyCode::KeyD, true, false);
+        let map_x = app.hdmap.cursor().0;
+        let map_y = app.hdmap.cursor().1;
+        assert_eq!(app.machine.mem[live + native::CRD_X_TARGET_OFF], map_x as u8);
+        assert_eq!(app.machine.mem[live + native::CRD_Y_TARGET_OFF], map_y as u8);
         // Пока карта открыта, ввод не попадает в эмулятор.
         app.apply_input();
         assert_eq!(app.machine.kempston, 0, "ввод не должен уходить в игру");
-        // Повторное F10 закрывает карту.
+        // Повторное F10 закрывает карту и возвращает прежний экран.
         app.key_event(KeyCode::F10, true, false);
         assert!(!app.hdmap.active, "F10 не закрыл карту");
+        assert_eq!(app.machine.mem[flight::Z80_WHAT_ON_SCREEN], prev_screen);
         // Открыть заново и закрыть по Esc.
         app.key_event(KeyCode::F10, true, false);
         assert!(app.hdmap.active);
         app.key_event(KeyCode::Escape, true, false);
         assert!(!app.hdmap.active, "Esc не закрыл карту");
+        assert_eq!(app.machine.mem[flight::Z80_WHAT_ON_SCREEN], prev_screen);
     }
 
     /// F12 переключает ускорение эмуляции Z80 вдвое. Автоповтор не должен

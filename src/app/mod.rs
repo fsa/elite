@@ -69,6 +69,9 @@ struct App<'a> {
     menu: bool,
     /// Отдельная нативная карта галактики (F10) — заменяет экран игры.
     hdmap: hdmap::Map,
+    /// Значение `WhatOnScreen` до открытия карты, чтобы вернуть его при
+    /// закрытии. Пока карта открыта, игра работает как `SHORT RANGE CHART`.
+    hdmap_screen: Option<u8>,
     /// Нативный экран закупки оборудования (F4) — заменяет экран игры.
     shop: equip::Shop,
     /// Экран полёта (F1) — нативный рендер по данным Z80. Пока он активен,
@@ -138,6 +141,7 @@ impl<'a> App<'a> {
             last_path: String::new(),
             menu: false,
             hdmap: hdmap::Map::new(),
+            hdmap_screen: None,
             shop: equip::Shop::new(),
             flight: flight::Flight::new(),
             splash: splash::Splash::new(),

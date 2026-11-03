@@ -84,9 +84,12 @@ impl ApplicationHandler for App<'_> {
                 }
             }
             WindowEvent::CursorMoved { position, .. } => {
-                // При открытой карте мышь наводит её курсор.
+                // Позиция мыши нужна карте для ЛКМ; храним её и когда карта
+                // закрыта, чтобы первый клик после открытия уже работал.
+                self.hdmap.pointer_moved(position.x, position.y);
+                // При открытой карте движение мыши только запоминается: курсор
+                // карты двигают кнопки, а ЛКМ перепрыгивает на звезду.
                 if self.hdmap.active {
-                    self.hdmap.point_at(position.x, position.y);
                     return;
                 }
                 // При открытом экране закупки мышь наводит строку списка.
@@ -115,10 +118,12 @@ impl ApplicationHandler for App<'_> {
             }
             WindowEvent::MouseInput { state, button, .. } => {
                 let pressed = state == ElementState::Pressed;
-                // При открытой карте ЛКМ ставит курсор на ближайшую планету.
+                // При открытой карте ЛКМ перепрыгивает курсором на звезду под
+                // указателем и передаёт выбор в эмулятор.
                 if self.hdmap.active {
                     if button == MouseButton::Left && pressed {
-                        self.hdmap.snap_to_nearest();
+                        self.hdmap.click();
+                        self.sync_hdmap_target();
                     }
                     return;
                 }
@@ -147,6 +152,7 @@ impl ApplicationHandler for App<'_> {
                 // системе — карта всегда центрирована на ней).
                 if self.hdmap.active {
                     self.hdmap.zoom_by(if dy > 0.0 { 1 } else { -1 });
+                    self.sync_hdmap_target();
                     return;
                 }
                 if dy > 0.0 {

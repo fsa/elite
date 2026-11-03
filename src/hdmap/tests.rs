@@ -164,16 +164,28 @@ fn field_never_overlaps_title() {
     }
 }
 
-/// Наведение мышью: центр поля -> центр карты (курсор не двигает карту).
+/// Движение мыши само по себе курсор не двигает, а ЛКМ перепрыгивает на
+/// звезду под указателем. Клик вне поля игнорируется.
 #[test]
-fn map_is_fixed_and_mouse_points_at_field() {
+fn map_is_fixed_and_click_picks_star() {
     let mut map = opened();
+    let before = map.cursor();
     let l = map.layout(1024, 768);
-    map.point_at(
+    map.pointer_moved(
         l.fx0 as f64 + 128.0 * l.scale as f64,
         l.fy0 as f64 + 64.0 * l.scale as f64,
     );
-    assert_eq!((map.cursor_x, map.cursor_y_raw), (128, 128));
+    assert_eq!(map.cursor(), before, "движение мыши сдвинуло курсор");
+    // Клик по ORESQU (№204, поле 22x217): курсор встаёт точно на звезду.
+    let (sx, sy) = l.star_px(22, 217 >> 1);
+    map.pointer_moved(sx as f64, sy as f64);
+    map.click();
+    assert_eq!(map.cursor(), (22, 217));
+    assert_eq!(map.nearest_index(), Some(204));
+    // Клик по заголовку (вне видимой области поля) ничего не меняет.
+    map.pointer_moved(1.0, 1.0);
+    map.click();
+    assert_eq!(map.cursor(), (22, 217));
     // Карта не сдвинулась от движения курсора.
     let l2 = map.layout(1024, 768);
     assert_eq!((l.fx0, l.fy0), (l2.fx0, l2.fy0));

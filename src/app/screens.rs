@@ -3,9 +3,61 @@
 use super::App;
 use crate::equip;
 use crate::flight;
+use crate::galaxy;
+use crate::native;
 use crate::world;
 
 impl App<'_> {
+    /// Открыть нативную карту галактики и перевести игру в режим
+    /// `SHORT RANGE CHART`: Z80 продолжает работать, но считает, что на
+    /// экране локальная карта.
+    pub(super) fn open_hdmap(&mut self) {
+        self.hdmap.open(&self.machine.mem, galaxy::KLADOV_GALAXY);
+        if let Some(w) = &self.window {
+            let size = w.inner_size();
+            self.hdmap.resize(size.width, size.height);
+        }
+        let prev = self.machine.mem[flight::Z80_WHAT_ON_SCREEN];
+        self.hdmap_screen = Some(prev);
+        self.machine.mem[flight::Z80_WHAT_ON_SCREEN] = flight::Z80_SCREEN_LOCAL_MAP;
+        self.sync_hdmap_target();
+        self.shop.close();
+        self.menu = false;
+        self.pending_key = None;
+        self.pending_flight = None;
+        self.pending_launch = false;
+    }
+
+    /// Закрыть нативную карту. Прежний экран восстанавливается только если
+    /// игра всё ещё на `SHORT RANGE CHART`: если она сама успела сменить
+    /// экран, его не затираем.
+    pub(super) fn close_hdmap(&mut self) {
+        if !self.hdmap.active {
+            return;
+        }
+        self.hdmap.close();
+        if let Some(prev) = self.hdmap_screen.take() {
+            if self.machine.mem[flight::Z80_WHAT_ON_SCREEN] == flight::Z80_SCREEN_LOCAL_MAP {
+                self.machine.mem[flight::Z80_WHAT_ON_SCREEN] = prev;
+            }
+        }
+    }
+
+    /// Передать в эмулятор точку, на которой стоит курсор карты: родная карта
+    /// читает её из `Pilot_CrdXTarget`/`Pilot_CrdYTarget`.
+    pub(super) fn sync_hdmap_target(&mut self) {
+        if !self.hdmap.active {
+            return;
+        }
+        let (x, y) = self.hdmap.cursor();
+        native::set_map_target(
+            &mut self.machine,
+            world::save_layout_kladov(),
+            x as u8,
+            y as u8,
+        );
+    }
+
     /// Открыть нативный экран закупки поверх текущего состояния игры.
     fn open_shop(&mut self) {
         self.shop.open(&self.machine.mem, equip::KLADOV_SHOP);
@@ -13,7 +65,7 @@ impl App<'_> {
             let size = w.inner_size();
             self.shop.resize(size.width, size.height);
         }
-        self.hdmap.close();
+        self.close_hdmap();
         self.menu = false;
         self.pending_key = None;
         self.pending_flight = None;
@@ -40,7 +92,7 @@ impl App<'_> {
         let planet_color = world::current_planet_color(&self.machine.mem);
         self.flight.open(planet_color);
         self.flight.set_view_dir(dir);
-        self.hdmap.close();
+        self.close_hdmap();
         self.shop.close();
         self.menu = false;
         self.pending_key = None;

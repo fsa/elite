@@ -65,7 +65,7 @@ mod view;
 #[allow(unused_imports)]
 pub use self::memory::{
     z80_in_cockpit, z80_in_transition, z80_is_docked, Z80_FLG_JUMP_DOCKING, Z80_IND_DANGER,
-    Z80_JUMP_COUNTDOWN, Z80_JUMP_DOCKING, Z80_WHAT_ON_SCREEN,
+    Z80_JUMP_COUNTDOWN, Z80_JUMP_DOCKING, Z80_SCREEN_LOCAL_MAP, Z80_WHAT_ON_SCREEN,
 };
 pub use self::transition::TransitionKind;
 pub use self::view::ViewDir;
