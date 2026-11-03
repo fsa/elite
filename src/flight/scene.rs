@@ -11,7 +11,7 @@ use super::memory::{
     self, Z80_OBJ_CORIOLIS, Z80_OBJ_MISSILE, Z80_OBJ_SLOT0, Z80_PLANET_CRD, Z80_SLOT_OADRDATA,
     Z80_SLOT_OENERG, Z80_SLOT_SIZE, Z80_SUN_CRD,
 };
-use super::palette::{CYAN, SUN_COLOR};
+use super::palette::{sun_tint, CYAN, SUN_COLOR};
 
 /// Радиус солнца в единицах координат игры.
 ///
@@ -50,7 +50,15 @@ pub(super) struct Body {
 }
 
 /// Собрать сцену из текущего состояния памяти игры.
-pub(super) fn build(mem: &[u8], planet_color: u32) -> Vec<Body> {
+///
+/// `system_color` — цвет системы на карте галактики: из него получается
+/// лёгкий оттенок почти белой звезды. Ноль означает, что цвет неизвестен.
+pub(super) fn build(mem: &[u8], planet_color: u32, system_color: u32) -> Vec<Body> {
+    let sun_color = if system_color == 0 {
+        SUN_COLOR
+    } else {
+        sun_tint(system_color)
+    };
     let mut bodies: Vec<Body> = Vec::with_capacity(9);
     // Станция, шесть основных слотов и слот ракеты. Пустые слоты
     // обнулены: `oEnerg == 0`, ссылки на модель нет.
@@ -72,7 +80,7 @@ pub(super) fn build(mem: &[u8], planet_color: u32) -> Vec<Body> {
         Z80_SUN_CRD,
         BodyKind::Sun,
         SUN_RADIUS,
-        SUN_COLOR,
+        sun_color,
     );
     push_z80_celestial(
         &mut bodies,

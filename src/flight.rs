@@ -93,6 +93,8 @@ pub struct Flight {
     bodies: Vec<Body>,
     stars: StarField,
     planet_color: u32,
+    /// Цвет системы на карте галактики — оттенок почти белой звезды.
+    system_color: u32,
     /// Нативная анимация вылета/прыжка/стыковки вместо ZX-ролика.
     transition: TransitionState,
     /// Боевые эффекты: лазеры и попадания.
@@ -114,6 +116,7 @@ impl Flight {
             bodies: Vec::new(),
             stars: StarField::new(STAR_COUNT),
             planet_color: PLANET_COLOR,
+            system_color: 0,
             transition: TransitionState::new(),
             combat: Combat::new(),
             messages: Messages::new(),
@@ -137,6 +140,7 @@ impl Flight {
         if planet_color != 0 {
             self.planet_color = planet_green(planet_color);
         }
+        self.system_color = planet_color;
         self.stars.reset(STAR_COUNT);
     }
 
@@ -287,7 +291,7 @@ impl Flight {
 
         // Сцена собирается из слотов Z80; попадание ловим по падению щита
         // уже после того, как известны цели ответного луча.
-        self.bodies = scene::build(mem, self.planet_color);
+        self.bodies = scene::build(mem, self.planet_color, self.system_color);
         self.combat
             .observe_shield(mem, &self.bodies, self.stars.rng_mut());
     }

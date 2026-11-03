@@ -3,7 +3,7 @@
 use crate::display::Frame;
 use crate::render3d::{self, Rotation, Screen};
 
-use super::super::palette::{planet_rim, CYAN, ENEMY_BEAM, RED};
+use super::super::palette::{planet_rim, STAR_RIM_COLOR, CYAN, ENEMY_BEAM, RED};
 use super::super::scene::{Body, BodyKind};
 use super::super::stars::Star;
 use super::super::view::{self, ViewDir};
@@ -116,7 +116,7 @@ fn draw_bodies_view(f: &Flight, frame: &mut Frame, screen: &Screen, view_rot: &R
                 let Some((x, y, r, _)) = project_view(b, screen, &cam) else {
                     continue;
                 };
-                fill_disc(frame, x, y, r, b.color);
+                draw_star(frame, x, y, r, b.color, s);
             }
             BodyKind::Ship | BodyKind::Station => {
                 let Some(model) = b.model else {
@@ -136,7 +136,27 @@ fn draw_bodies_view(f: &Flight, frame: &mut Frame, screen: &Screen, view_rot: &R
 /// ободок занимает весь диск — как в оригинале, где планета рисовалась
 /// только контуром.
 pub(super) fn draw_planet(frame: &mut Frame, x: f32, y: f32, r: f32, color: u32, s: i32) {
-    let rim = planet_rim(color);
+    draw_disc_with_rim(frame, x, y, r, color, planet_rim(color), s);
+}
+
+/// Нарисовать звезду: почти белая заливка с чисто белой окантовкой.
+///
+/// Оттенок заливки — от цвета системы на карте, поэтому звезда остаётся
+/// узнаваемой, но не сливается с белыми кораблями и рамкой кабины.
+pub(crate) fn draw_star(frame: &mut Frame, x: f32, y: f32, r: f32, color: u32, s: i32) {
+    draw_disc_with_rim(frame, x, y, r, color, STAR_RIM_COLOR, s);
+}
+
+/// Диск с ободком: внешний круг цвета `rim`, внутренний — цвета `color`.
+fn draw_disc_with_rim(
+    frame: &mut Frame,
+    x: f32,
+    y: f32,
+    r: f32,
+    color: u32,
+    rim: u32,
+    s: i32,
+) {
     let thickness = s.max(1) as f32;
     fill_disc(frame, x, y, r, rim);
     if r > thickness {

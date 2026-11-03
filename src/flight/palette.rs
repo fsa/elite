@@ -8,8 +8,8 @@ pub(super) const CYAN: u32 = 0xFF00_FFFF;
 pub(super) const RED: u32 = 0xFFFF_4040;
 /// Жёлтый — цвет луча выстрела противника.
 pub(super) const ENEMY_BEAM: u32 = 0xFFFF_A020;
-/// Солнце — ровный жёлтый диск.
-pub(super) const SUN_COLOR: u32 = 0xFFFF_FF00;
+/// Цвет звезды по умолчанию — почти белый (пока цвет системы неизвестен).
+pub(super) const SUN_COLOR: u32 = 0xFFFF_FFD7;
 /// Планета по умолчанию — очень тёмный зелёный диск.
 pub(super) const PLANET_COLOR: u32 = 0xFF00_2000;
 
@@ -30,6 +30,8 @@ pub(super) const VIEW_LABEL_COLOR: u32 = 0xFFD7_D7D7;
 pub(super) const WARP_RING_COLOR: u32 = 0xFF40_A0FF;
 /// Кольца тоннеля станции — белые, как в оригинале.
 pub(super) const STATION_RING_COLOR: u32 = 0xFFFF_FFFF;
+/// Окантовка звезды — чистый белый.
+pub(super) const STAR_RIM_COLOR: u32 = 0xFFFF_FFFF;
 
 /// Очень тёмный зелёный оттенок планеты с небольшой вариацией яркости по
 /// системе.
@@ -39,4 +41,18 @@ pub(super) const STATION_RING_COLOR: u32 = 0xFFFF_FFFF;
 pub(super) fn planet_green(seed: u32) -> u32 {
     let g = 0x20 + ((seed >> 8) & 0x0F);
     0xFF00_0000 | (g << 8)
+}
+
+/// Цвет звезды системы: почти белый диск с лёгким оттенком того цвета,
+/// которым эта система показана на карте галактики.
+///
+/// Каждый канал смешивается с белым в пропорции 85/15, поэтому звезда
+/// остаётся яркой и не спорит с белыми кораблями, но всё же отличается по
+/// оттенку от системы к системе.
+pub(super) fn sun_tint(system_color: u32) -> u32 {
+    let mix = |c: u32| 0xD9 + c * 0x26 / 0xFF;
+    0xFF00_0000
+        | (mix((system_color >> 16) & 0xFF) << 16)
+        | (mix((system_color >> 8) & 0xFF) << 8)
+        | mix(system_color & 0xFF)
 }

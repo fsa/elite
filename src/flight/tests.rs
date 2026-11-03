@@ -10,8 +10,8 @@ use super::memory::{
 use super::messages::{
     countdown_number, pretty_title, view_label, CapturedMsg, MSG_MAX_AGE, MSG_TOP_ROWS,
 };
-use super::palette::{CYAN, ENEMY_BEAM, planet_rim};
-use super::render::scene::draw_stars_view;
+use super::palette::{planet_rim, sun_tint, CYAN, ENEMY_BEAM, STAR_RIM_COLOR};
+use super::render::scene::{draw_star, draw_stars_view};
 use super::scene::{BodyKind, PLANET_RADIUS, SUN_RADIUS};
 use super::stars::{star_count_for, Star, SPEED_MAX, STAR_COUNT, STAR_COUNT_MAX, STAR_FIELD_RADIUS};
 use super::transition::Transition;
@@ -237,6 +237,34 @@ fn close_star_does_not_draw_long_streak() {
     );
     let lit = frame.pixels().iter().filter(|&&p| p != 0).count();
     assert!(lit <= 5, "звезда нарисовала {lit} пикселей вместо точки");
+}
+
+#[test]
+fn sun_is_almost_white_with_system_tint_and_white_rim() {
+    let system = 0xFF40_80C0;
+    let color = sun_tint(system);
+    let channels = [(color >> 16) & 0xFF, (color >> 8) & 0xFF, color & 0xFF];
+    assert!(
+        channels.iter().all(|&c| (0xB0..0xFF).contains(&c)),
+        "звезда должна быть почти белой: {channels:?}"
+    );
+    assert!(
+        channels.iter().any(|&c| c < 0xF0),
+        "у звезды нет оттенка цвета системы"
+    );
+    assert!(
+        channels[0] < channels[1] && channels[1] < channels[2],
+        "оттенок не повторяет порядок каналов системы: {channels:?}"
+    );
+
+    // На диске видна белая окантовка и почти белая заливка с оттенком.
+    let mut frame = Frame::new(256, 192);
+    draw_star(&mut frame, 128.0, 96.0, 20.0, color, 1);
+    assert_eq!(frame.pixels()[96 * 256 + 128], color, "нет заливки звезды");
+    assert!(
+        frame.pixels().iter().any(|&p| p == STAR_RIM_COLOR),
+        "у звезды нет белой окантовки"
+    );
 }
 
 #[test]
@@ -707,6 +735,11 @@ fn z80_reads_flight_data_from_memory() {
         .find(|b| b.kind == BodyKind::Sun)
         .expect("солнце не прочитано");
     assert_eq!(sun.pos, [-300000.0, 200000.0, 1000000.0]);
+    assert_eq!(
+        sun.color,
+        sun_tint(0xFF40_80C0),
+        "звезда должна получить оттенок цвета системы"
+    );
 
     // Пустые слоты и слот ракеты не должны попасть в сцену.
     assert_eq!(
