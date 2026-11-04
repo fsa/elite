@@ -61,7 +61,7 @@ pub use self::layout::KLADOV_COCKPIT;
 pub use self::palette::{
     BACKGROUND, BAR_MAGENTA, BAR_RED, CockpitStyle, DANGER_COLOR, FRAME_COLOR,
 };
-pub use self::values::CockpitValues;
+pub use self::values::{CockpitValues, Compass, RadarContacts};
 
 // Элементы ниже нужны только тестам модуля: боевой код обращается к
 // подмодулям напрямую.
@@ -73,8 +73,8 @@ pub use self::labels::{LEFT_LABELS, RIGHT_LABELS};
 pub use self::palette::{DANGER_GREEN, DANGER_YELLOW};
 #[cfg(test)]
 pub use self::values::{
-    Compass, DEFLECTION_MAX, Danger, GAUGE_MAX, Indicator, MISSILE_ROW, MISSILE_SLOTS, PANEL_ROWS,
-    RadarContact, RadarContactKind, RadarContacts,
+    DEFLECTION_MAX, Danger, GAUGE_MAX, Indicator, MISSILE_ROW, MISSILE_SLOTS, PANEL_ROWS,
+    RadarContact, RadarContactKind,
 };
 
 mod compass;

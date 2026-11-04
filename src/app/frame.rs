@@ -161,6 +161,10 @@ impl App<'_> {
             let values = {
                 let mut values = cockpit::KLADOV_COCKPIT.read(&self.machine.mem);
                 values.blink = (self.machine.frames / 16) % 2 == 0;
+                if matches!(self.flight.transition_kind(), Some(crate::flight::TransitionKind::Launch)) {
+                    values.radar = cockpit::RadarContacts::empty();
+                    values.compass = cockpit::Compass::centered();
+                }
                 values
             };
             let style = cockpit::CockpitStyle {
