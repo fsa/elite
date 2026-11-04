@@ -203,18 +203,21 @@ pub(crate) fn draw_star(frame: &mut Frame, x: f32, y: f32, r: f32, color: u32, s
     draw_disc_with_rim(frame, x, y, r, color, STAR_RIM_COLOR, s);
 }
 
-/// Диск с ободком: внешний круг цвета `rim`, внутренний — цвета `color`.
-fn draw_disc_with_rim(
+/// Диск с ободком: внешний круг цвета `rim_color`, внутренний — цвета `color`.
+///
+/// `rim_thickness` задаётся в пикселях, чтобы вызывающий код мог выбрать
+/// толщину обводки независимо от масштаба вида.
+pub(super) fn draw_disc_with_rim(
     frame: &mut Frame,
     x: f32,
     y: f32,
     r: f32,
     color: u32,
-    rim: u32,
-    s: i32,
+    rim_color: u32,
+    rim_thickness: i32,
 ) {
-    let thickness = s.max(1) as f32;
-    fill_disc(frame, x, y, r, rim);
+    let thickness = rim_thickness.max(1) as f32;
+    fill_disc(frame, x, y, r, rim_color);
     if r > thickness {
         fill_disc(frame, x, y, r - thickness, color);
     }
