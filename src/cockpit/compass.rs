@@ -34,6 +34,10 @@ pub(super) fn draw(f: &mut Frame, g: &CockpitGeom, style: CockpitStyle, values: 
         f.circle(cx, cy, (radius - k).max(0), style.line);
     }
     // Указатель: положительный `y` — вверх, как `CompasPointerCrdY`.
+    // На титульном экране ZX рисуется только кольцо.
+    if !values.compass.visible {
+        return;
+    }
     let x0 = cx + values.compass.x as i32 * unit - 2 * unit;
     let y0 = cy - values.compass.y as i32 * unit - 2 * unit;
     let sprite = if values.compass.filled {

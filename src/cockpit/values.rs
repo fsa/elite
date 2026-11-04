@@ -92,12 +92,15 @@ impl Danger {
 /// `x` и `y` — смещение от центра в «пикселях» оригинального компаса:
 /// `-8..=8`, положительный `y` — вверх (как в `CompasPointerCrdY`).
 /// `filled` — цель впереди (`CompasPointerType == 0`), иначе указатель
-/// рисуется полым.
+/// рисуется полым. `visible` — рисовать ли указатель вообще: на титульном
+/// экране ZX `PrnCocpit_Ifn` рисует только кольцо (`DataCompass`), а сам
+/// указатель появляется лишь в полёте (`PrintCompass`).
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct Compass {
     pub x: i8,
     pub y: i8,
     pub filled: bool,
+    pub visible: bool,
 }
 
 impl Compass {
@@ -107,6 +110,15 @@ impl Compass {
             x: 0,
             y: 0,
             filled: true,
+            visible: true,
+        }
+    }
+
+    /// Только кольцо без указателя — как на титульном экране ZX.
+    pub const fn hidden() -> Compass {
+        Compass {
+            visible: false,
+            ..Compass::centered()
         }
     }
 }
@@ -212,42 +224,44 @@ pub struct CockpitValues {
 }
 
 impl CockpitValues {
-    /// Псевдослучайные показания для заставки.
+    /// Показания панели на заставке — как на титульном экране ZX.
     ///
-    /// Генератор детерминированный: набор не меняется от кадра к кадру,
-    /// поэтому панель на заставке не мерцает.
+    /// Оригинал не пересчитывает приборы на заставке: `PrnCocpit_Ifn`
+    /// восстанавливает сохранённый растровый кокпит (`DataCocpit`), поэтому
+    /// шкалы показывают то состояние, которое было на экране в момент
+    /// снапшота. Значения ниже измерены по нижним 64 строкам ZX-экрана
+    /// версии Кладова (`zx_src/kladov.snapshot`): длина белой заливки в
+    /// полосе переведена в байты `0..0xA0`, маркер `RL` стоит по центру,
+    /// `DC` — на 8 пикселей левее, ракеты не показаны, опасности нет.
+    /// Оба символа `E`/`S` на титульном экране горят: их атрибуты сохранены
+    /// в `DataCocpit` белыми (`E` — ECM, `S` — станция рядом).
+    ///
+    /// Набор постоянный, поэтому панель на заставке не мерцает.
     pub fn for_splash() -> Self {
-        let mut seed = 0x5EED_1234u32;
-        let mut next = || {
-            seed = seed.wrapping_mul(1_664_525).wrapping_add(1_013_904_223);
-            (seed >> 16) as u8
-        };
-        let gauge = |v: u8| Indicator::Gauge(v % (GAUGE_MAX + 1));
-        let deflection = |v: u8| Indicator::Deflection((v % 31) as i8 - DEFLECTION_MAX);
         CockpitValues {
             left: [
-                gauge(next()),
-                gauge(next()),
-                gauge(next()),
-                gauge(next()),
-                gauge(next()),
-                gauge(next()),
-                Indicator::Missiles(next() % (MISSILE_SLOTS as u8 + 1)),
+                Indicator::Gauge(0x80), // FS — 32 пикселя заливки
+                Indicator::Gauge(0x3C), // AS — 15
+                Indicator::Gauge(0x9C), // FU — 39
+                Indicator::Gauge(0x10), // CT — 4
+                Indicator::Gauge(0x04), // LT — 1
+                Indicator::Gauge(0x9C), // AL — 39
+                Indicator::Missiles(0),
             ],
             right: [
-                gauge(next()),
-                deflection(next()),
-                deflection(next()),
-                gauge(next()),
-                gauge(next()),
-                gauge(next()),
-                gauge(next()),
+                Indicator::Gauge(0x00),      // SP — пусто
+                Indicator::Deflection(0),    // RL — маркер по центру
+                Indicator::Deflection(-8),   // DC — маркер левее центра
+                Indicator::Gauge(0x88),      // 1 — 34 пикселя
+                Indicator::Gauge(0xA0),      // 2 — полная шкала
+                Indicator::Gauge(0xA0),      // 3
+                Indicator::Gauge(0xA0),      // 4
             ],
-            danger: Danger::Green,
-            compass: Compass::centered(),
+            danger: Danger::Off,
+            compass: Compass::hidden(),
             radar: RadarContacts::empty(),
-            station_near: false,
-            ecm_on: false,
+            station_near: true,
+            ecm_on: true,
             blink: true,
         }
     }

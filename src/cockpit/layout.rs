@@ -184,6 +184,7 @@ impl CockpitLayout {
             x: offset(x),
             y: offset(y),
             filled: z >= 0.0,
+            visible: true,
         }
     }
 

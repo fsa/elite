@@ -597,6 +597,11 @@ fn compass_ring_and_pointer_follow_target() {
     assert_eq!(px(&ring, cx + radius, cy), FRAME_COLOR, "нет кольца");
     assert_eq!(px(&ring, cx - radius, cy), FRAME_COLOR, "нет кольца");
 
+    // Скрытый указатель: остаётся только кольцо, как на заставке ZX.
+    let hidden = draw(Compass::hidden());
+    assert_eq!(px(&hidden, cx + radius, cy), FRAME_COLOR, "нет кольца");
+    assert_eq!(px(&hidden, cx, cy), BACKGROUND, "указатель не скрыт");
+
     // Заполненный указатель: в центре белый ромб.
     let filled = draw(Compass::centered());
     assert_eq!(
@@ -609,6 +614,7 @@ fn compass_ring_and_pointer_follow_target() {
         x: 0,
         y: 0,
         filled: false,
+        visible: true,
     });
     assert_eq!(
         px(&empty, cx, cy),
@@ -621,6 +627,7 @@ fn compass_ring_and_pointer_follow_target() {
         x: 4,
         y: 0,
         filled: true,
+        visible: true,
     });
     assert_eq!(px(&right, cx + 4 * unit, cy), FRAME_COLOR);
     assert_eq!(
@@ -632,12 +639,14 @@ fn compass_ring_and_pointer_follow_target() {
         x: -4,
         y: 0,
         filled: true,
+        visible: true,
     });
     assert_eq!(px(&left, cx - 4 * unit, cy), FRAME_COLOR);
     let up = draw(Compass {
         x: 0,
         y: 4,
         filled: true,
+        visible: true,
     });
     assert_eq!(
         px(&up, cx, cy - 4 * unit),
@@ -812,11 +821,69 @@ fn cockpit_draws_radar_with_contacts() {
     );
 }
 
-/// Случайные значения заставки детерминированы и не выходят из диапазонов.
+/// Заставка показывает те же показания, что и титульный экран ZX.
 #[test]
-fn splash_values_are_deterministic_and_in_range() {
+fn splash_values_match_zx_title_screen() {
     let a = CockpitValues::for_splash();
     assert_eq!(a, CockpitValues::for_splash(), "заставка будет мерцать");
+    assert_eq!(
+        a.left,
+        [
+            Indicator::Gauge(0x80),
+            Indicator::Gauge(0x3C),
+            Indicator::Gauge(0x9C),
+            Indicator::Gauge(0x10),
+            Indicator::Gauge(0x04),
+            Indicator::Gauge(0x9C),
+            Indicator::Missiles(0),
+        ],
+        "левые индикаторы заставки разошлись с ZX"
+    );
+    assert_eq!(
+        a.right,
+        [
+            Indicator::Gauge(0x00),
+            Indicator::Deflection(0),
+            Indicator::Deflection(-8),
+            Indicator::Gauge(0x88),
+            Indicator::Gauge(0xA0),
+            Indicator::Gauge(0xA0),
+            Indicator::Gauge(0xA0),
+        ],
+        "правые индикаторы заставки разошлись с ZX"
+    );
+    assert_eq!(
+        a.danger,
+        Danger::Off,
+        "на титульном экране ZX индикатор опасности не горит"
+    );
+    assert!(
+        !a.compass.visible,
+        "на титульном экране ZX нарисовано только кольцо компаса"
+    );
+    assert_eq!(a.radar, RadarContacts::empty());
+    assert!(
+        a.station_near && a.ecm_on,
+        "на титульном экране ZX горят оба символа ES"
+    );
+
+    // Пара `ES` действительно рисуется: `E` — ECM, `S` — станция рядом.
+    let g = panel_geometry(1280, 960);
+    let mut f = Frame::new(1280, 960);
+    Cockpit::new().draw(&mut f, &font(), CockpitStyle::COBRA_MK3, &a);
+    let lit = |cell: Rect| {
+        let mut n = 0;
+        for y in cell.y..cell.y + cell.h {
+            for x in cell.x..cell.x + cell.w {
+                if f.pixels()[y as usize * 1280 + x as usize] == FRAME_COLOR {
+                    n += 1;
+                }
+            }
+        }
+        n
+    };
+    assert!(lit(g.ecm_cell()) > 0, "на заставке не нарисована E");
+    assert!(lit(g.station_cell()) > 0, "на заставке не нарисована S");
     for indicator in a.left.iter().chain(a.right.iter()) {
         match *indicator {
             Indicator::Gauge(v) => assert!(v <= GAUGE_MAX),
