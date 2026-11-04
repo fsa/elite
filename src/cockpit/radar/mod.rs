@@ -41,16 +41,23 @@ pub(super) fn draw(f: &mut Frame, g: &CockpitGeom, style: CockpitStyle, values: 
 
 /// Перевести контакт в пиксели внутри эллипса радара.
 ///
-/// Контакты за пределами дальности и за контуром эллипса не показываются.
+/// Контакт не пропадает: если объект дальше дальности радара или его
+/// положение выходит за контур эллипса, направление на объект прижимается
+/// к краю овала. Иначе цели, ушедшие в сторону или назад, внезапно
+/// исчезали бы с радара.
 pub(super) fn plot_contact(cell: Rect, contact: &RadarContact) -> Option<ContactPlot> {
     if cell.w < 4 || cell.h < 4 {
         return None;
     }
     let nx = contact.x as f32 / RADAR_RANGE;
     let nz = contact.z as f32 / RADAR_RANGE;
-    if nx.abs() > 1.0 || nz.abs() > 1.0 || nx * nx + nz * nz > 1.0 {
-        return None;
-    }
+    // Единичная окружность в этих координатах совпадает с контуром овала.
+    let len = (nx * nx + nz * nz).sqrt();
+    let (nx, nz) = if len > 1.0 {
+        (nx / len, nz / len)
+    } else {
+        (nx, nz)
+    };
     let rx = (cell.w / 2 - 1).max(1) as f32;
     let ry = (cell.h / 2 - 1).max(1) as f32;
     let ny = (contact.y as f32 / RADAR_RANGE).clamp(-1.0, 1.0);

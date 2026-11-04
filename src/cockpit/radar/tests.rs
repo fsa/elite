@@ -166,26 +166,43 @@ fn plot_contact_maps_player_coordinates() {
     assert_eq!(below.height, -25);
 }
 
-/// Контакты вне дальности и за контуром овала не показываются.
+/// Дальние контакты не пропадают: их направление прижимается к контуру овала.
 #[test]
-fn contacts_outside_radar_are_hidden() {
+fn far_contacts_are_clamped_to_radar_rim() {
     let cell = Rect {
         x: 0,
         y: 0,
         w: 200,
         h: 100,
     };
-    let far = contact(RADAR_RANGE as i32 * 2, 0, 0);
-    assert!(plot_contact(cell, &far).is_none());
+    let cx = cell.x + cell.w / 2;
+    let cy = cell.y + cell.h / 2;
+    let rx = cell.w / 2 - 1;
+    let ry = cell.h / 2 - 1;
 
-    let edge = contact(RADAR_RANGE as i32, 0, 0);
-    let plot = plot_contact(cell, &edge).unwrap();
-    assert_eq!(plot.x, cell.x + cell.w - 1, "контакт вышел за край");
+    // Сбоку: и на пределе дальности, и далеко за ним — у правого края овала.
+    for dx in [RADAR_RANGE as i32, RADAR_RANGE as i32 * 3] {
+        let plot = plot_contact(cell, &contact(dx, 0, 0)).expect("боковой контакт пропал");
+        assert_eq!(plot.x, cx + rx, "контакт не прижат к правому краю");
+        assert_eq!(plot.y, cy, "боковой контакт уехал по вертикали");
+    }
+    let left = plot_contact(cell, &contact(-(RADAR_RANGE as i32) * 3, 0, 0)).unwrap();
+    assert_eq!((left.x, left.y), (cx - rx, cy));
 
+    // Позади — у нижнего края, впереди — у верхнего.
+    let behind = plot_contact(cell, &contact(0, 0, -(RADAR_RANGE as i32) * 3)).unwrap();
+    assert_eq!((behind.x, behind.y), (cx, cy + ry));
+    let ahead = plot_contact(cell, &contact(0, 0, RADAR_RANGE as i32 * 3)).unwrap();
+    assert_eq!((ahead.x, ahead.y), (cx, cy - ry));
+
+    // Диагональ за контуром эллипса тоже остаётся на овале.
     let diag = (RADAR_RANGE * 0.9) as i32;
+    let plot = plot_contact(cell, &contact(diag, 0, diag)).expect("диагональный контакт пропал");
+    let ex = (plot.x - cx) as f32 / rx as f32;
+    let ey = (cy - plot.y) as f32 / ry as f32;
     assert!(
-        plot_contact(cell, &contact(diag, 0, diag)).is_none(),
-        "контакт за контуром эллипса должен быть скрыт"
+        (ex * ex + ey * ey - 1.0).abs() < 0.05,
+        "контакт не на контуре овала"
     );
 }
 
@@ -302,13 +319,32 @@ fn contacts_are_drawn_on_radar() {
     );
 }
 
-/// Контакт вне дальности не меняет картинку.
+/// Дальний контакт тоже рисуется — на краю овала.
 #[test]
-fn far_contacts_do_not_change_radar() {
+fn far_contacts_are_drawn_at_radar_rim() {
     let far = contact(RADAR_RANGE as i32 * 2, 0, 0);
     let (empty, cell) = draw_radar(&[]);
     let (full, _) = draw_radar(&[far]);
-    assert_eq!(lit_in(&full, cell), lit_in(&empty, cell));
+    assert!(
+        lit_in(&full, cell) > lit_in(&empty, cell),
+        "дальний контакт не показан"
+    );
+}
+
+/// Объект сильно в стороне не выпадает из видимости.
+#[test]
+fn side_contact_stays_on_radar() {
+    let side = contact(RADAR_RANGE as i32 * 3, 0, 0);
+    let (empty, cell) = draw_radar(&[]);
+    let (full, _) = draw_radar(&[side]);
+    assert!(
+        lit_in(&full, cell) > lit_in(&empty, cell),
+        "боковой контакт пропал с радара"
+    );
+
+    let (cx, _, rx, _) = ellipse_params(cell);
+    let plot = plot_contact(cell.inset(1), &side).unwrap();
+    assert_eq!(plot.x, cx + rx, "боковой контакт не прижат к краю овала");
 }
 
 /// Контакт — буква «Г»: засечка на дальнем конце штриха высоты,
