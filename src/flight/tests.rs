@@ -186,6 +186,46 @@ fn j_drive_flag_latches_until_game_tick() {
 }
 
 #[test]
+fn launch_service_speed_does_not_trigger_j_drive() {
+    let mut f = open();
+    let mut mem = vec![0u8; Z80_MEM_MIN];
+    mem[Z80_SPEED_GAUGE] = 0x41; // скорость 12
+    mem[Z80_HIGH_DELTA_SPEED] = 12;
+    f.sync_from_z80(&mem);
+
+    // Вылет: сначала скорость ещё настоящая, а в конце ролика Z80 пишет в
+    // HighDeltaSpeed служебное 7, хотя индикатор хранит прежние 12.
+    f.start_transition(true, &mem);
+    mem[Z80_STARS_TABLE] = 1;
+    f.sync_from_z80(&mem);
+    mem[Z80_HIGH_DELTA_SPEED] = 7;
+    mem[Z80_STARS_TABLE] = 2;
+    f.sync_from_z80(&mem);
+    assert!(
+        !f.stars.boost,
+        "служебная скорость вылета включила J-драйв"
+    );
+
+    // Переход уже закончился, но игра ещё не пересчитала скорость.
+    f.transition.reset();
+    mem[Z80_STARS_TABLE] = 3;
+    f.sync_from_z80(&mem);
+    assert!(
+        !f.stars.boost,
+        "J-драйв ошибочно показан после вылета со станции"
+    );
+
+    // Настоящая скорость снова совпала — обычный J-драйв опять ловится.
+    mem[Z80_HIGH_DELTA_SPEED] = 12;
+    mem[Z80_STARS_TABLE] = 4;
+    f.sync_from_z80(&mem);
+    mem[Z80_HIGH_DELTA_SPEED] = 0x10;
+    mem[Z80_STARS_TABLE] = 5;
+    f.sync_from_z80(&mem);
+    assert!(f.stars.boost, "J-драйв перестал распознаваться");
+}
+
+#[test]
 fn stars_stay_in_view_after_many_turns() {
     // После длительного вращения и полёта ни одна звезда не должна
     // оказаться в бесконечности или NaN — иначе на экране появляются
@@ -401,7 +441,7 @@ fn star_field_fills_whole_sphere_and_scales_with_screen() {
     // Поле должно окружать корабль со всех сторон: иначе задний вид пуст,
     // а боковые виды показывают звёзды только в центре.
     let f = open();
-    assert_eq!(f.stars.len(), STAR_COUNT);
+    assert_eq!(f.stars.stars.len(), STAR_COUNT);
     let (mut front, mut back, mut left, mut right) = (0, 0, 0, 0);
     for s in &f.stars.stars {
         let r = (s.pos[0] * s.pos[0] + s.pos[1] * s.pos[1] + s.pos[2] * s.pos[2]).sqrt();

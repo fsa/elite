@@ -92,6 +92,13 @@ pub struct Flight {
     z80_fast_scroll: bool,
     /// Скорость в единицах `HighDeltaSpeed` (`0..=31`) — темп звёзд.
     speed: f32,
+    /// Ждём, пока `HighDeltaSpeed` снова совпадёт с показанием скорости.
+    ///
+    /// После вылета со станции Z80 на несколько тактов пишет в
+    /// `HighDeltaSpeed` служебное `7` (конец ролика), хотя индикатор скорости
+    /// ещё хранит прежнее значение. Это не J-драйв, и разгон звёзд по такому
+    /// расхождению включать нельзя.
+    speed_resync: bool,
     /// У игрока Cobra Mk IV (`byte_D08E`) — фиолетовые клетки панели.
     cobra_mk4: bool,
     /// Корабль игрока погиб (`PlayerGameOver`): на виде рисуется «Game Over»
@@ -121,6 +128,7 @@ impl Flight {
             prev_star_table: None,
             z80_fast_scroll: false,
             speed: 0.0,
+            speed_resync: false,
             cobra_mk4: false,
             game_over: false,
             bodies: Vec::new(),
@@ -143,6 +151,7 @@ impl Flight {
         self.prev_star_table = None;
         self.z80_fast_scroll = false;
         self.speed = 0.0;
+        self.speed_resync = false;
         self.cobra_mk4 = false;
         self.game_over = false;
         self.bodies.clear();
@@ -164,6 +173,9 @@ impl Flight {
     /// показывать — уход станции или тоннель.
     pub fn start_transition(&mut self, launch: bool, mem: &[u8]) {
         self.transition.start(launch, mem);
+        if launch {
+            self.speed_resync = true;
+        }
         self.explosions.reset();
     }
 
@@ -267,6 +279,17 @@ impl Flight {
         // и прямой опрос заставлял бы шкалу и звёзды прыгать.
         let gauge = mem[Z80_SPEED_GAUGE];
         self.speed = (gauge.saturating_sub(5) as f32 / 5.0).clamp(0.0, SPEED_MAX);
+        // После вылета ждём, пока служебное значение `HighDeltaSpeed` сменится
+        // настоящей скоростью: до этого расхождение с индикатором — не J-драйв.
+        // Пока идёт сам ролик вылета, совпадение тоже ничего не значит: в его
+        // конце игра ещё раз пишет служебное значение.
+        let launching = matches!(self.transition.kind(), Some(TransitionKind::Launch));
+        if self.speed_resync
+            && !launching
+            && mem[Z80_HIGH_DELTA_SPEED] as i32 == self.speed.round() as i32
+        {
+            self.speed_resync = false;
+        }
         self.cobra_mk4 = mem.get(Z80_COBRA_MK4).is_some_and(|&b| b != 0);
         self.game_over = memory::z80_player_dead(mem);
         if self.game_over {
@@ -299,7 +322,8 @@ impl Flight {
             // получают ложное ускорение.
             let fast = !self.game_over
                 && (self.z80_fast_scroll
-                    || mem[Z80_HIGH_DELTA_SPEED] as i32 != self.speed.round() as i32);
+                    || (!self.speed_resync
+                        && mem[Z80_HIGH_DELTA_SPEED] as i32 != self.speed.round() as i32));
             let roll = memory::read_signed8(mem[Z80_HIGH_ANGLE_LR]) * STAR_ANGLE_LR_PER_UNIT;
             let pitch = -memory::read_signed8(mem[Z80_HIGH_ANGLE_DU]) * STAR_ANGLE_DU_PER_UNIT;
             let turn = Rotation::axis_angle([0.0, 0.0, 1.0], roll)
