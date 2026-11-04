@@ -21,7 +21,7 @@ mod game_msg;
 mod rom;
 mod video;
 
-pub use game_msg::{GameMsgLine, GameMsgTap};
+pub use game_msg::GameMsgTap;
 pub use rom::install_stub_rom;
 
 pub struct Spectrum {

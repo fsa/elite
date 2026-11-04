@@ -130,10 +130,6 @@ impl StarField {
         }
     }
 
-    pub(super) fn len(&self) -> usize {
-        self.stars.len()
-    }
-
     pub(super) fn rng_mut(&mut self) -> &mut Rng {
         &mut self.rng
     }
