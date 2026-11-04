@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
-"""Извлечение 3D-моделей объектов из образов игры (Elite / Кладов).
+"""Извлечение 3D-моделей объектов из образа игры версии Кладова.
 
 Модели лежат в ROM по таблице `AdrDataShips` (0x6180): запись 4 байта —
 `[tag][ptr][category]`, `ptr` — адрес блока `ShipData` (см. `ShipData struc`
@@ -58,15 +58,10 @@ import sys
 
 ROOT = pathlib.Path(__file__).resolve().parent.parent
 
-# Образы: elite.bin — «сырой» образ загрузки в 0x6048, kladov.bin — 48К RAM
-# с 0x4000 (см. tools/make_kladov_image.py).
-GAMES = {
-    "elite": {"bin": "zx_bin/elite.bin", "asm": "zx_src/elite.asm", "base": 0x6048},
-    "kladov": {"bin": "zx_bin/kladov.bin", "asm": "zx_src/kladov.asm", "base": 0x4000},
-}
-TABLE_ADDR = 0x6180          # AdrDataShips, общий для обеих версий
+# Образ: kladov.bin — 48К RAM с 0x4000 (см. tools/make_kladov_image.py).
+IMAGE = {"bin": "zx_bin/kladov.bin", "asm": "zx_src/kladov.asm", "base": 0x4000}
+TABLE_ADDR = 0x6180          # AdrDataShips
 HDR = 0x17                   # sizeof(ShipData)
-VERTEX_SZ, EDGE_SZ, NORMAL_SZ = 6, 4, 4
 
 STAT_FIELDS = [
     ("cargo", 1), ("collision", 1), ("fire_chance", 1),
@@ -102,10 +97,6 @@ def table_names(asm_path):
     if not names:
         raise Error(f"{asm_path}: записи AdrDataShips не найдены")
     return names
-
-
-def signed(v):
-    return v - 256 if v >= 128 else v
 
 
 def decode_vertex(b):
@@ -148,81 +139,10 @@ def decode_normal(b):
     return [nx, ny, nz, flags]
 
 
-def parse_ship(img, base, addr, name, cat):
-    off = addr - base
-    if off < 0 or off + HDR > len(img):
-        raise Error(f"{name}: адрес {addr:#06x} вне образа")
-    raw = img[off:off + HDR]
-    stats, pos = {}, 0
-    for key, width in STAT_FIELDS:
-        value = int.from_bytes(raw[pos:pos + width], "little")
-        stats[key] = value
-        pos += width
-    v, e, n = stats["vertex_n"], stats["edge_n"], stats["normal_n"]
-    vo, eo, no = stats["vertex_off"], stats["edge_off"], stats["normal_off"]
-    if max(v, e, n) > 64:
-        raise Error(f"{name}: подозрительные счётчики v={v} e={e} n={n}")
-    if v and e and eo != vo + v * VERTEX_SZ:
-        raise Error(f"{name}: рёбра не следуют за вершинами: "
-                    f"v@{vo:#x}+{v}*{VERTEX_SZ}!={eo:#x}")
-    if e and n and no != eo + e * EDGE_SZ:
-        raise Error(f"{name}: нормали не следуют за рёбрами: "
-                    f"e@{eo:#x}+{e}*{EDGE_SZ}!={no:#x}")
-    # При нулевых счётчиках смещение соответствующего блока может быть 0.
-    end = no + n * NORMAL_SZ if n else (eo + e * EDGE_SZ if e else
-                                        vo + v * VERTEX_SZ if v else HDR)
-    if off + end > len(img):
-        raise Error(f"{name}: блок выходит за образ (конец {addr + end:#06x})")
-
-    vertices = []
-    for i in range(v):
-        b = img[off + vo + i * VERTEX_SZ:off + vo + (i + 1) * VERTEX_SZ]
-        vertices.append(decode_vertex(b))
-    edges = []
-    for i in range(e):
-        b = img[off + eo + i * EDGE_SZ:off + eo + (i + 1) * EDGE_SZ]
-        edges.append([b[0], b[1], b[2], b[3]])
-    faces = []
-    for i in range(n):
-        b = img[off + no + i * NORMAL_SZ:off + no + (i + 1) * NORMAL_SZ]
-        faces.append(decode_normal(b))
-
-    # --- проверки связности ---
-    for k, (_, a, b2, _) in enumerate(edges):
-        if a >= v or b2 >= v:
-            raise Error(f"{name}: ребро {k} ссылается на вершину {max(a, b2)} "
-                        f"при {v} вершинах")
-    # Индексы граней (полубайты). `0xF` — сентинел «всегда видима»: массив
-    # `VergesVisible` — 16 байт, инициализирован единицами, а перезаписываются
-    # только первые `n` (максимум у моделей — 14), поэтому 15 всегда видна.
-    if n:
-        for k, b in enumerate(vertices):
-            for packed in (b[4], b[5]):
-                for nibble in (packed & 0x0F, packed >> 4):
-                    if nibble >= n and nibble != 0xF:
-                        raise Error(f"{name}: вершина {k}: грань {nibble} "
-                                    f"при {n} гранях")
-        for k, (_, _, _, packed) in enumerate(edges):
-            for nibble in (packed & 0x0F, packed >> 4):
-                if nibble >= n and nibble != 0xF:
-                    raise Error(f"{name}: ребро {k}: грань {nibble} "
-                                f"при {n} гранях")
-
-    return {
-        "name": name,
-        "addr": addr,
-        "category": cat,
-        "size": end,
-        "stats": stats,
-        "vertices": vertices,
-        "edges": edges,
-        "faces": faces,
-    }
 
 
 
-
-# -------------------- Поддержка формата kladov --------------------
+# -------------------- Разбор формата kladov --------------------
 
 def decode_lod_rle(stream, need):
     """Распаковка RLE потока lod в kladov."""
@@ -396,19 +316,17 @@ def parse_ship_kladov(img, base, addr, name, cat):
     }
 
 
-def load(game):
-    cfg = GAMES[game]
-    img = (ROOT / cfg["bin"]).read_bytes()
-    names = table_names(ROOT / cfg["asm"])
-    base, table = cfg["base"], TABLE_ADDR - cfg["base"]
+def load():
+    img = (ROOT / IMAGE["bin"]).read_bytes()
+    names = table_names(ROOT / IMAGE["asm"])
+    base, table = IMAGE["base"], TABLE_ADDR - IMAGE["base"]
     ships = []
     for i, name in enumerate(names):
         rec = img[table + i * 4:table + i * 4 + 4]
         if len(rec) < 4:
-            raise Error(f"{game}: таблица обрывается на записи {i}")
+            raise Error(f"таблица обрывается на записи {i}")
         ptr = rec[1] | rec[2] << 8
-        parse = parse_ship_kladov if game == 'kladov' else parse_ship
-        ships.append(parse(img, base, ptr, name, rec[3]))
+        ships.append(parse_ship_kladov(img, base, ptr, name, rec[3]))
     return img, ships
 
 
@@ -419,9 +337,7 @@ def to_rust(ships):
     w("//! Автогенерированный файл — не править вручную.")
     w("//!")
     w("//! Извлечённые 3D-модели объектов игры из таблицы `AdrDataShips`")
-    w("//! версии Кладова (`zx_bin/kladov.bin`). Данные других версий игры")
-    w("//! в модуль не попадают: у общих моделей геометрия та же, а")
-    w("//! характеристики и порядок данных берутся из версии Кладова.")
+    w("//! версии Кладова (`zx_bin/kladov.bin`).")
     w("//! Генерация: `python3 tools/extract_ships.py --rust src/shipdata.rs`.")
     w("//!")
     w("//! Координаты — знаковые байты локальной СКО корабля; `lod` — байт")
@@ -546,35 +462,24 @@ def main():
     ap = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     ap.add_argument("--json", metavar="PATH", help="выгрузить всё в JSON")
     ap.add_argument("--rust", metavar="PATH", help="сгенерировать Rust-модуль")
-    ap.add_argument("--game", choices=sorted(GAMES), help="только одна версия")
     args = ap.parse_args()
 
-    games = {}
-    for game in (GAMES if args.game is None else [args.game]):
-        img, ships = load(game)
-        games[game] = ships
-        print(f"{game}: {len(ships)} объектов")
-        for s in ships:
-            st = s["stats"]
-            print(f"  {s['name']:<14} {s['addr']:#06x} cat={s['category']} "
-                  f"разм={s['size']:#05x} V={st['vertex_n']:>3} "
-                  f"E={st['edge_n']:>3} N={st['normal_n']:>3} "
-                  f"скор={st['max_speed']:>3} энерг={st['energy']:>3} "
-                  f"приз={st['cash']:>5} лазер@{st['laser']}")
+    img, ships = load()
+    print(f"kladov: {len(ships)} объектов")
+    for s in ships:
+        st = s["stats"]
+        print(f"  {s['name']:<14} {s['addr']:#06x} cat={s['category']} "
+              f"разм={s['size']:#05x} V={st['vertex_n']:>3} "
+              f"E={st['edge_n']:>3} N={st['normal_n']:>3} "
+              f"скор={st['max_speed']:>3} энерг={st['energy']:>3} "
+              f"приз={st['cash']:>5} лазер@{st['laser']}")
 
     if args.json:
         path = pathlib.Path(args.json)
         path.parent.mkdir(parents=True, exist_ok=True)
-        payload = {g: ships for g, ships in games.items()}
-        path.write_text(json.dumps(payload, indent=1, ensure_ascii=False))
+        path.write_text(json.dumps({"kladov": ships}, indent=1, ensure_ascii=False))
         print(f"json -> {path}")
     if args.rust:
-        # Базой проекта считается версия Кладова; данные других версий в
-        # Rust-модуль не попадают.
-        ships = games.get("kladov")
-        if ships is None:
-            raise Error("Rust-модуль генерируется только из версии Кладова "
-                        "(--game kladov)")
         path = pathlib.Path(args.rust)
         path.write_text(to_rust(ships) + "\n", encoding="utf-8")
         print(f"rust -> {path}")

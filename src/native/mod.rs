@@ -20,7 +20,7 @@ pub(crate) use crate::machine::{Hook, Spectrum, ROM_SIZE};
 pub(crate) use crate::z80::{Bus, Z80, ZF, CF, HF, PF, SF, XF, YF};
 
 /// Установить все нативные замены (хуки) на машину.
-pub fn install(m: &mut Spectrum, _kladov: bool) {
+pub fn install(m: &mut Spectrum) {
     install_hook(m, 0x5DFB, font_base_hook, 120);
     install_hook(m, 0xEB3E, eb3e_hook, 32);
     install_hook(m, 0xD3CE, d3ce_hook, 46);

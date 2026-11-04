@@ -4,7 +4,7 @@ use super::Shop;
 use super::items::{MAX_ITEMS, TOAST_FRAMES};
 use super::layout::{
     FLAG_BASE, OFF_CASH1, OFF_CASH2, OFF_COBRA, OFF_FREE_CARGO, OFF_FUEL, OFF_LASERS,
-    OFF_MISSION1, OFF_MISSILES, OFF_TECH,
+    OFF_MISSILES, OFF_TECH,
 };
 
 impl Shop {
@@ -25,10 +25,6 @@ impl Shop {
         // Число товаров: `tech+3`, но не больше 14 (`cp 0Ch; jr c; ld a,0Eh`).
         let n = (self.tech as usize + 3).min(MAX_ITEMS);
         self.rows = (1..=n as u8).collect();
-        // Баг оригинала Elite: строка FUEL не печатается при выданной миссии.
-        if self.layout.hide_fuel_on_mission && mem[p + OFF_MISSION1] != 0 {
-            self.rows.retain(|&x| x != 1);
-        }
         for n in 1..=MAX_ITEMS as u8 {
             self.fitted[n as usize] = self.flag_fitted(mem, n);
         }
@@ -49,38 +45,29 @@ impl Shop {
     /// отсека `sub_6FFB` сравнивает сырое значение (`flag+1 == byte_D08E`),
     /// и отдельно обрабатывает миссионную метку `0x59` (товар считается
     /// «не установленным», при покупке метка конвертируется в настоящий
-    /// отсек). В оригинале (`sub_B616`): `flag != 0`.
+    /// отсек).
     fn flag_fitted(&self, mem: &[u8], number: u8) -> bool {
         let flag = mem[self.flag_addr(number)];
-        if self.layout.dec_flags {
-            let cobra = mem[self.pilot() + OFF_COBRA];
-            if number == 3 {
-                flag.wrapping_add(1) == cobra
-            } else {
-                (flag | 0x80).wrapping_add(1) == cobra
-            }
+        let cobra = mem[self.pilot() + OFF_COBRA];
+        if number == 3 {
+            flag.wrapping_add(1) == cobra
         } else {
-            flag != 0
+            (flag | 0x80).wrapping_add(1) == cobra
         }
     }
 
     /// Отметить товар купленным (см. [`Self::flag_fitted`]).
     pub(super) fn mark_fitted(&mut self, mem: &mut [u8], number: u8) {
+        // `loc_EA75`: `dec (hl)` — с нуля получается 0xFF.
         let a = self.flag_addr(number);
-        if self.layout.dec_flags {
-            // `loc_EA75`: `dec (hl)` — с нуля получается 0xFF.
-            mem[a] = mem[a].wrapping_sub(1);
-        } else {
-            // `loc_B64F`: `ld (hl),0FFh`.
-            mem[a] = 0xFF;
-        }
+        mem[a] = mem[a].wrapping_sub(1);
     }
 
     /// Цена товара `number` (1..14) из таблицы, десятые.
     ///
-    /// `sub_EB2F`/`sub_B70A`: запись `(number-1)*3` от базы: `b0*10000 +
-    /// b2*256 + b1`. Для FUEL средний байт — динамическая цена недостающего
-    /// топлива (`byte_7060`/`byte_9237`).
+    /// `sub_EB2F`: запись `(number-1)*3` от базы: `b0*10000 + b2*256 + b1`.
+    /// Для FUEL средний байт — динамическая цена недостающего топлива
+    /// (`byte_7060`).
     pub(super) fn price(&self, mem: &[u8], number: u8) -> u32 {
         let base = self.layout.prices as usize + (number as usize - 1) * 3;
         let b0 = mem[base] as u32;
@@ -89,16 +76,9 @@ impl Shop {
         b0 * 10000 + b2 * 256 + b1
     }
 
-    /// Цена для **отображения** — с сохранением сдвига бага оригинала Elite
-    /// (см. комментарий в начале файла): когда строка FUEL скрыта, все
-    /// строки показывают цену предыдущей записи.
+    /// Цена для **отображения**.
     pub(super) fn price_shown(&self, mem: &[u8], number: u8) -> u32 {
-        let idx = if self.layout.hide_fuel_on_mission && self.rows.first() != Some(&1) {
-            number as usize - 2
-        } else {
-            number as usize - 1
-        };
-        let base = self.layout.prices as usize + idx * 3;
+        let base = self.layout.prices as usize + (number as usize - 1) * 3;
         let b0 = mem[base] as u32;
         let b1 = mem[base + 1] as u32;
         let b2 = mem[base + 2] as u32;

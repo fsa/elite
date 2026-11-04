@@ -25,14 +25,6 @@ pub(crate) fn start_game_kladov_hook(cpu: &mut Z80, m: &mut Spectrum) -> u64 {
     start_game_gate(cpu, m, KLADOV_SAVE)
 }
 
-/// Хук старта для оригинальной версии.
-///
-/// Пока не подключён: `native::install` ставит только хуки Кладова.
-#[allow(dead_code)]
-pub(crate) fn start_game_elite_hook(cpu: &mut Z80, m: &mut Spectrum) -> u64 {
-    start_game_gate(cpu, m, _ELITE_SAVE)
-}
-
 /// Запустить игру с нативной заставки (клавиша `SPACE`).
 ///
 /// Родного цикла ожидания на заставке больше нет — он заменён нативным
@@ -105,14 +97,6 @@ pub(crate) fn teleport_kladov_hook(cpu: &mut Z80, m: &mut Spectrum) -> u64 {
     teleport(cpu, m, KLADOV_SAVE)
 }
 
-/// Хук телепортации для оригинальной версии.
-///
-/// Пока не подключён: `native::install` ставит только хуки Кладова.
-#[allow(dead_code)]
-pub(crate) fn teleport_elite_hook(cpu: &mut Z80, m: &mut Spectrum) -> u64 {
-    teleport(cpu, m, _ELITE_SAVE)
-}
-
 /// Нативная замена ветки «в полёте» перед вызовом `MenuSaveLoad`: переводит
 /// управление прямо на вызов, как если бы игрок был на станции.
 ///
@@ -160,14 +144,6 @@ pub(crate) fn load_gate_kladov_hook(cpu: &mut Z80, m: &mut Spectrum) -> u64 {
     load_gate(cpu, m, KLADOV_SAVE)
 }
 
-/// Ветка «в полёте» для оригинальной версии (`0x72A9`).
-///
-/// Пока не подключён: `native::install` ставит только хуки Кладова.
-#[allow(dead_code)]
-pub(crate) fn load_gate_elite_hook(cpu: &mut Z80, m: &mut Spectrum) -> u64 {
-    load_gate(cpu, m, _ELITE_SAVE)
-}
-
 /// Включить перехват игрового сохранения: при вызове `MenuSaveLoad` игра
 /// выставляет флаг `machine.save_requested`, а главный цикл показывает диалог
 /// выбора файла и записывает блок командира (родная рутина требует
@@ -188,7 +164,7 @@ pub fn install_save(m: &mut Spectrum, layout: SaveLayout) {
 ///
 /// Если приложение попросило загрузку ([`request_load`]), возвращает
 /// «загружено» (A=0, Z=0) — главный цикл уходит на ветку переинициализации
-/// (`jp nz, 0x7394` у Кладова, `jp nz, loc_71BE` в оригинале).
+/// (`jp nz, 0x7394`).
 ///
 /// Иначе возвращает «не загружено» (A=0, Z=1), как родная рутина при обычном
 /// возврате: главный цикл только выставит `machine.save_requested`.
@@ -227,12 +203,4 @@ pub(crate) fn menu_save_load(cpu: &mut Z80, m: &mut Spectrum, layout: SaveLayout
 /// Нативная замена `MenuSaveLoad` в версии Кладова (`0xD04E`).
 pub(crate) fn menu_save_load_kladov_hook(cpu: &mut Z80, m: &mut Spectrum) -> u64 {
     menu_save_load(cpu, m, KLADOV_SAVE)
-}
-
-/// Нативная замена `MenuSaveLoad` в оригинальной версии (`0xD2E4`).
-///
-/// Пока не подключён: `native::install` ставит только хуки Кладова.
-#[allow(dead_code)]
-pub(crate) fn menu_save_load_elite_hook(cpu: &mut Z80, m: &mut Spectrum) -> u64 {
-    menu_save_load(cpu, m, _ELITE_SAVE)
 }

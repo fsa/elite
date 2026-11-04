@@ -137,7 +137,7 @@ impl Shop {
                 mem[self.pilot() + OFF_FREE_CARGO] = self.free_cargo;
                 // Миссионная метка отсека у Кладова (`sub_6FFB`): при покупке
                 // превращается в настоящий отсек, минеральная жизнь — прочь.
-                if self.layout.dec_flags && mem[self.flag_addr(3)] == 0x59 {
+                if mem[self.flag_addr(3)] == 0x59 {
                     mem[self.pilot() + OFF_MINERAL] = 0;
                 }
                 self.mark_fitted(mem, number);

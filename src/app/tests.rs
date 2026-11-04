@@ -721,7 +721,7 @@ use crate::world::{current_planet_color, save_layout_kladov, scene_markers};
     fn real_launch_shows_native_transition() {
         let opts = kladov_options();
         let mut m = boot_kladov();
-        let (intro, game) = scene_markers(true);
+        let (intro, game) = scene_markers();
         m.intro_range = intro;
         m.game_marker = game;
         for _ in 0..30 {
@@ -897,7 +897,7 @@ use crate::world::{current_planet_color, save_layout_kladov, scene_markers};
     fn native_screens_blocked_on_intro() {
         let opts = kladov_options();
         let mut m = boot_kladov();
-        let (intro, game) = scene_markers(true);
+        let (intro, game) = scene_markers();
         m.intro_range = intro;
         m.game_marker = game;
         for _ in 0..30 {
@@ -929,7 +929,7 @@ use crate::world::{current_planet_color, save_layout_kladov, scene_markers};
         // Кладова: интро взводит флаг, вход в `GameMain` его снимает.
         let opts = kladov_options();
         let mut m = boot_kladov();
-        let (intro, game) = scene_markers(true);
+        let (intro, game) = scene_markers();
         m.intro_range = intro;
         m.game_marker = game;
         for _ in 0..30 {
@@ -951,7 +951,7 @@ use crate::world::{current_planet_color, save_layout_kladov, scene_markers};
     #[test]
     fn kladov_intro_clears_after_space() {
         let mut m = boot_kladov();
-        let (intro, game) = scene_markers(true);
+        let (intro, game) = scene_markers();
         m.intro_range = intro;
         m.game_marker = game;
         for _ in 0..30 {
@@ -999,7 +999,7 @@ use crate::world::{current_planet_color, save_layout_kladov, scene_markers};
     fn intro_accepts_only_space() {
         let opts = test_options();
         let mut m = boot();
-        let (intro, game) = scene_markers(false);
+        let (intro, game) = scene_markers();
         m.intro_range = intro;
         m.game_marker = game;
         for _ in 0..30 {
@@ -1104,7 +1104,7 @@ use crate::world::{current_planet_color, save_layout_kladov, scene_markers};
         std::fs::write(&opts.save.as_ref().unwrap(), vec![0u8; 0x68]).unwrap();
 
         let mut m = boot_kladov();
-        let (intro, game) = scene_markers(true);
+        let (intro, game) = scene_markers();
         m.intro_range = intro;
         m.game_marker = game;
         for _ in 0..120 {
@@ -1164,7 +1164,7 @@ use crate::world::{current_planet_color, save_layout_kladov, scene_markers};
     fn kladov_intro_accepts_space() {
         let opts = test_options();
         let mut m = boot_kladov();
-        let (intro, gs) = scene_markers(true);
+        let (intro, gs) = scene_markers();
         m.intro_range = intro;
         m.game_marker = gs;
         for _ in 0..120 {

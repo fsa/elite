@@ -3,8 +3,8 @@
 use super::Shop;
 use super::items::{FUEL_MAX, MISSILES_MAX, NAME_CHARS, PRICE_CHARS, TOAST_FRAMES};
 use super::layout::{
-    KLADOV_SHOP, OFF_CASH1, OFF_CASH2, OFF_FREE_CARGO, OFF_FUEL, OFF_LASERS, OFF_MISSION1,
-    OFF_MISSILES, OFF_TECH, _ELITE_SHOP,
+    KLADOV_SHOP, OFF_CASH1, OFF_CASH2, OFF_FREE_CARGO, OFF_FUEL, OFF_LASERS,
+    OFF_MISSILES, OFF_TECH,
 };
 use super::render::{FITTED_FG, WARN_BG, fmt_fuel, wrap};
 use crate::display::Frame;
@@ -280,57 +280,6 @@ fn digits_and_enter_buy_items() {
     shop.input_digit(&mut mem, 1);
     shop.input_digit(&mut mem, 9);
     assert_eq!(shop.toast_text(), Some("NO SUCH ITEM"));
-}
-
-/// Раскладка Elite: при выданной 1-й миссии строка FUEL скрыта, цены
-/// сдвинуты (баг оригинала), а покупка списывает правильную цену.
-/// Проверка «установлено» — `flag != 0`.
-#[test]
-fn elite_layout_hides_fuel_and_shifts_prices_on_mission() {
-    let mut mem = fake_kladov_mem();
-    // Переносим данные в раскладку оригинала.
-    let (kp, ep) = (
-        KLADOV_SHOP.pilot as usize,
-        _ELITE_SHOP.pilot as usize,
-    );
-    let commander = mem[kp..kp + 104].to_vec();
-    mem[ep..ep + 104].copy_from_slice(&commander);
-    let (kpr, epr) = (
-        KLADOV_SHOP.prices as usize,
-        _ELITE_SHOP.prices as usize,
-    );
-    let prices = mem[kpr..kpr + 42].to_vec();
-    mem[epr..epr + 42].copy_from_slice(&prices);
-    let gl = _ELITE_SHOP.galaxy;
-    mem[gl.seed..gl.seed + 6].copy_from_slice(&[0x4A, 0x5A, 0x48, 0x02, 0x53, 0xB7]);
-    mem[gl.sys_y] = 173;
-    mem[gl.sys_x] = 20;
-    mem[gl.digraphs..gl.digraphs + 64]
-        .copy_from_slice(b"ALLEXEGEZACEBISOUSESARMAINDIREA?ERATENBERALAVETIEDORQUANTEISRION");
-    mem[_ELITE_SHOP.in_danger as usize] = 0;
-    // Выдана 1-я миссия — строка FUEL должна скрыться.
-    mem[ep + OFF_MISSION1] = 1;
-    let mut shop = Shop::new();
-    shop.open(&mem, _ELITE_SHOP);
-    shop.win_w = 1280;
-    shop.win_h = 720;
-    assert_eq!(shop.rows.first(), Some(&2), "FUEL должен быть скрыт");
-    assert_eq!(shop.rows.last(), Some(&13));
-    // Баг оригинала: цена у строки 2 показывается как цена записи 1
-    // (динамическая цена топлива 1.6), хотя покупка стоит 30.0.
-    assert_eq!(shop.price_shown(&mem, 2), 16);
-    assert_eq!(shop.price(&mem, 2), 300);
-    // Проверка «установлено» по-оригинальному: флаг 0x7F тоже установлен.
-    mem[ep + 45 + 11] = 0x7F;
-    shop.refresh(&mem);
-    assert!(shop.fitted[11], "оригинал: любое flag != 0 = установлено");
-    // Покупка пишет 0xFF (а не dec) и списывает правильную цену.
-    mem[ep + 45 + 11] = 0;
-    shop.refresh(&mem);
-    let before = cash_at(&mem, _ELITE_SHOP.pilot);
-    shop.buy_number(&mut mem, 11);
-    assert_eq!(mem[ep + 45 + 11], 0xFF);
-    assert_eq!(cash_at(&mem, _ELITE_SHOP.pilot), before - 15000);
 }
 
 /// Слой рисуется непрозрачно: есть шапка, строки, панель и помощь.

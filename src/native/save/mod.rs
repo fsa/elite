@@ -1,6 +1,6 @@
 //! Подсистема сохранения/загрузки командира и перезапуска игры.
 //!
-//! Раскладка адресов ([`SaveLayout`]) для версий Кладова и оригинала, нативное
+//! Раскладка адресов ([`SaveLayout`]) версии Кладова, нативное
 //! сохранение/загрузка блока командира в файл, телепорт по карте галактики,
 //! одноразовые «ворота» загрузки в полёте и перехват `MenuSaveLoad`.
 
@@ -13,12 +13,10 @@ pub(crate) use hooks::*;
 /// Сколько байт клавиш сбрасывает родная `ResetPressedKeys`.
 pub(crate) const PRESSED_KEY_BYTES: usize = 4;
 
-/// Раскладка сейва командира, зависящая от версии игры.
+/// Раскладка сейва командира версии Кладова.
 ///
-/// Адреса рутин и переменных у Кладова и в оригинале разные (original:
-/// `MenuSaveLoad` = `0xD2E4`, `ControlKey1` = `0xFC0E`, `PilotName` = `0xA816`;
-/// Кладова: `0xD04E`, `0xFC08`, `0xD232`), поэтому выбираем раскладку по
-/// запущенной версии (`--elite`).
+/// Адреса рутин и переменных: `MenuSaveLoad` = `0xD04E`, `ControlKey1` =
+/// `0xFC08`, живой блок пилота = `0xD054`.
 #[derive(Clone, Copy)]
 pub struct SaveLayout {
     /// Точка входа родной рутины сохранения/загрузки (`MenuSaveLoad`).
@@ -28,9 +26,9 @@ pub struct SaveLayout {
     /// срабатывает каждый кадр. Родная рутина в версии Кладова уходит в TR-DOS
     /// (`jp 0x3D2F`) с пейджингом 128K — в 48K-ядре это не работает.
     pub menu_save_load: u16,
-    /// Адрес вызова `MenuSaveLoad` в главном цикле (у Кладова `0x749F`, в
-    /// оригинале `0x72B5`). Сюда встаёт [`request_load`], минуя проверку
-    /// клавиши движения, — игра сама вызывает хук и уходит на перезапуск.
+    /// Адрес вызова `MenuSaveLoad` в главном цикле (`0x749F`). Сюда встаёт
+    /// [`request_load`], минуя проверку клавиши движения, — игра сама вызывает
+    /// хук и уходит на перезапуск.
     pub menu_save_load_callsite: u16,
     /// Родная `SaveCocpitInBuffer` — сохраняет текущий экран в буфер кокпита
     /// (`DataCocpit` и `0x5B00`).
@@ -43,7 +41,7 @@ pub struct SaveLayout {
     /// кокпит, а не мусор.
     pub save_cocpit: Option<u16>,
     /// Адрес ветки «в полёте» (`jr nz, <полёт>`) перед вызовом
-    /// `MenuSaveLoad` (у Кладова `0x7493`, в оригинале `0x72A9`).
+    /// `MenuSaveLoad` (`0x7493`).
     ///
     /// Родная игра разрешает сохранение/загрузку только на станции
     /// (`IndDanger == 0`); в полёте эта ветка пропускает вызов `MenuSaveLoad`.
@@ -67,17 +65,14 @@ pub struct SaveLayout {
     /// здесь. Тень (`aJameson_1`) игра при сохранении обновляет сама.
     pub pilot_name: u16,
     /// Длина блока командира. Кладова копирует 102 байта (`ld bc,66h` в
-    /// `DemoModeOn`), оригинал сохраняет 104 (`ld ix,PilotName; ld de,68h` в
-    /// `sub_D41B`) — на два байта больше: `PilotMission1_1` и
-    /// `Pilot_CrdXTarget`.
+    /// `DemoModeOn`).
     pub commander_len: usize,
     /// Теневой буфер, из которого `InitGame` восстанавливает пилота, и его
     /// длина.
     ///
-    /// В оригинале `RestorePilotFromMemory` копирует `PilotDataSaved`→
-    /// `PilotName` (102 байта), у Кладова `InitGame` делает то же самое:
-    /// `21 32 D2 11 54 D0 01 5D 00 ED B0` = `ld hl,0xD232 / ld de,0xD054 /
-    /// ld bc,5Dh / ldir` — плюс ещё копирует 9 байт координат солнца
+    /// У Кладова `InitGame` копирует `PilotDataSaved`→`PilotName`
+    /// (`21 32 D2 11 54 D0 01 5D 00 ED B0` = `ld hl,0xD232 / ld de,0xD054 /
+    /// ld bc,5Dh / ldir`) — плюс ещё копирует 9 байт координат солнца
     /// (`0xD28F`→`SunCrd`), то есть теневой буфер целиком занимает
     /// `0xD232..0xD297` = 102 байта. Поэтому при загрузке нужно обновить и
     /// его — иначе загруженные данные затрёт копия из тени (а тень
@@ -89,31 +84,28 @@ pub struct SaveLayout {
     /// `PilotDataOfSun` живого блока (`ld hl,SunCrd / ld de,PilotDataOfSun /
     /// ld bc,9 / ldir`), чтобы после загрузки солнце рисовалось по текущим
     /// координатам. Хук подменяет `MenuSaveLoad` целиком, поэтому копирование
-    /// делает [`commander_save`]. Проверено по образам: у Кладова
-    /// `SunCrd`=0x7107 (в `InitGame`: `ld de,7107h`), у оригинала 0x7065
-    /// (`ld de,7065h`); поле `PilotDataOfSun` лежит на смещении 93 живого
-    /// блока в обеих версиях (`byte_A96D` = `PilotDataSaved`+93).
+    /// делает [`commander_save`]. У Кладова `SunCrd` = `0x7107` (в `InitGame`:
+    /// `ld de,7107h`), поле `PilotDataOfSun` лежит на смещении 93 живого
+    /// блока (`unk_D28F` = `aJameson_1`+93).
     pub sun_crd: u16,
-    /// Точка входа главного цикла игры (`GameMain`, у Кладова `0x7471`, в
-    /// оригинале `0x7287`).
+    /// Точка входа главного цикла игры (`GameMain`, `0x7471`).
     ///
     /// Достигается переходом (`jr`/`jp`), поэтому стек сбалансирован —
     /// [`request_teleport`] может повесить сюда одноразовый хук и увести
     /// управление в сторону, не ломая стек.
     pub game_main: u16,
-    /// Ветка «переинициализация и старт на станции» (у Кладова `0x73FD`, в
-    /// оригинале `0x721F`): зовёт `InitGame`, обнуляет `InFreeSpace`/`IndDanger`
-    /// и печатает экран станции, после чего `jr GameMain`.
+    /// Ветка «переинициализация и старт на станции» (`0x73FD`): зовёт
+    /// `InitGame`, обнуляет `InFreeSpace`/`IndDanger` и печатает экран
+    /// станции, после чего `jr GameMain`.
     ///
     /// Сюда переводит управление хук чита телепортации (`F1` на карте), чтобы
     /// оказаться пристыкованным в текущей (только что переписанной) системе.
     pub docked_setup: u16,
-    /// Адрес системного флага `FlagsSetUp` (у Кладова `0xFC0E`, в оригинале
-    /// `0xFC14`). Младшие 2 бита — тип устройства управления; ветка
-    /// переинициализации делает `and 0FCh / or b`, поэтому хук восстанавливает
-    /// их из этого байта.
+    /// Адрес системного флага `FlagsSetUp` (`0xFC0E`). Младшие 2 бита — тип
+    /// устройства управления; ветка переинициализации делает `and 0FCh / or b`,
+    /// поэтому хук восстанавливает их из этого байта.
     pub flags_setup: u16,
-    /// Нативная реализация `MenuSaveLoad` для этой версии.
+    /// Нативная реализация `MenuSaveLoad` версии Кладова.
     hook: Hook,
     /// Одноразовый хук чита телепортации (см. [`request_teleport`]).
     teleport_hook: Hook,
@@ -122,13 +114,12 @@ pub struct SaveLayout {
     /// на ветку переинициализации ([`Self::docked_setup`]) — ровно то, что
     /// делала заставка по `SPACE`.
     ///
-    /// У каждой версии цикл заставки состоит из нескольких участков, и в
-    /// зависимости от состояния входа исполняются разные: у Кладова первый
-    /// участок (`loc_739E`) крутится только пока «нажата» клавиша
-    /// (`inc a; jr nz` при `PressKeyPrnSymbol != 0xFF`), поэтому в начале игры
-    /// исполняется второй участок (`loc_73C3`↔`loc_73E2`); в оригинале —
-    /// наоборот, первый (`loc_71A2`). Чтобы запуск не зависел от того, в каком
-    /// участке застала игра, хук вешается сразу на все точки.
+    /// Цикл заставки состоит из нескольких участков, и в зависимости от
+    /// состояния входа исполняются разные: первый участок (`loc_739E`) крутится
+    /// только пока «нажата» клавиша (`inc a; jr nz` при
+    /// `PressKeyPrnSymbol != 0xFF`), поэтому в начале игры исполняется второй
+    /// участок (`loc_73C3`↔`loc_73E2`). Чтобы запуск не зависел от того, в
+    /// каком участке застала игра, хук вешается сразу на все точки.
     pub intro_loop_start: &'static [u16],
     /// Одноразовый хук запуска игры с заставки (см. [`start_game`]).
     start_hook: Hook,
@@ -155,27 +146,6 @@ pub const KLADOV_SAVE: SaveLayout = SaveLayout {
     start_hook: start_game_kladov_hook,
 };
 
-/// Раскладка оригинальной версии (`zx_bin/elite.bin`).
-pub const _ELITE_SAVE: SaveLayout = SaveLayout {
-    menu_save_load: 0xD2E4,
-    menu_save_load_callsite: 0x72B5,
-    save_cocpit: Some(0x8F40),
-    load_gate: Some(0x72A9),
-    gate_hook: load_gate_elite_hook,
-    control_key1: 0xFC0E,
-    pilot_name: 0xA816,
-    commander_len: 0x68,
-    pilot_shadow: Some((0xA910, 0x66)),
-    sun_crd: 0x7065,
-    game_main: 0x7287,
-    docked_setup: 0x721F,
-    flags_setup: 0xFC14,
-    hook: menu_save_load_elite_hook,
-    teleport_hook: teleport_elite_hook,
-    intro_loop_start: &[0x71A2, 0x71E5],
-    start_hook: start_game_elite_hook,
-};
-
 /// Блок сохранения командира в памяти.
 pub fn commander_block(m: &Spectrum, layout: SaveLayout) -> &[u8] {
     let a = layout.pilot_name as usize;
@@ -183,8 +153,7 @@ pub fn commander_block(m: &Spectrum, layout: SaveLayout) -> &[u8] {
 }
 
 /// Смещение поля `PilotDataOfSun` (9 байт координат солнца) внутри блока
-/// командира. Одинаково в обеих версиях: в оригинале это `byte_A96D` =
-/// `PilotDataSaved`+93, у Кладова `unk_D28F` = `aJameson_1`+93.
+/// командира: у Кладова `unk_D28F` = `aJameson_1`+93.
 pub(crate) const SUN_FIELD_OFF: usize = 93;
 
 /// Записать блок командира в файл `path`.
@@ -217,7 +186,7 @@ pub fn commander_load(m: &mut Spectrum, path: &str, layout: SaveLayout) -> std::
     let a = layout.pilot_name as usize;
     m.mem[a..a + n].copy_from_slice(&data[..n]);
     // Синхронизировать теневой буфер, из которого `InitGame` восстанавливает
-    // пилота (оригинал), иначе загруженные данные затрёт копия из памяти.
+    // пилота, иначе загруженные данные затрёт копия из памяти.
     if let Some((addr, len)) = layout.pilot_shadow {
         let s = data.len().min(len);
         let a = addr as usize;
@@ -248,10 +217,8 @@ pub fn request_load(m: &mut Spectrum, layout: SaveLayout) {
     }
 }
 
-/// Смещение `Pilot_CrdYSystem` в блоке командира (`PilotName`).
-///
-/// Одинаково в обеих версиях: у Кладова `0xD097 - 0xD054`, в оригинале
-/// `0xA859 - 0xA816`.
+/// Смещение `Pilot_CrdYSystem` в блоке командира (`PilotName`):
+/// у Кладова `0xD097 - 0xD054`.
 pub(crate) const CRD_Y_SYSTEM_OFF: usize = 0x43;
 /// Смещение `Pilot_CrdXSystem` в блоке командира (`PilotName`).
 pub(crate) const CRD_X_SYSTEM_OFF: usize = 0x45;

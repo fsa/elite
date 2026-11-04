@@ -60,7 +60,7 @@ pub fn parse_args() -> Options {
                 println!(
                     "usage: elite [game.bin] [--rom rom.bin] [--headless] [--frames N] [--dump out.ppm] [--mute] [--audio] [--wav out.wav] [--native] [--save FILE] [--fullscreen]"
                 );
-                println!("  по умолчанию запускается версия Кладова (zx_bin/kladov.bin)");
+                println!("  загружается версия Кладова (zx_bin/kladov.bin)");
                 println!("  --mute     отключить вывод звука через PipeWire");
                 println!("  --audio    выводить звук и в headless-режиме (реальное время)");
                 println!("  --wav FILE сохранить звук в WAV-файл");

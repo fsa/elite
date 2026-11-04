@@ -66,25 +66,6 @@ fn boot_kladov() -> Spectrum {
     m
 }
 
-/// Готовит машину к запуску оригинальной версии так же, как `main.rs`:
-/// образ по адресу `0x6048`, таблица IM2 на обработчик `0xFF25` и подмена
-/// опроса Kempston (`in a,(c)` -> `ld a,2` в `BeginGame`), без которой игра
-/// останавливается на выборе устройства управления.
-fn boot_elite() -> Spectrum {
-    let base = env!("CARGO_MANIFEST_DIR");
-    let rom = std::fs::read(format!("{base}/zx_bin/48.rom")).expect("zx_bin/48.rom");
-    let game = std::fs::read(format!("{base}/zx_bin/elite.bin"))
-        .expect("zx_bin/elite.bin (собрать: ./build.sh)");
-    let mut m = Spectrum::new(Some(&rom));
-    m.load(crate::boot::GAME_LOAD_ADDR, &game);
-    crate::boot::install_im2_table(&mut m);
-    m.mem[0x71F8] = 0x3E;
-    m.mem[0x71F9] = 0x02;
-    m.cpu.pc = crate::boot::GAME_ENTRY;
-    m.cpu.sp = crate::boot::GAME_SP;
-    m
-}
-
 /// Полный прогон с хуками обязан побайтово совпасть с обычным прогоном:
 /// такты, регистры и содержимое экранной области.
 #[test]
@@ -92,7 +73,7 @@ fn hooks_match_plain_run() {
     FONT_BASE_CALLS.store(0, std::sync::atomic::Ordering::Relaxed);
     let mut plain = boot_kladov();
     let mut hooked = boot_kladov();
-    install(&mut hooked, true);
+    install(&mut hooked);
     for _ in 0..120 {
         plain.run_frame();
         hooked.run_frame();
@@ -183,7 +164,7 @@ fn hook_sub(m: &mut Spectrum, addr: u16) -> Snap {
 fn register_helpers_match_z80() {
     let mut z = kladov();
     let mut n = kladov();
-    install(&mut n, true);
+    install(&mut n);
     let cases: &[(u8, u16, u16, u8)] = &[
         (0x00, 0x0000, 0x0000, 0x00),
         (0x01, 0x0001, 0x0000, 0x00),
@@ -215,7 +196,7 @@ fn register_helpers_match_z80() {
 fn mult_a_hib_c_matches_z80() {
     let mut z = kladov();
     let mut n = kladov();
-    install(&mut n, true);
+    install(&mut n);
     for b in 0u8..=255 {
         for c in 0u8..=255 {
             z.cpu.b = b;
@@ -238,7 +219,7 @@ fn mult_a_hib_c_matches_z80() {
 fn mult_hl_b_c_matches_z80() {
     let mut z = kladov();
     let mut n = kladov();
-    install(&mut n, true);
+    install(&mut n);
     for b in 0u8..=255 {
         for c in 0u8..=255 {
             z.cpu.b = b;
@@ -261,7 +242,7 @@ fn mult_hl_b_c_matches_z80() {
 fn sub_ab1e_matches_z80() {
     let mut z = kladov();
     let mut n = kladov();
-    install(&mut n, true);
+    install(&mut n);
     let inc_factors = [0u8, 1, 2, 3, 7, 8, 9, 255];
     let iy1s = [0x00u8, 0x3F, 0x40, 0x7F, 0x80, 0xFF];
     let run = |z: &mut Spectrum, n: &mut Spectrum, b: u8| {
@@ -309,7 +290,7 @@ fn sub_ab1e_matches_z80() {
 fn pix_crd_2_scr_adr_matches_z80() {
     let mut z = kladov();
     let mut n = kladov();
-    install(&mut n, true);
+    install(&mut n);
     for x in 0u8..=255 {
         for y in 0u8..=255 {
             z.cpu.a = x;
@@ -329,7 +310,7 @@ fn pix_crd_2_scr_adr_matches_z80() {
 fn scr_adr_next_char_line_matches_z80() {
     let mut z = kladov();
     let mut n = kladov();
-    install(&mut n, true);
+    install(&mut n);
     for hl in 0..=0xFFFFu16 {
         let h = (hl >> 8) as u8;
         let l = hl as u8;
@@ -359,7 +340,7 @@ fn scr_adr_next_char_line_matches_z80() {
 fn scr_adr_next_line_matches_z80() {
     let mut z = kladov();
     let mut n = kladov();
-    install(&mut n, true);
+    install(&mut n);
     for hl in 0..=0xFFFFu16 {
         let h = (hl >> 8) as u8;
         let l = hl as u8;
@@ -391,7 +372,7 @@ fn scr_adr_next_line_matches_z80() {
 fn smag_add_mem_matches_z80() {
     let mut z = kladov();
     let mut n = kladov();
-    install(&mut n, true);
+    install(&mut n);
     let addr = 0x7100u16;
     for old in 0u8..=255 {
         for a in 0u8..=255 {
@@ -423,7 +404,7 @@ fn smag_add_mem_matches_z80() {
 fn calc_ang_speed_4_prn_matches_z80() {
     let mut z = kladov();
     let mut n = kladov();
-    install(&mut n, true);
+    install(&mut n);
 
     /// Один прогон: входные байты по `0xFF09`/`0xFF0B`/`0xFF0D`,
     /// произвольные регистры (`A`/`B`/`C`/`HL`/`F`/`R` — вход-мусор,
@@ -492,7 +473,7 @@ fn calc_ang_speed_4_prn_matches_z80() {
 fn scr_xor_col_down_matches_z80() {
     let mut z = kladov();
     let mut n = kladov();
-    install(&mut n, true);
+    install(&mut n);
     // (HL, DE): обычные + краевые.
     let pairs: &[(u16, u16)] = &[
         (0x7000, 0x8000),
@@ -582,7 +563,7 @@ fn scr_xor_col_down_matches_z80() {
 fn scr_copy_alt_lines_matches_z80() {
     let mut z = kladov();
     let mut n = kladov();
-    install(&mut n, true);
+    install(&mut n);
     // (HL = источник, DE = назначение, входные A, F, C, SP).
     let cases: &[(u16, u16, u8, u8, u8, u16)] = &[
         (0xC000, 0x4020, 0x11, 0x00, 0x22, 0x411C), // реальная пара CopyBuf2Screen
@@ -661,7 +642,7 @@ fn scr_copy_alt_lines_yield_matches_z80() {
     for &budget in &budgets {
         let mut z = kladov();
         let mut n = kladov();
-        install(&mut n, true);
+        install(&mut n);
         // Детерминированный паттерн, кроме кода рутины и compDownScrAdr_HL.
         for i in 0..0x1_0000usize {
             if (0x7FCD..0x7FEF).contains(&i) || (0x8445..0x8459).contains(&i) {
@@ -786,13 +767,13 @@ fn run_until_ret(m: &mut Spectrum, addr: u16, sp: u16, dispatch: bool) {
 /// Таблица токенов подменена детерминированной в `0x9000` (201 строка
 /// только из печатных символов), чтобы не тянуть зависимости реальных
 /// строк; сама печать, диграфы и обработчики управляющих кодов остаются
-/// на Z80 в обеих версиях и должны дать тот же результат. Сверяются все
+/// на Z80 в обеих машинах и должны дать тот же результат. Сверяются все
 /// регистры, флаги, `R`, такты, `PC`/`SP` и вся память.
 #[test]
 fn print_message1_matches_z80() {
     let mut z = kladov();
     let mut n = kladov();
-    install(&mut n, true);
+    install(&mut n);
     // Детерминированная таблица токенов: 201 строка печатных глифов.
     const TBL: u16 = 0x9000;
     let mut p = TBL as usize;
@@ -858,7 +839,7 @@ fn print_message1_matches_z80() {
 #[test]
 fn message_capture_collects_token_string() {
     let mut n = kladov();
-    install(&mut n, true);
+    install(&mut n);
     n.game_msg.enabled = true;
 
     // Детерминированная таблица токенов, как в `print_message1_matches_z80`:
@@ -899,7 +880,7 @@ fn message_capture_collects_token_string() {
 #[test]
 fn message_capture_collects_hyperspace_line() {
     let mut n = kladov();
-    install(&mut n, true);
+    install(&mut n);
     n.game_msg.enabled = true;
 
     // Имя планеты (`PlanetName`), которое печатает управляющий код 3
@@ -934,7 +915,7 @@ fn message_capture_collects_hyperspace_line() {
 fn sfx_pair() -> (Spectrum, Spectrum) {
     let mut z = kladov();
     let mut n = kladov();
-    install(&mut n, true);
+    install(&mut n);
     for i in 0..0x1_0000usize {
         if (0x9560..0x96C0).contains(&i) {
             continue;
@@ -1270,7 +1251,7 @@ fn sfx_update_yield_matches_z80() {
 fn scan_keys_pair() -> (Spectrum, Spectrum) {
     let mut z = kladov();
     let mut n = kladov();
-    install(&mut n, true);
+    install(&mut n);
     for i in 0..0x1_0000usize {
         let keep = (0xFC10..0xFCEA).contains(&i)
             || (0xFD41..0xFD8E).contains(&i)
@@ -1426,14 +1407,14 @@ fn font_base_matches_z80() {
     }
 }
 
-/// Сохранение и загрузка блока командира в файл — round-trip (обе версии).
+/// Сохранение и загрузка блока командира в файл — round-trip.
 #[test]
 fn commander_roundtrip() {
     let base = env!("CARGO_MANIFEST_DIR");
     let dir = format!("{base}/tmp");
     std::fs::create_dir_all(&dir).unwrap();
 
-    for layout in [KLADOV_SAVE, _ELITE_SAVE] {
+    for layout in [KLADOV_SAVE] {
         let path = format!("{dir}/commander_roundtrip_{:04X}.zxelite", layout.pilot_name);
         let mut m = kladov();
         let a = layout.pilot_name as usize;
@@ -1459,7 +1440,7 @@ fn commander_roundtrip() {
         if let Some(sa) = shadow_a {
             let sn = layout.commander_len.min(layout.pilot_shadow.unwrap().1);
             // После сохранения теневой буфер должен полностью совпадать с
-            // живым блоком (оригинал: SaveGame копирует PilotName→PilotDataSaved).
+            // живым блоком (как `SaveGame`: `PilotName`→`PilotDataSaved`).
             let live_now = &m.mem[a..a + sn];
             assert_eq!(
                 &m.mem[sa..sa + sn],
@@ -1484,10 +1465,10 @@ fn commander_roundtrip() {
 
 /// Перехват `MenuSaveLoad`: хук должен выставить запрос на сохранение и
 /// сбросить «залипшие» клавиши (`ControlKey1`..`ControlKey3`), как это
-/// делает родная рутина через `ResetPressedKeys`. Проверяем обе версии.
+/// делает родная рутина через `ResetPressedKeys`.
 #[test]
 fn menu_save_load_hook_sets_request() {
-    for layout in [KLADOV_SAVE, _ELITE_SAVE] {
+    for layout in [KLADOV_SAVE] {
         let mut m = kladov();
         install_save(&mut m, layout);
         assert!(
@@ -1540,7 +1521,7 @@ fn count_save_requests(m: &mut Spectrum) -> usize {
 
 /// Регрессия на бесконечный цикл сохранения: одно нажатие клавиши
 /// сохранения (Symbol Shift) должно дать ровно один запрос, а не
-/// повторяться на каждой итерации главного цикла. Проверяем обе версии.
+/// повторяться на каждой итерации главного цикла.
 #[test]
 fn save_request_fires_once_per_press() {
     let mut kladov = boot_kladov();
@@ -1550,21 +1531,13 @@ fn save_request_fires_once_per_press() {
         requests, 1,
         "Кладова: сохранение сработало {requests} раз вместо одного"
     );
-
-    let mut elite = boot_elite();
-    install_save(&mut elite, _ELITE_SAVE);
-    let requests = count_save_requests(&mut elite);
-    assert_eq!(
-        requests, 1,
-        "оригинал: сохранение сработало {requests} раз вместо одного"
-    );
 }
 
 /// Загрузка прерывает текущий процесс и перезапускает игру: пилот из файла
 /// сохраняется, а после стартовой последовательности корабль пристыкован
-/// (`IndDanger=0`) — то есть мы на станции. Проверяем обе версии, причём
-/// загрузку «в полёте» (родная игра разрешает её только на станции, поэтому
-/// [`request_load`] обходит эту проверку).
+/// (`IndDanger=0`) — то есть мы на станции. Загрузка выполняется «в полёте»
+/// (родная игра разрешает её только на станции, поэтому [`request_load`]
+/// обходит эту проверку).
 #[test]
 fn load_restarts_docked_with_saved_pilot() {
     let base = env!("CARGO_MANIFEST_DIR");
@@ -1583,7 +1556,6 @@ fn load_restarts_docked_with_saved_pilot() {
 
     for (layout, ind_danger, mut m) in [
         (KLADOV_SAVE, 0x7104u16, boot_kladov()),
-        (_ELITE_SAVE, 0x7062u16, boot_elite()),
     ] {
         install_save(&mut m, layout);
 
@@ -1639,7 +1611,6 @@ fn load_restarts_docked_with_saved_pilot() {
 fn start_game_from_intro_proceeds() {
     for (layout, ind_danger, mut m) in [
         (KLADOV_SAVE, 0x7104u16, boot_kladov()),
-        (_ELITE_SAVE, 0x7062u16, boot_elite()),
     ] {
         install_save(&mut m, layout);
         // Даём игре дойти до заставки.
@@ -1698,7 +1669,6 @@ fn load_restart_keeps_screen_clean() {
 
     for (layout, ind_danger, mut m) in [
         (KLADOV_SAVE, 0x7104u16, boot_kladov()),
-        (_ELITE_SAVE, 0x7062u16, boot_elite()),
     ] {
         install_save(&mut m, layout);
         // Полёт, в котором сохраняем сейв, затем загрузка и перезапуск.
@@ -1755,11 +1725,9 @@ fn save_load_uses_live_commander_block() {
     // `live` — настоящий живой блок пилота по данным дизассемблирования,
     // независимый от того, что записано в раскладке: у Кладова это
     // назначение `ldir` из тени в `InitGame` (`ld de,0xD054`) и `ld de,
-    // PilotName` в `DemoModeOn`; в оригинале — `ld de,PilotName` из
-    // `RestorePilotFromMemory` (копия `0xA910`→`0xA816`).
+    // PilotName` в `DemoModeOn`.
     for (layout, live, ind_danger, mut m) in [
         (KLADOV_SAVE, 0xD054usize, 0x7104u16, boot_kladov()),
-        (_ELITE_SAVE, 0xA816usize, 0x7062u16, boot_elite()),
     ] {
         assert_eq!(
             layout.pilot_name as usize, live,
@@ -1843,7 +1811,7 @@ fn save_load_uses_live_commander_block() {
 ///
 /// После [`request_teleport`] игра должна оказаться пристыкованной
 /// (`IndDanger == 0`) в системе с заданными координатами, а данные планеты
-/// (имя) — пересобраны под неё. Проверяем обе версии.
+/// (имя) — пересобраны под неё.
 #[test]
 fn teleport_docks_at_selected_system() {
     // Буфер сгенерированного имени планеты (`TempName`): Кладова 0xDEDB

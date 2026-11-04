@@ -1,8 +1,8 @@
 //! Раскладка переменных панели в памяти Z80 и чтение показаний.
 //!
-//! Здесь собраны адреса переменных игры для обеих версий ([`ELITE_COCKPIT`],
-//! [`KLADOV_COCKPIT`]) и преобразование байтов живой памяти в снимок
-//! [`CockpitValues`]. Отрисовка о памяти ничего не знает.
+//! Здесь собраны адреса переменных игры ([`KLADOV_COCKPIT`]) и
+//! преобразование байтов живой памяти в снимок [`CockpitValues`]. Отрисовка
+//! о памяти ничего не знает.
 
 use super::values::{
     CockpitValues, Compass, DEFLECTION_MAX, Danger, GAUGE_MAX, Indicator, MISSILE_SLOTS,
@@ -65,32 +65,6 @@ pub struct CockpitLayout {
     /// Оставшееся время работы ECM (`TimeWorkECM`), `0` — выключена.
     pub ecm_time: u16,
 }
-
-/// Раскладка переменных панели для оригинальной версии (`elite.bin`).
-#[allow(dead_code)] // понадобится на следующих шагах заполнения панели
-pub const ELITE_COCKPIT: CockpitLayout = CockpitLayout {
-    shield_front: 0x7046,
-    shield_rear: 0x7048,
-    fuel: 0x704A,
-    temperature: 0x704C,
-    laser_temp: 0x704E,
-    altitude: 0x7050,
-    speed: 0x7052,
-    shield_unit1: 0x7054,
-    rotate_lr: 0x705C,
-    rotate_du: 0x705E,
-    missiles: 0xA845,
-    in_free_space: 0x7061,
-    planet_crd: 0x706E,
-    // Для оригинальной версии адрес фиктивных координат пока не найден.
-    fake_planet_crd: 0,
-    coriolis_slot: 0x5FA6,
-    ship_slot0: 0x5FCD,
-    missile_slot: 0x60B7,
-    j_drive_coriolis: 0x707B,
-    coriolis_near: 0x7077,
-    ecm_time: 0xDA16,
-};
 
 /// Раскладка переменных панели для версии Кладова (`kladov.bin`), +0xA2.
 #[allow(dead_code)] // понадобится на следующих шагах заполнения панели

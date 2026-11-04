@@ -17,18 +17,6 @@ use crate::machine::Spectrum;
 use crate::native;
 use crate::world;
 
-// Константы оригинальной версии: запуск пока идёт только у Кладова, но
-// раскладка нужна тестам и будущей поддержке `--elite`.
-/// Load address of the assembled game image.
-#[allow(dead_code)]
-pub const GAME_LOAD_ADDR: u16 = 0x6048;
-/// Entry point (label `Start`).
-#[allow(dead_code)]
-pub const GAME_ENTRY: u16 = 0x7000;
-/// Initial stack pointer for the original image.
-#[allow(dead_code)]
-pub const GAME_SP: u16 = 0x6000;
-
 /// Адрес загрузки полного образа версии Кладова.
 pub const KLADOV_LOAD_ADDR: u16 = 0x4000;
 pub const KLADOV_I: u8 = 0xFD;
@@ -44,30 +32,7 @@ pub const KLADOV_STATE_R: u8 = 0x3E;
 pub const KLADOV_STATE_A: u8 = (KLADOV_STATE_AF >> 8) as u8;
 pub const KLADOV_STATE_F: u8 = (KLADOV_STATE_AF & 0xFF) as u8;
 
-/// The interrupt handler routine (`Interrupts` in the disassembly).
-#[allow(dead_code)]
-pub const INTERRUPT_HANDLER: u16 = 0xFF25;
-/// Interrupt mode-2 table base; the game sets I=0xFD in `Interrupts_ON`.
-#[allow(dead_code)]
-pub const IM2_TABLE: u16 = 0xFD00;
-
-/// The original tape loader patches the IM2 vector table (which ships filled
-/// with 0xFE placeholders) so every interrupt vector points at the handler.
-/// We reproduce that step here.
-///
-/// Пока вызывается только из тестов оригинальной версии.
-#[allow(dead_code)]
-pub fn install_im2_table(machine: &mut Spectrum) {
-    let lo = (INTERRUPT_HANDLER & 0xFF) as u8;
-    let hi = (INTERRUPT_HANDLER >> 8) as u8;
-    for i in 0..128u16 {
-        let a = IM2_TABLE + i * 2;
-        machine.mem[a as usize] = lo;
-        machine.mem[a as usize + 1] = hi;
-    }
-}
-
-/// Собрать машину с загруженной игрой и настроить её под версию Кладова.
+/// Настроить машину с загруженной игрой под версию Кладова.
 pub fn machine(opts: &Options) -> Spectrum {
     let game = match fs::read(&opts.game) {
         Ok(d) => d,
@@ -107,11 +72,11 @@ pub fn machine(opts: &Options) -> Spectrum {
     machine.cpu.iff2 = true;
 
     if opts.native || env::var("ELITE_NATIVE").is_ok() {
-        native::install(&mut machine, true);
+        native::install(&mut machine);
     }
 
     // Отслеживание заставки: на ней нативные экраны не открываются.
-    let (intro, game_start) = world::scene_markers(true);
+    let (intro, game_start) = world::scene_markers();
     machine.intro_range = intro;
     machine.game_marker = game_start;
 
