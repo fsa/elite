@@ -8,8 +8,8 @@ use crate::render3d::Rotation;
 use crate::shipdata::{self, Ship};
 
 use super::memory::{
-    self, Z80_OBJ_CORIOLIS, Z80_OBJ_MISSILE, Z80_OBJ_SLOT0, Z80_PLANET_CRD, Z80_SLOT_OADRDATA,
-    Z80_SLOT_OENERG, Z80_SLOT_SIZE, Z80_SUN_CRD,
+    self, Z80_OBJ_CORIOLIS, Z80_OBJ_MISSILE, Z80_OBJ_SLOT0, Z80_OENERG_DESTROYED,
+    Z80_PLANET_CRD, Z80_SLOT_OADRDATA, Z80_SLOT_OENERG, Z80_SLOT_SIZE, Z80_SUN_CRD,
 };
 use super::palette::{sun_tint, CYAN, SUN_COLOR};
 
@@ -99,27 +99,51 @@ fn map_ship_ptr(ptr: u16) -> Option<&'static Ship> {
     shipdata::SHIPS.iter().find(|s| s.addr == ptr)
 }
 
-/// Добавить объект из слота Z80 (станция, корабль, ракета).
+/// Модель и положение объекта в слоте Z80.
 ///
-/// Слоты пусты, если `oEnerg == 0`; ориентация хранится двумя осями:
-/// ось Z модели — по `+0x0A/0C/0E`, ось Y — по `+0x10/12/14`
-/// (знаковые байты), ось X достраивается как `Y × Z`.
-fn push_z80_slot(bodies: &mut Vec<Body>, mem: &[u8], base: usize, kind: BodyKind) {
+/// Возвращает `None` для пустого (`oEnerg == 0`) слота и для неизвестной
+/// модели. Уничтоженный слот (`oEnerg == 0xFF`) ещё хранит модель: по ней
+/// [`slot_pose`] находит радиус облака частиц.
+fn slot_object(mem: &[u8], base: usize) -> Option<(&'static Ship, [f32; 3])> {
     if base + Z80_SLOT_SIZE > mem.len() || mem[base + Z80_SLOT_OENERG] == 0 {
-        return;
+        return None;
     }
     let ptr = u16::from_le_bytes([
         mem[base + Z80_SLOT_OADRDATA],
         mem[base + Z80_SLOT_OADRDATA + 1],
     ]);
-    let Some(model) = map_ship_ptr(ptr) else {
-        return;
-    };
+    let model = map_ship_ptr(ptr)?;
     let pos = [
         memory::read_signed24(&mem[base..base + 3]),
         memory::read_signed24(&mem[base + 3..base + 6]),
         memory::read_signed24(&mem[base + 6..base + 9]),
     ];
+    Some((model, pos))
+}
+
+/// Положение и радиус объекта в слоте (по `collision` модели).
+///
+/// Нужен эффектам уничтожения: слот уже помечен `oEnerg == 0xFF` и не
+/// попадает в сцену, но координаты и размер модели ещё можно прочитать.
+pub(super) fn slot_pose(mem: &[u8], base: usize) -> Option<([f32; 3], f32)> {
+    let (model, pos) = slot_object(mem, base)?;
+    Some((pos, model.stats.collision as f32))
+}
+
+/// Добавить объект из слота Z80 (станция, корабль, ракета).
+///
+/// Слоты пусты, если `oEnerg == 0`; уничтоженный слот (`0xFF`) тоже не
+/// рисуется целым кораблём — вместо него показывается облако частиц.
+/// Ориентация хранится двумя осями: ось Z модели — по `+0x0A/0C/0E`,
+/// ось Y — по `+0x10/12/14` (знаковые байты), ось X достраивается как
+/// `Y × Z`.
+fn push_z80_slot(bodies: &mut Vec<Body>, mem: &[u8], base: usize, kind: BodyKind) {
+    if mem.get(base + Z80_SLOT_OENERG) == Some(&Z80_OENERG_DESTROYED) {
+        return;
+    }
+    let Some((model, pos)) = slot_object(mem, base) else {
+        return;
+    };
     let z_axis = [
         memory::read_signed8(mem[base + 0x0A]),
         memory::read_signed8(mem[base + 0x0C]),

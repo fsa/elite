@@ -1,9 +1,13 @@
-//! Элементы обычного вида: звёзды, объекты, выстрелы и перекрестие.
+//! Элементы обычного вида: звёзды, объекты, облака взрывов, выстрелы и
+//! перекрестие.
 
 use crate::display::Frame;
 use crate::render3d::{self, Rotation, Screen};
 
-use super::super::palette::{planet_rim, STAR_RIM_COLOR, CYAN, ENEMY_BEAM, RED};
+use super::super::explosions::EXPLOSION_TIME;
+use super::super::palette::{
+    explosion_color, planet_rim, STAR_RIM_COLOR, CYAN, ENEMY_BEAM, RED,
+};
 use super::super::scene::{Body, BodyKind};
 use super::super::stars::Star;
 use super::super::view::{self, ViewDir};
@@ -20,6 +24,7 @@ pub(super) fn draw_flight_scene(
 ) {
     draw_stars_view(frame, screen, &f.stars.stars, view_rot, f.stars.streak());
     draw_bodies_view(f, frame, screen, view_rot, s);
+    draw_explosions_view(f, frame, screen, view_rot, s);
     draw_enemy_shots_view(f, frame, screen, 0, view_bottom, view_rot);
     if f.view_dir == ViewDir::Forward {
         draw_crosshair(frame, screen.cx, screen.cy, s);
@@ -125,6 +130,57 @@ fn draw_bodies_view(f: &Flight, frame: &mut Frame, screen: &Screen, view_rot: &R
                 let vrot = cam.mul(&b.rot);
                 render3d::draw_ship(frame, model, &vrot, vpos, screen, render3d::SHIP_COLOR);
             }
+        }
+    }
+}
+
+/// Нарисовать облака частиц на месте уничтоженных объектов.
+///
+/// Частицы живут в координатах вида, поэтому проекция та же, что у тел сцены:
+/// облако поворачивается вместе с миром и сжимается по мере удаления. Размер
+/// точки привязан к масштабу кадра (`s`), чтобы на большом окне облако не
+/// превращалось в еле заметную пыль.
+fn draw_explosions_view(
+    f: &Flight,
+    frame: &mut Frame,
+    screen: &Screen,
+    view_rot: &Rotation,
+    s: i32,
+) {
+    if f.explosions.clouds.is_empty() {
+        return;
+    }
+    let cam = view_rot.transpose();
+    let dot = s.max(1);
+    for cloud in &f.explosions.clouds {
+        let t = 1.0 - cloud.age / EXPLOSION_TIME;
+        if t <= 0.0 {
+            continue;
+        }
+        let color = explosion_color(t);
+        for p in &cloud.particles {
+            let pos = [
+                cloud.center[0] + p.offset[0],
+                cloud.center[1] + p.offset[1],
+                cloud.center[2] + p.offset[2],
+            ];
+            let vpos = cam.apply(pos);
+            if vpos[2] <= view::NEAR {
+                continue;
+            }
+            let x = screen.cx + vpos[0] / vpos[2] * screen.k;
+            let y = screen.cy - vpos[1] / vpos[2] * screen.k;
+            if !x.is_finite() || !y.is_finite() {
+                continue;
+            }
+            let half = dot / 2;
+            frame.fill_rect(
+                x.round() as i32 - half,
+                y.round() as i32 - half,
+                dot as usize,
+                dot as usize,
+                color,
+            );
         }
     }
 }

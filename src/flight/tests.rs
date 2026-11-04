@@ -3,9 +3,11 @@
 use super::*;
 use crate::render3d::{Rotation, Screen};
 
+use super::explosions::EXPLOSION_TIME;
 use super::memory::{
-    read_signed24, read_signed8, Z80_OBJ_CORIOLIS, Z80_OBJ_SLOT0, Z80_PLANET_CRD,
-    Z80_SHIELD_FRONT, Z80_SLOT_OADRDATA, Z80_SLOT_OENERG, Z80_SUN_CRD, Z80_TEMP_LASER,
+    read_signed24, read_signed8, Z80_OBJ_CORIOLIS, Z80_OBJ_SLOT0, Z80_OENERG_DESTROYED,
+    Z80_PLANET_CRD, Z80_SHIELD_FRONT, Z80_SLOT_OADRDATA, Z80_SLOT_OENERG, Z80_SUN_CRD,
+    Z80_TEMP_LASER,
 };
 use super::messages::{
     countdown_number, pretty_title, view_label, CapturedMsg, MSG_MAX_AGE, MSG_TOP_ROWS,
@@ -1097,4 +1099,169 @@ fn sync_game_msg_copies_tap_line() {
     tap.push_char(b'H', 3, 5);
     f.sync_game_msg(&tap);
     assert_eq!(f.messages.tap.as_ref().map(|m| m.text.as_str()), Some("H"));
+}
+
+/// Уничтожить объект так, как это делает `FireLaser` перед `DestroyObj`.
+fn mark_slot_destroyed(mem: &mut [u8], base: usize) {
+    mem[base + Z80_SLOT_OENERG] = Z80_OENERG_DESTROYED;
+}
+
+#[test]
+fn destroyed_object_spawns_particle_cloud() {
+    let mut f = open();
+    let mut mem = z80_mem_with_flight();
+    f.sync_from_z80(&mem);
+    assert!(
+        f.explosions.clouds.is_empty(),
+        "облако появилось без уничтожения"
+    );
+
+    mark_slot_destroyed(&mut mem, Z80_OBJ_SLOT0);
+    f.sync_from_z80(&mem);
+
+    assert_eq!(f.explosions.clouds.len(), 1, "уничтожение не поймано");
+    let cloud = &f.explosions.clouds[0];
+    assert_eq!(cloud.center, [1000.0, 0.0, 3000.0]);
+    assert!(
+        cloud.particles.len() >= 12,
+        "в облаке слишком мало частиц: {}",
+        cloud.particles.len()
+    );
+    // Уничтоженный слот не должен рисоваться как целый корабль, но станция
+    // и остальные объекты сцены остаются.
+    assert!(
+        !f.bodies.iter().any(|b| b.kind == BodyKind::Ship),
+        "уничтоженный слот нарисован целым кораблём"
+    );
+    assert!(f.bodies.iter().any(|b| b.kind == BodyKind::Station));
+}
+
+#[test]
+fn destroyed_marker_does_not_spawn_repeated_clouds() {
+    let mut f = open();
+    let mut mem = z80_mem_with_flight();
+    f.sync_from_z80(&mem);
+    mark_slot_destroyed(&mut mem, Z80_OBJ_SLOT0);
+    f.sync_from_z80(&mem);
+    assert_eq!(f.explosions.clouds.len(), 1);
+
+    // `oEnerg == 0xFF` живёт несколько тактов — облако не должно множиться.
+    f.sync_from_z80(&mem);
+    f.sync_from_z80(&mem);
+    assert_eq!(f.explosions.clouds.len(), 1, "облако создано повторно");
+
+    // Слот очистился — облако продолжает жить, но нового уже нет.
+    mem[Z80_OBJ_SLOT0 + Z80_SLOT_OENERG] = 0;
+    f.sync_from_z80(&mem);
+    assert_eq!(f.explosions.clouds.len(), 1);
+}
+
+#[test]
+fn clearing_slots_does_not_spawn_clouds() {
+    // `SetShipwreck2` обнуляет `oEnerg` всех слотов. Это не взрыв, и облака
+    // на месте пропавших объектов появляться не должны.
+    let mut f = open();
+    let mut mem = z80_mem_with_flight();
+    f.sync_from_z80(&mem);
+    mem[Z80_OBJ_CORIOLIS + Z80_SLOT_OENERG] = 0;
+    mem[Z80_OBJ_SLOT0 + Z80_SLOT_OENERG] = 0;
+    f.sync_from_z80(&mem);
+    assert!(
+        f.explosions.clouds.is_empty(),
+        "обнуление слотов принято за уничтожение"
+    );
+}
+
+#[test]
+fn particle_cloud_dissolves_in_two_seconds() {
+    let mut f = open();
+    let mut mem = z80_mem_with_flight();
+    f.sync_from_z80(&mem);
+    mark_slot_destroyed(&mut mem, Z80_OBJ_SLOT0);
+    f.sync_from_z80(&mem);
+
+    let spread = |f: &Flight| {
+        f.explosions.clouds[0]
+            .particles
+            .iter()
+            .map(|p| {
+                let o = p.offset;
+                (o[0] * o[0] + o[1] * o[1] + o[2] * o[2]).sqrt()
+            })
+            .fold(0.0f32, f32::max)
+    };
+    let start = spread(&f);
+
+    // К середине жизни облако ещё видно, частицы уже разлетелись.
+    for _ in 0..(EXPLOSION_TIME / 2.0 / 0.02) as usize {
+        f.tick(0.02);
+    }
+    assert_eq!(f.explosions.clouds.len(), 1, "облако исчезло раньше времени");
+    assert!(
+        spread(&f) > start,
+        "частицы не разлетаются: {start} -> {}",
+        spread(&f)
+    );
+
+    // Через две секунды от облака не остаётся ничего.
+    for _ in 0..(EXPLOSION_TIME / 2.0 / 0.02) as usize + 5 {
+        f.tick(0.02);
+    }
+    assert!(
+        f.explosions.clouds.is_empty(),
+        "облако не растворилось за {EXPLOSION_TIME} с"
+    );
+}
+
+#[test]
+fn particle_cloud_follows_game_tick() {
+    let mut f = open();
+    let mut mem = z80_mem_with_flight();
+    f.sync_from_z80(&mem);
+    mark_slot_destroyed(&mut mem, Z80_OBJ_SLOT0);
+    f.sync_from_z80(&mem);
+    let before = f.explosions.clouds[0].center;
+
+    // Игровой такт: меняется таблица звёзд, а вместе с ней и углы камеры.
+    mem[Z80_STARS_TABLE] = mem[Z80_STARS_TABLE].wrapping_add(1);
+    mem[Z80_HIGH_ANGLE_LR] = 0x40;
+    f.sync_from_z80(&mem);
+    let after = f.explosions.clouds[0].center;
+
+    assert_ne!(after, before, "облако не повернулось вместе с миром");
+    assert!(
+        after[2] < before[2] - 1.0,
+        "облако не сдвинулось к игроку: {} -> {}",
+        before[2],
+        after[2]
+    );
+}
+
+/// Тёплый пиксель взрыва: красный ярче зелёного, зелёный ярче синего.
+fn is_warm(p: u32) -> bool {
+    let (r, g, b) = ((p >> 16) & 0xFF, (p >> 8) & 0xFF, p & 0xFF);
+    r > g && g > b && r - b > 40
+}
+
+#[test]
+fn destroyed_object_draws_warm_particle_cloud() {
+    let mut f = open();
+    let mut mem = z80_mem_with_flight();
+    f.sync_from_z80(&mem);
+    let geom = cockpit::panel_geometry(640, 480);
+    let mut before = Frame::new(640, 480);
+    f.draw(&mut before, &geom, &[]);
+    assert!(
+        !before.pixels().iter().any(|&p| is_warm(p)),
+        "тёплые пиксели были ещё до взрыва"
+    );
+
+    mark_slot_destroyed(&mut mem, Z80_OBJ_SLOT0);
+    f.sync_from_z80(&mem);
+    let mut after = Frame::new(640, 480);
+    f.draw(&mut after, &geom, &[]);
+    assert!(
+        after.pixels().iter().any(|&p| is_warm(p)),
+        "облако частиц не нарисовано"
+    );
 }

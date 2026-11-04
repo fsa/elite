@@ -66,6 +66,9 @@ pub(super) const Z80_SLOT_SIZE: usize = 0x27;
 pub(super) const Z80_OBJ_MISSILE: usize = 0x6159;
 /// `oEnerg` в слоте: 0 — слот пуст.
 pub(super) const Z80_SLOT_OENERG: usize = 0x22;
+/// `oEnerg` уничтоженного объекта: `FireLaser` пишет `0xFF` перед
+/// `DestroyObj`, а на следующем игровом такте слот очищается до нуля.
+pub(super) const Z80_OENERG_DESTROYED: u8 = 0xFF;
 /// `oAdrData` в слоте: адрес блока модели.
 pub(super) const Z80_SLOT_OADRDATA: usize = 0x23;
 /// Координаты солнца (9 байт, знак-величина).

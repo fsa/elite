@@ -26,6 +26,7 @@
 //! - [`scene`] — объекты сцены из слотов Z80, солнце и планета;
 //! - [`stars`] — звёздное поле, его вращение и темп;
 //! - [`combat`] — лазеры, ответные лучи и вспышка попадания;
+//! - [`explosions`] — облака частиц после уничтожения объекта;
 //! - [`transition`] — вылет, гиперпрыжок и стыковка;
 //! - [`messages`] — перехваченные сообщения игры и надписи вида;
 //! - [`view`] — направления кабины, камера и отсечение отрезков;
@@ -37,6 +38,7 @@ use crate::machine::GameMsgTap;
 use crate::render3d::Rotation;
 
 use self::combat::Combat;
+use self::explosions::Explosions;
 use self::memory::{
     Z80_COBRA_MK4, Z80_HIGH_ANGLE_DU, Z80_HIGH_ANGLE_LR, Z80_HIGH_DELTA_SPEED, Z80_MEM_MIN,
     Z80_SPEED_GAUGE, Z80_STARS_FAST_SCROLL, Z80_STARS_LEN, Z80_STARS_TABLE,
@@ -50,6 +52,7 @@ use self::stars::{
 use self::transition::TransitionState;
 
 mod combat;
+mod explosions;
 mod memory;
 mod messages;
 mod palette;
@@ -99,6 +102,8 @@ pub struct Flight {
     transition: TransitionState,
     /// Боевые эффекты: лазеры и попадания.
     combat: Combat,
+    /// Облака частиц на месте уничтоженных объектов.
+    explosions: Explosions,
     /// Последнее сообщение, перехваченное из игры (см. [`GameMsgTap`]).
     messages: Messages,
 }
@@ -119,6 +124,7 @@ impl Flight {
             system_color: 0,
             transition: TransitionState::new(),
             combat: Combat::new(),
+            explosions: Explosions::new(),
             messages: Messages::new(),
         }
     }
@@ -136,6 +142,7 @@ impl Flight {
         self.bodies.clear();
         self.transition.reset();
         self.combat.reset();
+        self.explosions.reset();
         self.messages.reset();
         if planet_color != 0 {
             self.planet_color = planet_green(planet_color);
@@ -151,6 +158,7 @@ impl Flight {
     /// показывать — уход станции или тоннель.
     pub fn start_transition(&mut self, launch: bool, mem: &[u8]) {
         self.transition.start(launch, mem);
+        self.explosions.reset();
     }
 
     /// Идёт ли сейчас нативный переход (вылет, прыжок или стыковка).
@@ -216,6 +224,7 @@ impl Flight {
             // различает `start_transition` (для вылета признак передаёт App).
             if !self.transition.in_transition() {
                 self.transition.start(false, mem);
+                self.explosions.reset();
             }
             return;
         }
@@ -284,6 +293,11 @@ impl Flight {
             }
             self.stars.mark_boost(fast);
             self.z80_fast_scroll = false;
+            // Облака живут в той же системе координат, что и тела: на такте
+            // они поворачиваются вместе с миром и сдвигаются к игроку на шаг
+            // `CalcNewCrdObj_Pl`.
+            let delta_z = 2.0 * (self.speed.round() + 1.0);
+            self.explosions.tick_world(&turn, delta_z);
         }
 
         // Выстрел в оригинале виден только по нагреву лазера.
@@ -294,6 +308,9 @@ impl Flight {
         self.bodies = scene::build(mem, self.planet_color, self.system_color);
         self.combat
             .observe_shield(mem, &self.bodies, self.stars.rng_mut());
+        // Уничтожение ловится по `oEnerg == 0xFF`: так `FireLaser` помечает
+        // объект перед `DestroyObj`.
+        self.explosions.observe(mem);
     }
 
     /// Один шаг анимации: таймеры лучей и движение звёзд.
@@ -305,6 +322,7 @@ impl Flight {
         }
         let dt = dt.clamp(0.0, 0.1);
         self.combat.tick(dt);
+        self.explosions.tick(dt);
         self.transition.tick(dt);
         self.stars.advance(dt, self.speed);
     }
