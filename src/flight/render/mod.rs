@@ -105,10 +105,42 @@ pub(super) fn draw(f: &mut Flight, frame: &mut Frame, geom: &CockpitGeom, font: 
         }
         None => {
             scene::draw_flight_scene(f, frame, &screen, &view_rot, view_bottom, s);
-            draw_view_label(f, frame, font, vx, vy, vw, s, true);
+            if f.game_over {
+                draw_game_over(frame, font, vx, vy, vw, vh, s);
+            } else {
+                draw_view_label(f, frame, font, vx, vy, vw, s, true);
+            }
         }
     }
     frame.clear_clip();
+}
+
+/// Надпись «Game Over» по центру вида вместо подписи направления.
+///
+/// После гибели корабля оригинал ещё несколько секунд держит `WhatOnScreen`
+/// в виде из кабины; нативный рендер продолжает рисовать сцену, но верхнюю
+/// подпись («Front View» и т.п.) заменяет этой надписью.
+fn draw_game_over(
+    frame: &mut Frame,
+    font: &[u8],
+    vx: i32,
+    vy: i32,
+    vw: i32,
+    vh: i32,
+    s: i32,
+) {
+    let scale = s.max(1) as usize;
+    let y = vy + (vh - 8 * scale as i32) / 2;
+    text::draw_centered_text(
+        frame,
+        font,
+        vx,
+        y,
+        vw,
+        "Game Over",
+        VIEW_LABEL_COLOR,
+        scale,
+    );
 }
 
 /// Верхняя надпись вида: тем же шрифтом и в том же месте, что заголовок

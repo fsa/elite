@@ -124,6 +124,15 @@ impl App<'_> {
         if !self.flight.active {
             return;
         }
+        // Заставка — это уже не полёт. После гибели корабля оригинал уходит
+        // на `loc_739E`, где `WhatOnScreen` снова равен нулю, и без этой
+        // проверки нативный вид остался бы поверх заставки.
+        if self.machine.intro_seen {
+            self.flight.close();
+            self.pending_flight = None;
+            self.pending_launch = false;
+            return;
+        }
         self.flight.follow_z80_screen(&self.machine.mem);
     }
 

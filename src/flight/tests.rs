@@ -12,7 +12,9 @@ use super::memory::{
 use super::messages::{
     countdown_number, pretty_title, view_label, CapturedMsg, MSG_MAX_AGE, MSG_TOP_ROWS,
 };
-use super::palette::{planet_rim, sun_tint, CYAN, ENEMY_BEAM, STAR_RIM_COLOR};
+use super::palette::{
+    planet_rim, sun_tint, CYAN, ENEMY_BEAM, STAR_RIM_COLOR, VIEW_LABEL_COLOR,
+};
 use super::render::scene::{draw_star, draw_stars_view};
 use super::scene::{BodyKind, PLANET_RADIUS, SUN_RADIUS};
 use super::stars::{star_count_for, Star, SPEED_MAX, STAR_COUNT, STAR_COUNT_MAX, STAR_FIELD_RADIUS};
@@ -636,6 +638,97 @@ fn closing_returns_to_game_view() {
     assert!(f.active);
     f.close();
     assert!(!f.active);
+}
+
+/// Гибель корабля не закрывает нативный вид: оригинал ещё держит кабину,
+/// а рендер должен показать «Game Over» вместо подписи направления.
+#[test]
+fn game_over_keeps_native_view_and_sets_flag() {
+    let mut mem = vec![0u8; Z80_MEM_MIN];
+    mem[Z80_WHAT_ON_SCREEN] = 0;
+    mem[Z80_PLAYER_GAME_OVER] = 1;
+    assert!(
+        memory::z80_in_cockpit(&mem),
+        "погибший корабль должен оставаться на виде из кабины"
+    );
+
+    let mut f = open();
+    f.follow_z80_screen(&mem);
+    assert!(f.active, "нативный вид закрылся при гибели");
+    f.set_view_dir(ViewDir::Right);
+    f.sync_from_z80(&mem);
+    assert!(f.game_over, "гибель не распознана для надписи Game Over");
+    assert_eq!(
+        f.view_dir,
+        ViewDir::Forward,
+        "при гибели вид не переключился на Front View"
+    );
+
+    mem[Z80_PLAYER_GAME_OVER] = 0;
+    f.sync_from_z80(&mem);
+    assert!(!f.game_over, "флаг Game Over не сбросился");
+}
+
+/// Гибель обнуляет `HighDeltaSpeed` в памяти игры; это не должно включать
+/// J-драйв и ложное ускорение звёзд.
+#[test]
+fn game_over_does_not_trigger_star_boost() {
+    let mut f = open();
+    let mut mem = vec![0u8; Z80_MEM_MIN];
+    mem[Z80_SPEED_GAUGE] = 0xA0; // скорость 31
+    mem[Z80_PLAYER_GAME_OVER] = 1;
+    f.sync_from_z80(&mem);
+    mem[Z80_STARS_TABLE] = 1; // звёздный такт
+    f.sync_from_z80(&mem);
+    assert!(!f.stars.boost, "на гибели включился J-драйв");
+}
+
+/// При гибели верхняя подпись направления заменяется надписью «Game Over»
+/// по центру вида.
+#[test]
+fn game_over_replaces_view_label_with_centered_text() {
+    let mut f = open();
+    let mem = vec![0u8; Z80_MEM_MIN];
+    f.sync_from_z80(&mem);
+    let (w, h) = (640usize, 480usize);
+    let geom = cockpit::panel_geometry(w as u32, h as u32);
+    let font = vec![0xFFu8; 0x300];
+    let view = geom.view();
+
+    let count_label = |frame: &Frame, y0: i32, y1: i32| {
+        let mut n = 0;
+        for y in y0..y1 {
+            for x in view.x..view.x + view.w {
+                if frame.pixels()[y as usize * w + x as usize] == VIEW_LABEL_COLOR {
+                    n += 1;
+                }
+            }
+        }
+        n
+    };
+    let top_end = view.y + view.h / 3;
+    let center_start = view.y + view.h / 3;
+    let center_end = view.y + view.h * 2 / 3;
+
+    let mut frame = Frame::new(w, h);
+    f.draw(&mut frame, &geom, &font);
+    assert!(
+        count_label(&frame, view.y, top_end) > 0,
+        "подпись вида не нарисована до гибели"
+    );
+
+    f.game_over = true;
+    let mut frame = Frame::new(w, h);
+    f.draw(&mut frame, &geom, &font);
+    assert_eq!(
+        count_label(&frame, view.y, top_end),
+        0,
+        "подпись Front View осталась при Game Over"
+    );
+    assert!(
+        count_label(&frame, center_start, center_end) > 0,
+        "надпись Game Over не нарисована по центру"
+    );
 }
 
 #[test]

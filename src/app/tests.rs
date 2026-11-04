@@ -487,6 +487,32 @@ use crate::world::{current_planet_color, save_layout_kladov, scene_markers};
         assert!(!app.flight.active, "карта открылась под нативным видом");
     }
 
+    /// После гибели игра уходит на заставку (`loc_739E`), снова выставляя
+    /// `WhatOnScreen = 0`. До этого нативный вид должен оставаться на экране
+    /// с надписью «Game Over», а на заставке — закрыться.
+    #[test]
+    fn flight_closes_when_game_returns_to_title() {
+        let opts = test_options();
+        let mut app = App::new(boot(), &opts);
+        app.machine.mem[flight::Z80_IND_DANGER] = 1;
+        app.key_event(KeyCode::F1, true, false);
+        assert!(app.flight.active);
+
+        // Гибель: оригинал ещё держит вид из кабины (`WhatOnScreen = 0`).
+        app.machine.mem[flight::Z80_WHAT_ON_SCREEN] = 0;
+        app.machine.mem[flight::Z80_PLAYER_GAME_OVER] = 1;
+        app.follow_flight_screen();
+        assert!(app.flight.active, "вид закрылся во время Game Over");
+
+        // Оригинал на заставке: `WhatOnScreen = 0`, но это уже не кабина.
+        app.machine.intro_seen = true;
+        app.follow_flight_screen();
+        assert!(
+            !app.flight.active,
+            "нативный вид остался поверх заставки"
+        );
+    }
+
     /// `F1` на станции — родная команда вылета. Нативный вид включается уже
     /// во время перехода и проигрывает свою анимацию вылета.
     #[test]

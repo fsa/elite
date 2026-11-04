@@ -68,7 +68,8 @@ mod view;
 #[allow(unused_imports)]
 pub use self::memory::{
     z80_in_cockpit, z80_in_transition, z80_is_docked, Z80_FLG_JUMP_DOCKING, Z80_IND_DANGER,
-    Z80_JUMP_COUNTDOWN, Z80_JUMP_DOCKING, Z80_SCREEN_LOCAL_MAP, Z80_WHAT_ON_SCREEN,
+    Z80_JUMP_COUNTDOWN, Z80_JUMP_DOCKING, Z80_PLAYER_GAME_OVER, Z80_SCREEN_LOCAL_MAP,
+    Z80_WHAT_ON_SCREEN,
 };
 pub use self::transition::TransitionKind;
 pub use self::view::ViewDir;
@@ -93,6 +94,9 @@ pub struct Flight {
     speed: f32,
     /// У игрока Cobra Mk IV (`byte_D08E`) — фиолетовые клетки панели.
     cobra_mk4: bool,
+    /// Корабль игрока погиб (`PlayerGameOver`): на виде рисуется «Game Over»
+    /// вместо подписи направления.
+    game_over: bool,
     bodies: Vec<Body>,
     stars: StarField,
     planet_color: u32,
@@ -118,6 +122,7 @@ impl Flight {
             z80_fast_scroll: false,
             speed: 0.0,
             cobra_mk4: false,
+            game_over: false,
             bodies: Vec::new(),
             stars: StarField::new(STAR_COUNT),
             planet_color: PLANET_COLOR,
@@ -139,6 +144,7 @@ impl Flight {
         self.z80_fast_scroll = false;
         self.speed = 0.0;
         self.cobra_mk4 = false;
+        self.game_over = false;
         self.bodies.clear();
         self.transition.reset();
         self.combat.reset();
@@ -208,6 +214,9 @@ impl Flight {
     /// нативный вид оставался поверх ZX-кадра, и карта/инвентарь открывались
     /// «в фоне». Переходы вылета/прыжка/стыковки не закрывают вид: он сам
     /// рисует их анимацию, а Z80 в это время ведёт отсчёт и логику игры.
+    /// Гибель корабля (`PlayerGameOver`) тоже не закрывает вид — оригинал ещё
+    /// держит кабину, а нативный рендер показывает «Game Over»; на заставку
+    /// вид закрывает приложение (см. `App::follow_flight_screen`).
     pub fn follow_z80_screen(&mut self, mem: &[u8]) {
         if !self.active {
             return;
@@ -259,6 +268,12 @@ impl Flight {
         let gauge = mem[Z80_SPEED_GAUGE];
         self.speed = (gauge.saturating_sub(5) as f32 / 5.0).clamp(0.0, SPEED_MAX);
         self.cobra_mk4 = mem.get(Z80_COBRA_MK4).is_some_and(|&b| b != 0);
+        self.game_over = memory::z80_player_dead(mem);
+        if self.game_over {
+            // При взрыве корабля обломки разлетаются вперёд: вид обязательно
+            // переключаем на Front View, в каком бы направлении игрок ни был.
+            self.view_dir = ViewDir::Forward;
+        }
 
         // Отсчёт гиперпрыжка ведёт Z80; имя цели читается там же.
         self.transition.sync(mem);
@@ -279,9 +294,12 @@ impl Flight {
             // J-драйв `PrintStars` проматывает звёзды тремя проходами
             // `sub_78B1` (скорости `0x1E` и дважды `0x10`) и на этом такте
             // временно перезаписывает `HighDeltaSpeed`. Ловим и сам флаг, и
-            // этот след, если флаг не попал в кадр опроса.
-            let fast = self.z80_fast_scroll
-                || mem[Z80_HIGH_DELTA_SPEED] as i32 != self.speed.round() as i32;
+            // этот след, если флаг не попал в кадр опроса. При гибели игра
+            // сама обнуляет `HighDeltaSpeed`, это не J-драйв: иначе звёзды
+            // получают ложное ускорение.
+            let fast = !self.game_over
+                && (self.z80_fast_scroll
+                    || mem[Z80_HIGH_DELTA_SPEED] as i32 != self.speed.round() as i32);
             let roll = memory::read_signed8(mem[Z80_HIGH_ANGLE_LR]) * STAR_ANGLE_LR_PER_UNIT;
             let pitch = -memory::read_signed8(mem[Z80_HIGH_ANGLE_DU]) * STAR_ANGLE_DU_PER_UNIT;
             let turn = Rotation::axis_angle([0.0, 0.0, 1.0], roll)
