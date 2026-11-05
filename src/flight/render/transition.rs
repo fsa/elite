@@ -3,7 +3,7 @@
 use crate::display::Frame;
 use crate::render3d::{Rotation, Screen};
 
-use super::super::palette::{STATION_RING_COLOR, TRANSITION_TEXT, WARP_RING_COLOR};
+use super::super::palette::{BG, STATION_RING_COLOR, TRANSITION_TEXT, WARP_RING_COLOR};
 use super::super::stars::Star;
 use super::super::view;
 use super::super::Flight;
@@ -14,8 +14,8 @@ use super::text::draw_centered_text;
 ///
 /// Совпадает с проекцией планеты сразу после вылета: `PLANET_RADIUS` 42000
 /// при `z = 0x018000` и фокусе `1.15 * высота` даёт около половины высоты вида.
-/// К концу ролика выход трубы дорастает до этого размера, и планета переходит
-/// в обычный полёт без скачка.
+/// Планета нарисована сразу в этом размере, но кольцо-выход открывает её
+/// постепенно, поэтому при переходе к обычному полёту она не прыгает.
 const STATION_PLANET_RADIUS: f32 = 0.50;
 /// Во сколько раз выход трубы дальше камеры в начале ролика.
 ///
@@ -24,25 +24,25 @@ const STATION_PLANET_RADIUS: f32 = 0.50;
 const STATION_EXIT_DISTANCE_START: f32 = 7.0;
 /// За сколько секунд камера долетает до выхода трубы.
 ///
-/// К этому же моменту последнее кольцо улетает за экран: труба заканчивается,
-/// и остаётся только планета (при вылете) или чёрный фон (при стыковке).
+/// К этому моменту кольцо-выход улетает за экран, и остаётся только планета
+/// (при вылете) или чёрный фон (при стыковке).
 const STATION_EXIT_TIME: f32 = 9.0;
 /// За сколько секунд кольцо трубы пролетает путь до края вида.
 const STATION_RING_PERIOD: f32 = 2.0;
 /// Когда кольца перестают рождаться.
 ///
-/// Последнее кольцо успевает улететь как раз к [`STATION_EXIT_TIME`].
+/// Кольца успевают улететь за экран раньше, чем кольцо-выход пройдёт камеру.
 const STATION_RING_STOP: f32 = 7.0;
 /// Сколько белых колец рисуется в тоннеле станции.
 const STATION_RING_COUNT: usize = 6;
 
 /// Тоннель станции: камера летит к выходу трубы.
 ///
-/// В начале выход виден далеко впереди маленьким кружком, затем он
-/// приближается и растёт. Кольца-рёбра на стенке трубы рождаются у выхода
-/// и по одному улетают за экран, поэтому к концу ролика колец становится
-/// меньше, а затем они исчезают совсем. При вылете в выходе видна планета,
-/// при стыковке за выходом только чёрный фон.
+/// Планета нарисована сразу в обычном размере, но стенка трубы закрывает всё
+/// снаружи центрального кольца-выхода. Кольцо приближается и растёт, открывая
+/// планету всё больше, а в конце пролетает мимо камеры и уходит за экран.
+/// Кольца-рёбра на стенке трубы живут снаружи выходного кольца и по одному
+/// улетают за экран. При стыковке за кольцом остаётся только чёрный фон.
 #[allow(clippy::too_many_arguments)]
 pub(super) fn draw_station(
     frame: &mut Frame,
@@ -63,18 +63,56 @@ pub(super) fn draw_station(
     let min_dim = vw.min(vh) as f32;
     let max_r = ((vw * vw + vh * vh) as f32).sqrt() * 0.5;
     let planet_r = (min_dim * STATION_PLANET_RADIUS).max(4.0);
-    let exit_r = station_exit_radius(planet_r, elapsed);
+    let gate_r = station_gate_radius(planet_r, elapsed);
     let ring_ratio = station_ring_ratio(planet_r, max_r);
     if launch {
-        draw_planet(frame, cx as f32, cy as f32, exit_r, planet_color, s);
+        // Планета всегда обычного размера; видно только то, что попадает
+        // в центральное кольцо-выход.
+        draw_planet(frame, cx as f32, cy as f32, planet_r, planet_color, s);
+        if let Some(gate) = gate_r.filter(|&r| r < planet_r) {
+            mask_outside_aperture(frame, vx, vy, vw, vh, cx, cy, gate);
+        }
     }
     // Кольца живут снаружи выхода: при стыковке внутри него остаётся
     // только чёрный фон.
-    draw_station_rings(frame, cx, cy, max_r, exit_r, ring_ratio, elapsed, s);
+    let inner_r = gate_r.unwrap_or(max_r * 2.0);
+    draw_station_rings(frame, cx, cy, max_r, inner_r, ring_ratio, elapsed, s);
     // Белое кольцо-выход рисуется последним: в начале оно обводит выход,
     // а к концу труба заканчивается, и кольцо пролетает мимо камеры.
-    if let Some(r) = station_gate_radius(planet_r, elapsed).filter(|&r| r <= max_r) {
+    if let Some(r) = gate_r.filter(|&r| r <= max_r) {
         draw_thick_circle(frame, cx, cy, r, (s / 2).max(1), STATION_RING_COLOR);
+    }
+}
+
+/// Закрыть фоном всё, что не попадает в круг радиуса `r`.
+fn mask_outside_aperture(
+    frame: &mut Frame,
+    vx: i32,
+    vy: i32,
+    vw: i32,
+    vh: i32,
+    cx: i32,
+    cy: i32,
+    r: f32,
+) {
+    let r2 = r.max(0.0) * r.max(0.0);
+    let right = vx + vw;
+    for y in vy..vy + vh {
+        let dy = y as f32 - cy as f32;
+        let d2 = r2 - dy * dy;
+        if d2 <= 0.0 {
+            frame.fill_rect(vx, y, vw as usize, 1, BG);
+            continue;
+        }
+        let dx = d2.sqrt() as i32;
+        let left_end = cx - dx;
+        if left_end > vx {
+            frame.fill_rect(vx, y, (left_end - vx) as usize, 1, BG);
+        }
+        let right_start = cx + dx + 1;
+        if right_start < right {
+            frame.fill_rect(right_start, y, (right - right_start) as usize, 1, BG);
+        }
     }
 }
 
@@ -91,19 +129,6 @@ fn station_gate_radius(planet_r: f32, elapsed: f32) -> Option<f32> {
         return None;
     }
     Some((planet_r.max(4.0) / distance).max(1.0))
-}
-
-/// Радиус выхода трубы на момент `elapsed`.
-///
-/// Камера летит к выходу с постоянной скоростью, поэтому его угловой радиус
-/// растёт как `1 / distance`: в начале почти незаметно, а к концу труба
-/// раскрывается всё быстрее — анимация не «замедляется» на финише.
-fn station_exit_radius(planet_r: f32, elapsed: f32) -> f32 {
-    let end = planet_r.max(4.0);
-    let t = (elapsed / STATION_EXIT_TIME).clamp(0.0, 1.0);
-    let distance = STATION_EXIT_DISTANCE_START
-        + (1.0 - STATION_EXIT_DISTANCE_START) * t;
-    (end / distance).max(1.0)
 }
 
 /// Тоннель гиперпрыжка/стыковки: полосы звёзд и расходящиеся кольца.
@@ -314,7 +339,7 @@ fn ring_is_alive(t: f32, elapsed: f32) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::flight::palette::{BG, planet_rim};
+    use crate::flight::palette::planet_rim;
 
     const PLANET: u32 = 0xFF00_2000;
 
@@ -329,46 +354,35 @@ mod tests {
     }
 
     #[test]
-    fn launch_starts_with_distant_exit() {
+    fn planet_is_hidden_outside_the_exit_ring() {
         let (w, h) = (200usize, 200usize);
         let planet_r = w as f32 * STATION_PLANET_RADIUS;
-        let exit = station_exit_radius(planet_r, 0.0);
-        // В начале выход далеко: планета видна маленьким кружком.
+        let gate = station_gate_radius(planet_r, 0.0).unwrap();
+        // В начале кольцо-выход далеко и маленькое.
         assert!(
-            exit < planet_r * 0.2,
-            "выход слишком близко в начале: {exit}"
+            gate < planet_r * 0.2,
+            "кольцо-выход слишком большое в начале: {gate}"
         );
 
         let mut frame = frame_with_background(w, h);
         draw_station(&mut frame, 0, 0, w as i32, h as i32, 1, 0.0, true, PLANET);
         assert_eq!(pixel(&frame, 100, 100), PLANET, "центр не залит планетой");
-        // За пределами маленькой планеты её ещё нет: выход только приближается.
-        assert_ne!(
-            pixel(&frame, 100, 100 - planet_r as i32 + 1),
-            planet_rim(PLANET),
-            "планета уже нарисована в полный размер"
-        );
-    }
-
-    #[test]
-    fn exit_approaches_the_planet_by_the_end() {
-        let planet_r = 100.0;
-        let start = station_exit_radius(planet_r, 0.0);
-        assert!(
-            (start - planet_r / STATION_EXIT_DISTANCE_START).abs() < 0.01,
-            "неверный начальный выход: {start}"
-        );
-        let end = station_exit_radius(planet_r, STATION_EXIT_TIME);
-        assert!(
-            (end - planet_r).abs() < 0.01,
-            "к концу выход не дорос до планеты: {end}"
-        );
-        // Приближение ускоряется к концу: последняя часть пути видна сильнее.
-        let mid = station_exit_radius(planet_r, STATION_EXIT_TIME * 0.5);
-        assert!(
-            mid < (start + end) * 0.5,
-            "выход растёт равномерно, нет ускорения: {mid}"
-        );
+        // Планета уже обычного размера, но за кольцом её не видно.
+        let rim = planet_rim(PLANET);
+        for y in 0..h as i32 {
+            for x in 0..w as i32 {
+                let dx = (x - 100) as f32;
+                let dy = (y - 100) as f32;
+                let d = (dx * dx + dy * dy).sqrt();
+                if d > gate + 1.0 && d < planet_r - 1.0 {
+                    let p = pixel(&frame, x, y);
+                    assert!(
+                        p != PLANET && p != rim,
+                        "планета видна за кольцом-выходом ({x},{y}): {p:#x}"
+                    );
+                }
+            }
+        }
     }
 
     #[test]
@@ -377,7 +391,7 @@ mod tests {
         let planet_r = w as f32 * STATION_PLANET_RADIUS;
         let start = station_gate_radius(planet_r, 0.0).unwrap();
         assert!(
-            (start - station_exit_radius(planet_r, 0.0)).abs() < 0.01,
+            (start - planet_r / STATION_EXIT_DISTANCE_START).abs() < 0.01,
             "кольцо-выход не совпадает с выходом: {start}"
         );
 
@@ -456,7 +470,7 @@ mod tests {
     #[test]
     fn rings_spread_out_toward_the_edge() {
         let planet_r = 400.0 * STATION_PLANET_RADIUS;
-        let inner = station_exit_radius(planet_r, 0.0);
+        let inner = station_gate_radius(planet_r, 0.0).unwrap();
         let max_r = ((400.0f32 * 400.0 + 400.0 * 400.0).sqrt()) * 0.5;
         let ratio = station_ring_ratio(planet_r, max_r);
         let radii = station_ring_radii(inner, max_r, ratio, 0.0);
@@ -482,14 +496,14 @@ mod tests {
         let max_r = ((w * w + h * h) as f32).sqrt() * 0.5;
         let ratio = station_ring_ratio(planet_r, max_r);
         // К концу ролика последнее кольцо уже уходит за экран.
-        let mid = STATION_RING_STOP + 0.5;
-        let inner = station_exit_radius(planet_r, mid);
+        let mid = STATION_RING_STOP;
+        let inner = station_gate_radius(planet_r, mid).unwrap();
         assert!(
             !station_ring_radii(inner, max_r, ratio, mid).is_empty(),
             "кольца исчезли слишком рано"
         );
         let end = STATION_RING_STOP + STATION_RING_PERIOD;
-        let inner = station_exit_radius(planet_r, end);
+        let inner = station_gate_radius(planet_r, end).unwrap_or(max_r * 2.0);
         assert!(
             station_ring_radii(inner, max_r, ratio, end).is_empty(),
             "кольца не успевают улететь к концу ролика"
