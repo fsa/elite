@@ -83,6 +83,10 @@ pub fn machine(opts: &Options) -> Spectrum {
     // Нативный сейв/лоад командира
     native::install_save(&mut machine, world::save_layout_kladov());
 
+    // Отладочный перехват готового текста: строки, напечатанные игрой, пишутся
+    // в debug.log рядом с исполняемым файлом. На рендер не влияет.
+    native::install_text_capture(&mut machine);
+
     install_debug_env(&mut machine);
     machine
 }

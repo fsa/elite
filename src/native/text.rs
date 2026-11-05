@@ -19,13 +19,29 @@ pub(crate) fn font_base_cycles(a: u8) -> u64 {
 }
 
 /// Нативная замена `sub_5DFB` для механизма хуков.
-pub(crate) fn font_base_hook(cpu: &mut Z80, _m: &mut Spectrum) -> u64 {
+///
+/// Заодно перехватывает готовый текст: `A` здесь — окончательный код символа
+/// (после регистра и раскрытия токенов), а `CrdXPrnSymbol` — точная ячейка
+/// глифа (курсор уже сдвинут). Строки уходят в `debug.log`; на рендер это
+/// не влияет.
+pub(crate) fn font_base_hook(cpu: &mut Z80, m: &mut Spectrum) -> u64 {
     #[cfg(test)]
     FONT_BASE_CALLS.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
-    let hl = font_base(cpu.a);
+    let a = cpu.a;
+    let col = m
+        .mem
+        .get(KLADOV_CRD_X_PRN_SYMBOL)
+        .copied()
+        .unwrap_or(0);
+    let row = m
+        .mem
+        .get(KLADOV_CRD_X_PRN_SYMBOL + 1)
+        .copied()
+        .unwrap_or(0);
+    m.game_msg.capture_text_char(a, row, col);
+    let hl = font_base(a);
     cpu.h = (hl >> 8) as u8;
     cpu.l = (hl & 0xFF) as u8;
-    let a = cpu.a;
     bump_r(cpu, font_base_steps(a));
     font_base_cycles(a)
 }

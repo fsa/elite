@@ -134,3 +134,98 @@ fn tap_keeps_last_line_of_each_row() {
         Some("FRONT")
     );
 }
+
+/// Завершить кадр перехвата (в тестах файл не создаётся — только события).
+fn finish_text_capture(t: &mut GameMsgTap) {
+    t.end_text_frame();
+}
+
+#[test]
+fn text_capture_builds_lines_for_debug_log() {
+    let mut t = GameMsgTap::default();
+    t.enable_text_capture_for_test();
+    for (i, c) in b"Hyperspace -- Lave".iter().enumerate() {
+        t.capture_text_char(*c, 13, 5 + i as u8);
+    }
+    finish_text_capture(&mut t);
+
+    assert_eq!(
+        t.text_events(),
+        &[TextEvent {
+            text: "Hyperspace -- Lave".to_string(),
+            row: 13,
+            col: 5,
+        }]
+    );
+}
+
+#[test]
+fn text_capture_maps_quirks_and_skips_icons() {
+    let mut t = GameMsgTap::default();
+    t.enable_text_capture_for_test();
+    t.capture_text_char(0x21, 13, 5); // служебный значок
+    t.capture_text_char(b'A', 13, 6);
+    t.capture_text_char(0x2A, 13, 7); // на экране `!`
+    t.capture_text_char(0x40, 13, 8); // на экране `_`
+    t.capture_text_char(0x26, 13, 9); // ещё значок
+    t.capture_text_char(b'B', 13, 10);
+    finish_text_capture(&mut t);
+
+    assert_eq!(
+        t.text_events(),
+        &[TextEvent {
+            text: "A!_B".to_string(),
+            row: 13,
+            col: 5,
+        }]
+    );
+}
+
+#[test]
+fn text_capture_starts_new_line_on_gap() {
+    let mut t = GameMsgTap::default();
+    t.enable_text_capture_for_test();
+    t.capture_text_char(b'A', 13, 5);
+    t.capture_text_char(b'B', 13, 7); // разрыв позиции
+    t.capture_text_char(b'C', 1, 2); // другая строка
+    finish_text_capture(&mut t);
+
+    assert_eq!(
+        t.text_events(),
+        &[
+            TextEvent {
+                text: "A".to_string(),
+                row: 13,
+                col: 5,
+            },
+            TextEvent {
+                text: "B".to_string(),
+                row: 13,
+                col: 7,
+            },
+            TextEvent {
+                text: "C".to_string(),
+                row: 1,
+                col: 2,
+            },
+        ]
+    );
+}
+
+#[test]
+fn text_capture_ignores_control_codes() {
+    let mut t = GameMsgTap::default();
+    t.enable_text_capture_for_test();
+    t.capture_text_char(0x0D, 13, 5); // управляющий код
+    t.capture_text_char(0x7F, 13, 5); // игра не печатает
+    finish_text_capture(&mut t);
+    assert!(t.text_events().is_empty());
+}
+
+#[test]
+fn text_capture_is_off_until_started() {
+    let mut t = GameMsgTap::default();
+    t.capture_text_char(b'A', 1, 1);
+    finish_text_capture(&mut t);
+    assert!(t.text_events().is_empty());
+}
