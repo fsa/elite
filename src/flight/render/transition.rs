@@ -71,6 +71,26 @@ pub(super) fn draw_station(
     // Кольца живут снаружи выхода: при стыковке внутри него остаётся
     // только чёрный фон.
     draw_station_rings(frame, cx, cy, max_r, exit_r, ring_ratio, elapsed, s);
+    // Белое кольцо-выход рисуется последним: в начале оно обводит выход,
+    // а к концу труба заканчивается, и кольцо пролетает мимо камеры.
+    if let Some(r) = station_gate_radius(planet_r, elapsed).filter(|&r| r <= max_r) {
+        draw_thick_circle(frame, cx, cy, r, (s / 2).max(1), STATION_RING_COLOR);
+    }
+}
+
+/// Радиус белого кольца-выхода на момент `elapsed`.
+///
+/// Кольцо висит в конце трубы и в начале совпадает с выходом. Камера летит
+/// сквозь него, поэтому расстояние до кольца падает до нуля, а радиус растёт
+/// как `1 / distance`: в конце кольцо проносится мимо и уходит за экран.
+/// `None` — кольцо уже за камерой.
+fn station_gate_radius(planet_r: f32, elapsed: f32) -> Option<f32> {
+    let t = (elapsed / STATION_EXIT_TIME).clamp(0.0, 1.0);
+    let distance = STATION_EXIT_DISTANCE_START * (1.0 - t);
+    if distance <= f32::EPSILON {
+        return None;
+    }
+    Some((planet_r.max(4.0) / distance).max(1.0))
 }
 
 /// Радиус выхода трубы на момент `elapsed`.
@@ -348,6 +368,45 @@ mod tests {
         assert!(
             mid < (start + end) * 0.5,
             "выход растёт равномерно, нет ускорения: {mid}"
+        );
+    }
+
+    #[test]
+    fn white_exit_ring_starts_at_the_exit() {
+        let (w, h) = (200usize, 200usize);
+        let planet_r = w as f32 * STATION_PLANET_RADIUS;
+        let start = station_gate_radius(planet_r, 0.0).unwrap();
+        assert!(
+            (start - station_exit_radius(planet_r, 0.0)).abs() < 0.01,
+            "кольцо-выход не совпадает с выходом: {start}"
+        );
+
+        let mut frame = frame_with_background(w, h);
+        draw_station(&mut frame, 0, 0, w as i32, h as i32, 1, 0.0, true, PLANET);
+        let r = start.round() as i32;
+        assert_eq!(
+            pixel(&frame, 100, 100 - r),
+            STATION_RING_COLOR,
+            "в начале нет белого кольца-выхода"
+        );
+    }
+
+    #[test]
+    fn white_exit_ring_flies_past_by_the_end() {
+        let planet_r = 100.0;
+        let max_r = 200.0;
+        let late = station_gate_radius(planet_r, STATION_EXIT_TIME * 0.95).unwrap();
+        assert!(
+            late > planet_r,
+            "кольцо-выход не обогнало планету: {late}"
+        );
+        assert!(
+            late > max_r,
+            "кольцо-выход не улетело за экран к концу: {late}"
+        );
+        assert!(
+            station_gate_radius(planet_r, STATION_EXIT_TIME).is_none(),
+            "кольцо-выход осталось перед камерой в конце"
         );
     }
 
