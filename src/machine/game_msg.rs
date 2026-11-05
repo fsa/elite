@@ -5,6 +5,10 @@ use std::fs::{File, OpenOptions};
 use std::io::Write;
 use std::path::PathBuf;
 
+/// Текстовая строка ZX, в которой игра печатает нижние сообщения.
+/// Остальные надписи (вид, отсчёт, индикаторы) нативный рендер показывает сам.
+pub const BOTTOM_MESSAGE_ROW: u8 = 0x0D;
+
 /// Одна готовая строка, которую игра вывела на экран.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct TextEvent {
@@ -17,7 +21,8 @@ pub struct TextEvent {
 }
 
 /// Сборка готовых строк из символов, которые игра напечатала через
-/// `sub_5DFB`. Пишет строки в `debug.log` и ничего никому не передаёт.
+/// `sub_5DFB`. Берёт только нижнее сообщение (`BOTTOM_MESSAGE_ROW`), пишет
+/// строки в `debug.log` и ничего никому не передаёт.
 #[derive(Clone, Debug, Default)]
 struct TextCapture {
     /// Включён ли перехват. Включается один раз при старте приложения.
@@ -53,9 +58,13 @@ impl TextCapture {
     }
 
     /// Добавить символ, напечатанный на ZX-экране. `row`/`col` — точная
-    /// ячейка глифа (`CrdXPrnSymbol` после продвижения курсора).
+    /// ячейка глифа (`CrdXPrnSymbol` после продвижения курсора). Символы вне
+    /// нижней строки сообщений игнорируются.
     fn push(&mut self, c: u8, row: u8, col: u8) {
-        if !self.enabled || !(0x20..=0x7E).contains(&c) {
+        if !self.enabled
+            || row != BOTTOM_MESSAGE_ROW
+            || !(0x20..=0x7E).contains(&c)
+        {
             return;
         }
         let continuing = self.row == row
@@ -186,7 +195,8 @@ impl GameMsgTap {
     }
 
     /// Добавить готовый символ, который игра вывела на экран (`sub_5DFB`).
-    /// `row`/`col` — точная ячейка глифа после сдвига курсора.
+    /// `row`/`col` — точная ячейка глифа после сдвига курсора. Для журнала
+    /// берутся только символы нижней строки сообщений (`BOTTOM_MESSAGE_ROW`).
     pub fn capture_text_char(&mut self, c: u8, row: u8, col: u8) {
         self.text_log.push(c, row, col);
     }

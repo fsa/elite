@@ -185,9 +185,9 @@ fn text_capture_maps_quirks_and_skips_icons() {
 fn text_capture_starts_new_line_on_gap() {
     let mut t = GameMsgTap::default();
     t.enable_text_capture_for_test();
-    t.capture_text_char(b'A', 13, 5);
-    t.capture_text_char(b'B', 13, 7); // разрыв позиции
-    t.capture_text_char(b'C', 1, 2); // другая строка
+    t.capture_text_char(b'A', BOTTOM_MESSAGE_ROW, 5);
+    t.capture_text_char(b'B', BOTTOM_MESSAGE_ROW, 7); // разрыв позиции
+    t.capture_text_char(b'C', BOTTOM_MESSAGE_ROW, 9); // ещё разрыв
     finish_text_capture(&mut t);
 
     assert_eq!(
@@ -195,21 +195,32 @@ fn text_capture_starts_new_line_on_gap() {
         &[
             TextEvent {
                 text: "A".to_string(),
-                row: 13,
+                row: BOTTOM_MESSAGE_ROW,
                 col: 5,
             },
             TextEvent {
                 text: "B".to_string(),
-                row: 13,
+                row: BOTTOM_MESSAGE_ROW,
                 col: 7,
             },
             TextEvent {
                 text: "C".to_string(),
-                row: 1,
-                col: 2,
+                row: BOTTOM_MESSAGE_ROW,
+                col: 9,
             },
         ]
     );
+}
+
+#[test]
+fn text_capture_ignores_all_rows_except_bottom_message() {
+    let mut t = GameMsgTap::default();
+    t.enable_text_capture_for_test();
+    for row in [1, 2, 10, 12, 14, 23] {
+        t.capture_text_char(b'X', row, 4);
+    }
+    finish_text_capture(&mut t);
+    assert!(t.text_events().is_empty());
 }
 
 #[test]
