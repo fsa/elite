@@ -1,39 +1,35 @@
-//! Надписи вида: перехваченные сообщения игры, подписи направления и отсчёт.
+//! Нижние сообщения игры: перехваченный текст строки 13.
 //!
-//! Текст сообщений печатает сама игра через `sub_D499`; нативный вид только
-//! сохраняет напечатанные строки и показывает их тем же шрифтом, что заголовок
-//! заставки. Когда свежего сообщения нет, на его месте держится подпись
-//! направления вида.
+//! Игра печатает сообщения через `sub_D499` и перепечатывает их каждый такт,
+//! пока надпись должна быть на экране. Перехватчик отдаёт готовые строки;
+//! здесь хранится только нижнее сообщение, а рендер рисует его по центру.
+//! Позиция из ZX-строки (`row`/`col`) не используется.
 
-use crate::machine::GameMsgTap;
+use crate::machine::{GameMsgTap, BOTTOM_MESSAGE_ROW};
 
 use super::view::ViewDir;
 
-/// Сколько кадров (50 Гц) держать перехваченное сообщение игры после
-/// последнего напечатанного символа: старые строки не должны висеть вечно.
-pub(super) const MSG_MAX_AGE: u32 = 75;
-/// Текстовые строки ZX `0..=2` — верхняя зона вида, куда игра печатает
-/// подписи; здесь нативный экран показывает верхнюю надпись.
-pub(super) const MSG_TOP_ROWS: u8 = 2;
+/// Сколько кадров (50 Гц) держать сообщение после последнего повтора.
+///
+/// Игра перепечатывает нижнюю строку примерно раз в 8 кадров, поэтому
+/// 16 кадров хватает, чтобы надпись не мигала между тактами, и при этом она
+/// исчезает вскоре после того, как игра перестала её печатать.
+pub(super) const BOTTOM_MSG_TTL: u32 = 16;
 
-/// Снимок перехваченного игрового сообщения для показа на виде.
+/// Нижнее сообщение, перехваченное из строки 13.
 #[derive(Clone, Debug, Default)]
-pub(super) struct CapturedMsg {
-    /// Текст строки ровно как напечатал Z80.
+pub(super) struct BottomMsg {
+    /// Текст ровно как напечатала игра.
     pub(super) text: String,
-    /// Текстовая строка ZX (0..=23), куда она печаталась.
-    pub(super) row: u8,
-    /// Возраст в кадрах после последнего символа.
-    pub(super) frames: u32,
+    /// Кадров с последнего повтора.
+    pub(super) age: u32,
 }
 
-/// Перехваченные сообщения игры.
+/// Перехваченные сообщения игры, которые показывает нативный вид.
 #[derive(Default)]
 pub(super) struct Messages {
-    /// Последняя напечатанная строка (для верхней надписи вида).
-    pub(super) tap: Option<CapturedMsg>,
-    /// Строка гиперпрыжка, выбранная из истории печати по строкам ZX.
-    pub(super) jump: Option<CapturedMsg>,
+    /// Текущее нижнее сообщение.
+    pub(super) bottom: Option<BottomMsg>,
 }
 
 impl Messages {
@@ -42,82 +38,41 @@ impl Messages {
     }
 
     pub(super) fn reset(&mut self) {
-        self.tap = None;
-        self.jump = None;
+        self.bottom = None;
     }
 
-    /// Забрать перехваченное игровое сообщение (заполняет хук печати
-    /// `sub_D499`; см. [`crate::machine::GameMsgTap`]).
-    ///
-    /// Игра печатает строку гиперпрыжка в отдельную ZX-строку (13), а следом
-    /// за ней — индикаторы и подписи в другие строки. Поэтому общая «последняя
-    /// строка» `tap.text` уже не содержит `HYPERSPACE`; саму строку прыжка
-    /// берём из истории по ZX-строкам.
-    pub(super) fn sync(&mut self, tap: &GameMsgTap) {
-        if !tap.enabled {
-            return;
-        }
-        if !tap.text.trim().is_empty() {
-            self.tap = Some(CapturedMsg {
-                text: tap.text.clone(),
-                row: tap.row,
-                frames: tap.frames,
-            });
-        }
-        self.jump = tap
-            .lines
-            .iter()
-            .filter(|l| l.row > MSG_TOP_ROWS && l.text.contains("HYPERSPACE"))
-            .min_by_key(|l| l.frames)
-            .map(|l| CapturedMsg {
-                text: l.text.clone(),
-                row: l.row,
-                frames: l.frames,
-            });
-    }
-
-    /// Текст верхней надписи: свежее сообщение игры из верхней зоны вида,
-    /// причёсанное с большой буквы; иначе — подпись направления вида.
-    pub(super) fn top_label(&self, view_dir: ViewDir) -> String {
-        self.tap
-            .as_ref()
-            .and_then(|m| {
-                (m.frames <= MSG_MAX_AGE && m.row <= MSG_TOP_ROWS && !m.text.trim().is_empty())
-                    .then(|| pretty_title(m.text.trim()))
-            })
-            .unwrap_or_else(|| view_label(view_dir).to_string())
-    }
-
-    /// Свежая строка гиперпрыжка, напечатанная игрой.
-    ///
-    /// Во время отсчёта гиперпрыжка оригинал печатает `HYPERSPACE -- <планета>`
-    /// в отдельную ZX-строку (токен `msgNumber` из `GoJump`). Нативный вид
-    /// показывает именно перехваченный текст, а не собирает строку сам.
-    pub(super) fn jump_label(&self) -> Option<&str> {
-        let m = self.jump.as_ref()?;
-        if m.frames > MSG_MAX_AGE || m.row <= MSG_TOP_ROWS || !m.text.contains("HYPERSPACE") {
-            return None;
-        }
-        Some(m.text.trim())
-    }
-}
-
-/// «Причесать» сообщение игры: слова с большой буквы, остальные символы
-/// строчные — как заголовок «Elite» на заставке. «FRONT VIEW» → «Front View»,
-/// «DOCKING COMPUTERS  ON» → «Docking Computers On».
-pub(super) fn pretty_title(s: &str) -> String {
-    s.split_whitespace()
-        .map(|w| {
-            let mut chars = w.chars();
-            match chars.next() {
-                Some(first) => {
-                    first.to_uppercase().collect::<String>() + &chars.as_str().to_lowercase()
-                }
-                None => String::new(),
+    /// Забрать новые строки, напечатанные игрой. Для показа берётся только
+    /// нижняя строка (`row == 0x0D`); повтор того же текста продлевает показ.
+    pub(super) fn sync(&mut self, tap: &mut GameMsgTap) {
+        for event in tap.take_text_events() {
+            if event.row != BOTTOM_MESSAGE_ROW {
+                continue;
             }
-        })
-        .collect::<Vec<_>>()
-        .join(" ")
+            let text = event.text.trim();
+            if text.is_empty() {
+                continue;
+            }
+            self.bottom = Some(BottomMsg {
+                text: text.to_string(),
+                age: 0,
+            });
+        }
+    }
+
+    /// Постареть сообщение на `frames` кадров и убрать истёкшее.
+    pub(super) fn advance(&mut self, frames: u32) {
+        if let Some(msg) = &mut self.bottom {
+            msg.age = msg.age.saturating_add(frames);
+        }
+        if self.bottom.as_ref().is_some_and(|m| m.age > BOTTOM_MSG_TTL) {
+            self.bottom = None;
+        }
+    }
+
+    /// Текст нижнего сообщения для показа по центру вида.
+    pub(super) fn bottom_label(&self) -> Option<&str> {
+        self.bottom.as_ref().map(|m| m.text.as_str())
+    }
 }
 
 /// Подпись направления вида: те же слова, что в оригинале (`FRONT`, `REAR`,

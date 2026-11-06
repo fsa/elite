@@ -48,7 +48,10 @@ impl App<'_> {
             self.follow_flight_screen();
         }
         self.flight.sync_from_z80(&self.machine.mem);
-        self.flight.sync_game_msg(&self.machine.game_msg);
+        // Сначала старим прошлое сообщение, затем забираем новые строки:
+        // повтор текста в этом кадре сбрасывает возраст и продлевает показ.
+        self.flight.advance_messages(frames);
+        self.flight.sync_game_msg(&mut self.machine.game_msg);
         for _ in 0..frames {
             self.machine.game_msg.next_frame();
         }

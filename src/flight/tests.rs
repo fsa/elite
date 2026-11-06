@@ -9,9 +9,7 @@ use super::memory::{
     Z80_PLANET_CRD, Z80_SHIELD_FRONT, Z80_SLOT_OADRDATA, Z80_SLOT_OENERG, Z80_SUN_CRD,
     Z80_TEMP_LASER,
 };
-use super::messages::{
-    countdown_number, pretty_title, view_label, CapturedMsg, MSG_MAX_AGE, MSG_TOP_ROWS,
-};
+use super::messages::{countdown_number, view_label, BOTTOM_MSG_TTL};
 use super::palette::{
     planet_rim, sun_tint, CYAN, ENEMY_BEAM, STAR_RIM_COLOR, VIEW_LABEL_COLOR,
 };
@@ -1106,132 +1104,113 @@ fn hyperspace_countdown_keeps_normal_flight_until_zero() {
     assert!(f.transition.current.expect("переход пропал").warp);
 }
 
-#[test]
-fn hyperspace_label_comes_from_game_message() {
-    // Строку «HYPERSPACE -- <планета>» печатает сама игра; нативный вид
-    // показывает перехваченный текст, а не собирает его из `PlanetName`.
-    let mut f = open();
-    f.messages.jump = Some(CapturedMsg {
-        text: "HYPERSPACE -- LAVE".into(),
-        row: MSG_TOP_ROWS + 1,
-        frames: 0,
-    });
-    assert_eq!(f.messages.jump_label(), Some("HYPERSPACE -- LAVE"));
-
-    // Строка из верхней зоны вида — это подпись направления, а не сообщение
-    // гиперпрыжка.
-    f.messages.jump = Some(CapturedMsg {
-        text: "FRONT VIEW".into(),
-        row: 1,
-        frames: 0,
-    });
-    assert_eq!(f.messages.jump_label(), None);
-
-    // Другие сообщения в нижней зоне к прыжку не относятся.
-    f.messages.jump = Some(CapturedMsg {
-        text: "MISSILE JAMMED".into(),
-        row: MSG_TOP_ROWS + 1,
-        frames: 0,
-    });
-    assert_eq!(f.messages.jump_label(), None);
-
-    // Устаревшее сообщение тоже не показываем.
-    f.messages.jump = Some(CapturedMsg {
-        text: "HYPERSPACE -- LAVE".into(),
-        row: MSG_TOP_ROWS + 1,
-        frames: MSG_MAX_AGE + 1,
-    });
-    assert_eq!(f.messages.jump_label(), None);
-}
-
-#[test]
-fn jump_line_survives_later_prints_in_other_rows() {
-    // После строки гиперпрыжка игра печатает подпись вида и индикаторы.
-    // Общая «последняя строка» перестаёт быть сообщением, но история по
-    // ZX-строкам сохраняет строку прыжка.
-    let mut f = open();
+/// Собрать строку в перехватчике так, как это делает хук печати.
+fn tap_with_text(text: &str, row: u8, col: u8) -> GameMsgTap {
     let mut tap = GameMsgTap::default();
-    tap.enabled = true;
-    for (i, c) in b"HYPERSPACE -- LAVE".iter().enumerate() {
-        tap.push_char(*c, 13, 5 + i as u8);
+    tap.enable_text_capture_for_test();
+    for (i, c) in text.bytes().enumerate() {
+        tap.capture_text_char(c, row, col + i as u8);
     }
-    // Следом — подпись вида в верхней строке и индикатор в другой строке.
-    for (i, c) in b"FRONT VIEW".iter().enumerate() {
-        tap.push_char(*c, 1, i as u8);
-    }
-    for (i, c) in b"FUEL".iter().enumerate() {
-        tap.push_char(*c, 20, i as u8);
-    }
-    f.sync_game_msg(&tap);
-    assert_eq!(f.messages.top_label(f.view_dir), "Front View");
-    assert_eq!(f.messages.jump_label(), Some("HYPERSPACE -- LAVE"));
+    tap.end_text_frame();
+    tap
 }
 
 #[test]
-fn pretty_title_capitalizes_words() {
-    assert_eq!(pretty_title("FRONT VIEW"), "Front View");
-    assert_eq!(pretty_title("REAR VIEW"), "Rear View");
-    assert_eq!(pretty_title("LEFT VIEW"), "Left View");
-    assert_eq!(pretty_title("RIGHT VIEW"), "Right View");
-    assert_eq!(
-        pretty_title("  DOCKING  COMPUTERS  ON "),
-        "Docking Computers On"
+fn bottom_message_comes_from_row_13() {
+    let mut f = open();
+    let mut tap = tap_with_text("HYPERSPACE -- LAVE", 13, 5);
+    f.sync_game_msg(&mut tap);
+    assert_eq!(f.messages.bottom_label(), Some("HYPERSPACE -- LAVE"));
+}
+
+#[test]
+fn bottom_message_is_drawn_centered_at_bottom() {
+    let mut f = open();
+    let mem = vec![0u8; Z80_MEM_MIN];
+    f.sync_from_z80(&mem);
+    let (w, h) = (640usize, 480usize);
+    let geom = cockpit::panel_geometry(w as u32, h as u32);
+    let font = vec![0xFFu8; 0x300];
+    let view = geom.view();
+
+    let mut tap = tap_with_text("HYPERSPACE -- LAVE", 13, 5);
+    f.sync_game_msg(&mut tap);
+    let mut frame = Frame::new(w, h);
+    f.draw(&mut frame, &geom, &font);
+
+    // Полоса, где рисуется нижнее сообщение: одна строка над нижней рамкой.
+    let scale = ((w / 256).min(view.h as usize / 128)).max(1) as i32;
+    let y0 = view.y + view.h - 16 * scale;
+    let y1 = view.y + view.h;
+    let (mut min_x, mut max_x) = (i32::MAX, -1);
+    for y in y0..y1 {
+        for x in view.x..view.x + view.w {
+            if frame.pixels()[y as usize * w + x as usize] == VIEW_LABEL_COLOR {
+                min_x = min_x.min(x);
+                max_x = max_x.max(x);
+            }
+        }
+    }
+    assert!(max_x >= 0, "нижнее сообщение не нарисовано");
+    let text_center = (min_x + max_x) / 2;
+    let view_center = view.x + view.w / 2;
+    assert!(
+        (text_center - view_center).abs() <= 2,
+        "текст не по центру: текст {text_center}, вид {view_center}"
     );
-    assert_eq!(pretty_title(""), "");
 }
 
 #[test]
-fn captured_message_replaces_view_label_while_fresh() {
+fn bottom_message_ignores_other_rows() {
     let mut f = open();
-    // Свежее сообщение игры в верхней зоне вида — показываем его.
-    f.messages.tap = Some(CapturedMsg {
-        text: "FUEL LOW".into(),
-        row: 1,
-        frames: 0,
-    });
-    assert_eq!(f.messages.top_label(f.view_dir), "Fuel Low");
-    // Устаревшее сообщение уступает место подписи направления вида.
-    f.messages
-        .tap
-        .as_mut()
-        .expect("сообщение не установлено")
-        .frames = MSG_MAX_AGE + 1;
-    assert_eq!(f.messages.top_label(f.view_dir), "Front View");
+    for (text, row) in [("FRONT VIEW", 1), ("FUEL", 20), ("MISSILE JAMMED", 12)] {
+        let mut tap = tap_with_text(text, row, 0);
+        f.sync_game_msg(&mut tap);
+        assert_eq!(f.messages.bottom_label(), None, "строка {row} попала в показ");
+    }
 }
 
 #[test]
-fn captured_message_from_lower_rows_is_ignored_for_top_label() {
+fn bottom_message_expires_after_ttl() {
     let mut f = open();
-    f.messages.tap = Some(CapturedMsg {
-        text: "ANY".into(),
-        row: MSG_TOP_ROWS + 1,
-        frames: 0,
-    });
-    assert_eq!(f.messages.top_label(f.view_dir), "Front View");
-    f.view_dir = ViewDir::Back;
-    assert_eq!(f.messages.top_label(f.view_dir), "Rear View");
+    let mut tap = tap_with_text("MISSILE JAMMED", 13, 5);
+    f.sync_game_msg(&mut tap);
+    assert_eq!(f.messages.bottom_label(), Some("MISSILE JAMMED"));
+
+    f.advance_messages(BOTTOM_MSG_TTL as u64);
+    assert_eq!(f.messages.bottom_label(), Some("MISSILE JAMMED"));
+    f.advance_messages(1);
+    assert_eq!(f.messages.bottom_label(), None);
 }
 
 #[test]
-fn sync_game_msg_copies_tap_line() {
+fn repeated_bottom_message_refreshes_ttl() {
     let mut f = open();
-    let mut tap = GameMsgTap::default();
-    tap.enabled = true;
-    tap.push_char(b'F', 1, 0);
-    tap.push_char(b'U', 1, 1);
-    tap.push_char(b'E', 1, 2);
-    tap.push_char(b'L', 1, 3);
-    f.sync_game_msg(&tap);
+    let mut tap = tap_with_text("DOCKING COMPUTERS ON", 13, 5);
+    f.sync_game_msg(&mut tap);
+    f.advance_messages(BOTTOM_MSG_TTL as u64);
+    assert_eq!(f.messages.bottom_label(), Some("DOCKING COMPUTERS ON"));
+
+    // Повтор той же строки — heartbeat: возраст снова ноль.
+    let mut tap = tap_with_text("DOCKING COMPUTERS ON", 13, 5);
+    f.sync_game_msg(&mut tap);
     assert_eq!(
-        f.messages.tap.as_ref().map(|m| m.text.as_str()),
-        Some("FUEL")
+        f.messages.bottom.as_ref().map(|m| m.age),
+        Some(0),
+        "повтор не продлил показ"
     );
-    assert_eq!(f.messages.tap.as_ref().map(|m| m.row), Some(1));
-    assert_eq!(f.messages.tap.as_ref().map(|m| m.frames), Some(0));
-    // Печать с другой позиции начинает новую строку.
-    tap.push_char(b'H', 3, 5);
-    f.sync_game_msg(&tap);
-    assert_eq!(f.messages.tap.as_ref().map(|m| m.text.as_str()), Some("H"));
+    f.advance_messages(BOTTOM_MSG_TTL as u64);
+    assert_eq!(f.messages.bottom_label(), Some("DOCKING COMPUTERS ON"));
+}
+
+#[test]
+fn closing_flight_clears_bottom_message() {
+    let mut f = open();
+    let mut tap = tap_with_text("HYPERSPACE -- LAVE", 13, 5);
+    f.sync_game_msg(&mut tap);
+    assert!(f.messages.bottom_label().is_some());
+    f.close();
+    assert_eq!(f.messages.bottom_label(), None);
 }
 
 /// Уничтожить объект так, как это делает `FireLaser` перед `DestroyObj`.

@@ -882,6 +882,7 @@ fn message_capture_collects_hyperspace_line() {
     let mut n = kladov();
     install(&mut n);
     n.game_msg.enabled = true;
+    n.game_msg.enable_text_capture_for_test();
 
     // Имя планеты (`PlanetName`), которое печатает управляющий код 3
     // внутри токена.
@@ -905,6 +906,17 @@ fn message_capture_collects_hyperspace_line() {
         .expect("строка гиперпрыжка не попала в историю");
     assert_eq!(line.text, "HYPERSPACE -- LAVE");
     assert_eq!(line.col, 5);
+
+    // Тот же текст приходит готовым событием для рендера: строка 13,
+    // позиция из `CrdXPrnSymbol` после сдвига курсора.
+    n.game_msg.end_text_frame();
+    let events = n.game_msg.take_text_events();
+    assert_eq!(events.len(), 1, "ожидалось одно событие строки 13");
+    assert_eq!(events[0].text, "HYPERSPACE -- LAVE");
+    assert_eq!(events[0].row, 13);
+    // Хук `sub_5DFB` видит курсор уже сдвинутым: стартовая колонка 5
+    // превращается в ячейку первого напечатанного глифа — 6.
+    assert_eq!(events[0].col, 6);
 }
 
 /// Пара машин (чистый Z80 и с хуками) с одинаковым детерминированным

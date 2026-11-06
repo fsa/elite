@@ -22,8 +22,8 @@ pub(crate) fn font_base_cycles(a: u8) -> u64 {
 ///
 /// Заодно перехватывает готовый текст нижнего сообщения: `A` здесь —
 /// окончательный код символа (после регистра и раскрытия токенов), а
-/// `CrdXPrnSymbol` — точная ячейка глифа (курсор уже сдвинут). Строки
-/// уходят в `debug.log`; на рендер это не влияет.
+/// `CrdXPrnSymbol` — точная ячейка глифа (курсор уже сдвинут). Готовые
+/// строки уходят в `debug.log` и в очередь нативного вида полёта.
 pub(crate) fn font_base_hook(cpu: &mut Z80, m: &mut Spectrum) -> u64 {
     #[cfg(test)]
     FONT_BASE_CALLS.fetch_add(1, std::sync::atomic::Ordering::Relaxed);

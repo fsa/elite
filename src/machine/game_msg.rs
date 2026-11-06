@@ -9,6 +9,10 @@ use std::path::PathBuf;
 /// Остальные надписи (вид, отсчёт, индикаторы) нативный рендер показывает сам.
 pub const BOTTOM_MESSAGE_ROW: u8 = 0x0D;
 
+/// Сколько готовых строк держать для рендера, если он их не забирает
+/// (например, в headless-прогоне). Старые строки отбрасываются.
+const MAX_PENDING_EVENTS: usize = 64;
+
 /// Одна готовая строка, которую игра вывела на экран.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct TextEvent {
@@ -22,7 +26,7 @@ pub struct TextEvent {
 
 /// Сборка готовых строк из символов, которые игра напечатала через
 /// `sub_5DFB`. Берёт только нижнее сообщение (`BOTTOM_MESSAGE_ROW`), пишет
-/// строки в `debug.log` и ничего никому не передаёт.
+/// строки в `debug.log` и отдаёт их рендеру.
 #[derive(Clone, Debug, Default)]
 struct TextCapture {
     /// Включён ли перехват. Включается один раз при старте приложения.
@@ -30,7 +34,9 @@ struct TextCapture {
     /// Куда писать строки; `None` — только накопление (тесты).
     log_path: Option<PathBuf>,
     /// Готовые строки, ещё не записанные в файл.
-    events: Vec<TextEvent>,
+    log_events: Vec<TextEvent>,
+    /// Готовые строки, ещё не забранные рендером.
+    render_events: Vec<TextEvent>,
     /// Строка и колонка начала текущей строки.
     row: u8,
     col: u8,
@@ -52,7 +58,13 @@ impl TextCapture {
         }
         self.enabled = true;
         self.log_path = Some(path);
-        self.events.clear();
+        self.reset_lines();
+    }
+
+    /// Сбросить накопленные строки, не трогая журнал и флаг перехвата.
+    fn reset_lines(&mut self) {
+        self.log_events.clear();
+        self.render_events.clear();
         self.text.clear();
         self.last_col = None;
     }
@@ -102,14 +114,20 @@ impl TextCapture {
         self.flush();
     }
 
-    /// Завершить текущую строку и положить её в очередь на запись.
+    /// Завершить текущую строку и положить её в очередь журнала и рендера.
     fn finish_line(&mut self) {
         if !self.text.trim().is_empty() {
-            self.events.push(TextEvent {
+            let event = TextEvent {
                 text: std::mem::take(&mut self.text),
                 row: self.row,
                 col: self.col,
-            });
+            };
+            self.log_events.push(event.clone());
+            self.render_events.push(event);
+            if self.render_events.len() > MAX_PENDING_EVENTS {
+                let excess = self.render_events.len() - MAX_PENDING_EVENTS;
+                self.render_events.drain(..excess);
+            }
         }
         self.text.clear();
         self.last_col = None;
@@ -120,20 +138,25 @@ impl TextCapture {
         let Some(path) = &self.log_path else {
             return;
         };
-        if self.events.is_empty() {
+        if self.log_events.is_empty() {
             return;
         }
         let Ok(mut file) = OpenOptions::new().create(true).append(true).open(path) else {
-            self.events.clear();
+            self.log_events.clear();
             return;
         };
-        for event in self.events.drain(..) {
+        for event in self.log_events.drain(..) {
             let _ = writeln!(
                 file,
                 "[{:02}:{:02}] {}",
                 event.row, event.col, event.text
             );
         }
+    }
+
+    /// Забрать готовые строки для рендера.
+    fn take_events(&mut self) -> Vec<TextEvent> {
+        std::mem::take(&mut self.render_events)
     }
 }
 
@@ -166,8 +189,8 @@ pub struct GameMsgLine {
 /// сохраняет его.
 #[derive(Clone, Debug, Default)]
 pub struct GameMsgTap {
-    /// Копить ли текст (нативный вид полёта открыт). Переход `false → true`
-    /// сбрасывает строку, чтобы на новом открытии вида не висела старая.
+    /// Копить ли старые поля `text`/`lines` (прежний перехват). Новый журнал
+    /// и очередь для рендера (`text_log`) работают независимо.
     pub enabled: bool,
     /// Последняя напечатанная строка (только печатные символы). Меняется,
     /// когда игра печатает следующий символ на ту же строку; смена позиции
@@ -182,8 +205,8 @@ pub struct GameMsgTap {
     pub frames: u32,
     /// Последняя строка для каждой ZX-строки, в которую печатала игра.
     pub lines: Vec<GameMsgLine>,
-    /// Перехват готового текста для `debug.log` рядом с исполняемым файлом.
-    /// На нативный вид полёта не влияет.
+    /// Перехват готового текста нижней строки: очередь для рендера и
+    /// `debug.log` рядом с исполняемым файлом.
     text_log: TextCapture,
 }
 
@@ -213,10 +236,16 @@ impl GameMsgTap {
         self.text_log.enabled = true;
     }
 
-    /// Готовые строки, ещё не записанные в файл (для тестов).
+    /// Забрать готовые строки нижней строки для рендера. Очередь при этом
+    /// очищается; строки других строк сюда не попадают.
+    pub fn take_text_events(&mut self) -> Vec<TextEvent> {
+        self.text_log.take_events()
+    }
+
+    /// Готовые строки, ещё не забранные рендером (для тестов).
     #[cfg(test)]
     pub fn text_events(&self) -> &[TextEvent] {
-        &self.text_log.events
+        &self.text_log.render_events
     }
 
     /// Сбросить строки (при включении перехвата).
@@ -226,6 +255,7 @@ impl GameMsgTap {
         self.col = 0;
         self.frames = 0;
         self.lines.clear();
+        self.text_log.reset_lines();
     }
 
     /// Добавить напечатанный символ. `row`/`col` — позиция следующего

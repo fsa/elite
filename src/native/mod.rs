@@ -54,9 +54,10 @@ pub fn install(m: &mut Spectrum) {
     install_hook(m, 0xD499, print_char_tap_hook, 8);
 }
 
-/// Включить отладочный перехват готового текста в `debug.log` рядом с
-/// исполняемым файлом. Нужен только `font_base_hook` (`sub_5DFB`), поэтому
-/// работает и без остальных нативных замен.
+/// Включить перехват готового текста нижней строки: события получает нативный
+/// вид полёта, копия пишется в `debug.log` рядом с исполняемым файлом. Нужен
+/// только `font_base_hook` (`sub_5DFB`), поэтому работает и без остальных
+/// нативных замен.
 pub fn install_text_capture(m: &mut Spectrum) {
     if !m.hooks.contains_key(&0x5DFB) {
         install_hook(m, 0x5DFB, font_base_hook, 120);
