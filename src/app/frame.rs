@@ -48,7 +48,10 @@ impl App<'_> {
             self.follow_flight_screen();
         }
         self.flight.sync_from_z80(&self.machine.mem);
-        self.flight.sync_game_msg(&self.machine.game_msg);
+        // Сначала старим прошлое сообщение, затем забираем новые строки:
+        // повтор текста в этом кадре сбрасывает возраст и продлевает показ.
+        self.flight.advance_messages(frames);
+        self.flight.sync_game_msg(&mut self.machine.game_msg);
         for _ in 0..frames {
             self.machine.game_msg.next_frame();
         }
@@ -61,13 +64,15 @@ impl App<'_> {
             return;
         };
         // Перехват игровых сообщений — только пока открыт нативный вид
-        // полёта. Переход `false → true` сбрасывает накопленную строку,
-        // чтобы на новом открытии вида не висело старое сообщение.
-        let capture = self.flight.active && !self.menu;
-        if capture && !self.machine.game_msg.enabled {
-            self.machine.game_msg.clear();
-        }
-        self.machine.game_msg.enabled = capture;
+        // полёта (режимы View). На заставке, карте, станции и в меню он
+        // выключен. Смена состояния сбрасывает буфер и очереди, чтобы на
+        // новом экране не висело сообщение с прошлого.
+        let capture = self.flight.active
+            && !self.hdmap.active
+            && !self.shop.active
+            && !self.machine.intro_seen
+            && !self.menu;
+        self.machine.game_msg.set_capture(capture);
         // Область показа и HD-слой нативного рендера — в разрешении окна.
         // Слой очищается каждый кадр: нативные хуки рисуют в него заново
         // во время эмуляции, показ накладывает слой поверх ZX-кадра.

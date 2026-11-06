@@ -21,7 +21,9 @@ mod game_msg;
 mod rom;
 mod video;
 
-pub use game_msg::GameMsgTap;
+pub use game_msg::{
+    BOTTOM_MESSAGE_LEN, BOTTOM_MESSAGE_ROW, GameMsgTap, MessageTag, TextEvent,
+};
 pub use rom::install_stub_rom;
 
 pub struct Spectrum {
@@ -358,6 +360,7 @@ impl Spectrum {
             self.cycle_clock = cpu.cycles;
             cpu.step(self);
         }
+        self.game_msg.end_text_frame();
         self.frame_start = target;
         self.frames += 1;
         self.cpu = cpu;

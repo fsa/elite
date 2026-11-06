@@ -54,6 +54,15 @@ pub fn install(m: &mut Spectrum) {
     install_hook(m, 0xD499, print_char_tap_hook, 8);
 }
 
+/// Включить перехват готового текста нижней строки: события получает нативный
+/// вид полёта. Нужен только `font_base_hook` (`sub_5DFB`), поэтому работает
+/// и без остальных нативных замен.
+pub fn install_text_capture(m: &mut Spectrum) {
+    if !m.hooks.contains_key(&0x5DFB) {
+        install_hook(m, 0x5DFB, font_base_hook, 120);
+    }
+}
+
 /// Регистрирует хук вместе с верхней оценкой его тактов (см. `hook_max`).
 fn install_hook(m: &mut Spectrum, addr: u16, run: Hook, max_cycles: u64) {
     m.hooks.insert(addr, run);

@@ -207,11 +207,21 @@ impl Flight {
     /// Закрыть экран и вернуться к ZX-кадру (клавиша `1`).
     pub fn close(&mut self) {
         self.active = false;
+        self.messages.reset();
     }
 
-    /// Забрать перехваченное игровое сообщение (заполняет хук печати
-    /// `sub_D499`; см. [`crate::machine::GameMsgTap`]).
-    pub fn sync_game_msg(&mut self, tap: &GameMsgTap) {
+    /// Постареть нижнее сообщение на `frames` кадров. Вызывается до
+    /// [`Self::sync_game_msg`], чтобы свежее событие начинало новый отсчёт.
+    pub fn advance_messages(&mut self, frames: u64) {
+        if !self.active {
+            return;
+        }
+        self.messages.advance(frames.min(u32::MAX as u64) as u32);
+    }
+
+    /// Забрать перехваченные строки игры (см. [`crate::machine::GameMsgTap`]).
+    /// Для показа берётся только нижняя строка (`0x0D`).
+    pub fn sync_game_msg(&mut self, tap: &mut GameMsgTap) {
         if !self.active {
             return;
         }

@@ -134,3 +134,177 @@ fn tap_keeps_last_line_of_each_row() {
         Some("FRONT")
     );
 }
+
+/// Завершить кадр перехвата (собираются только события).
+fn finish_text_capture(t: &mut GameMsgTap) {
+    t.end_text_frame();
+}
+
+#[test]
+fn text_capture_builds_line() {
+    let mut t = GameMsgTap::default();
+    t.enable_text_capture_for_test();
+    for (i, c) in b"Hyperspace -- Lave".iter().enumerate() {
+        t.capture_text_char(*c, 13, 5 + i as u8);
+    }
+    finish_text_capture(&mut t);
+
+    assert_eq!(
+        t.text_events(),
+        &[TextEvent {
+            text: "Hyperspace -- Lave".to_string(),
+            row: 13,
+            col: 5,
+        }]
+    );
+}
+
+#[test]
+fn text_capture_maps_quirks_and_skips_icons() {
+    let mut t = GameMsgTap::default();
+    t.enable_text_capture_for_test();
+    t.capture_text_char(0x21, 13, 5); // служебный значок
+    t.capture_text_char(b'A', 13, 6);
+    t.capture_text_char(0x2A, 13, 7); // на экране `!`
+    t.capture_text_char(0x40, 13, 8); // на экране `_`
+    t.capture_text_char(0x26, 13, 9); // ещё значок
+    t.capture_text_char(b'B', 13, 10);
+    finish_text_capture(&mut t);
+
+    assert_eq!(
+        t.text_events(),
+        &[TextEvent {
+            // Значок занимает колонку, но не превращается в текст: на его
+            // месте остаётся пробел, поэтому слова не слипаются.
+            text: "A!_ B".to_string(),
+            row: 13,
+            col: 6,
+        }]
+    );
+}
+
+#[test]
+fn text_capture_keeps_gaps_in_one_line() {
+    let mut t = GameMsgTap::default();
+    t.enable_text_capture_for_test();
+    t.capture_text_char(b'A', BOTTOM_MESSAGE_ROW, 5);
+    t.capture_text_char(b'B', BOTTOM_MESSAGE_ROW, 7); // разрыв позиции
+    t.capture_text_char(b'C', BOTTOM_MESSAGE_ROW, 9); // ещё разрыв
+    finish_text_capture(&mut t);
+
+    // Разрывы не делят строку на события: пустые колонки остаются внутри.
+    assert_eq!(
+        t.text_events(),
+        &[TextEvent {
+            text: "A B C".to_string(),
+            row: BOTTOM_MESSAGE_ROW,
+            col: 5,
+        }]
+    );
+}
+
+#[test]
+fn text_capture_keeps_parts_from_different_frames() {
+    let mut t = GameMsgTap::default();
+    t.enable_text_capture_for_test();
+    let tag = MessageTag {
+        number: 0xC0,
+        life: 14,
+    };
+    for (i, c) in b"HYPERSPACE -- ".iter().enumerate() {
+        t.capture_text_char_tagged(*c, BOTTOM_MESSAGE_ROW, 5 + i as u8, tag);
+    }
+    finish_text_capture(&mut t);
+    assert_eq!(t.text_events().last().unwrap().text, "HYPERSPACE --");
+
+    // Второй кусок приходит в следующем кадре. Буфер хранит первый, поэтому
+    // событие содержит всю строку, а не только хвост.
+    let next = MessageTag {
+        life: tag.life - 1,
+        ..tag
+    };
+    for (i, c) in b"LAVE".iter().enumerate() {
+        t.capture_text_char_tagged(*c, BOTTOM_MESSAGE_ROW, 19 + i as u8, next);
+    }
+    finish_text_capture(&mut t);
+    assert_eq!(
+        t.text_events().last().unwrap().text,
+        "HYPERSPACE -- LAVE"
+    );
+}
+
+#[test]
+fn text_capture_starts_fresh_for_new_message() {
+    let mut t = GameMsgTap::default();
+    t.enable_text_capture_for_test();
+    let old = MessageTag {
+        number: 0xC0,
+        life: 10,
+    };
+    for (i, c) in b"OLD".iter().enumerate() {
+        t.capture_text_char_tagged(*c, BOTTOM_MESSAGE_ROW, 5 + i as u8, old);
+    }
+    finish_text_capture(&mut t);
+    assert_eq!(t.text_events().last().unwrap().text, "OLD");
+
+    // Новая надпись с тем же номером, но снова взведённым временем жизни.
+    let new = MessageTag {
+        number: 0xC0,
+        life: 14,
+    };
+    for (i, c) in b"NEW".iter().enumerate() {
+        t.capture_text_char_tagged(*c, BOTTOM_MESSAGE_ROW, 5 + i as u8, new);
+    }
+    finish_text_capture(&mut t);
+    assert_eq!(
+        t.text_events().last().unwrap().text,
+        "NEW",
+        "хвост старой строки остался"
+    );
+}
+
+#[test]
+fn text_capture_clears_on_leaving_view() {
+    let mut t = GameMsgTap::default();
+    t.set_capture(true);
+    t.capture_text_char(b'X', BOTTOM_MESSAGE_ROW, 5);
+    t.end_text_frame();
+    assert!(!t.text_events().is_empty());
+
+    t.set_capture(false);
+    assert!(t.text_events().is_empty(), "событие осталось после выхода");
+
+    t.set_capture(true);
+    t.capture_text_char(b'Y', BOTTOM_MESSAGE_ROW, 5);
+    t.end_text_frame();
+    assert_eq!(t.text_events()[0].text, "Y");
+}
+
+#[test]
+fn text_capture_ignores_all_rows_except_bottom_message() {
+    let mut t = GameMsgTap::default();
+    t.enable_text_capture_for_test();
+    for row in [1, 2, 10, 12, 14, 23] {
+        t.capture_text_char(b'X', row, 4);
+    }
+    finish_text_capture(&mut t);
+    assert!(t.text_events().is_empty());
+}
+
+#[test]
+fn text_capture_ignores_control_codes() {
+    let mut t = GameMsgTap::default();
+    t.enable_text_capture_for_test();
+    t.capture_text_char(0x0D, 13, 5); // управляющий код
+    t.capture_text_char(0x7F, 13, 5); // игра не печатает
+    finish_text_capture(&mut t);
+    assert!(t.text_events().is_empty());
+}
+
+#[test]
+fn text_capture_is_off_until_started() {
+    let mut t = GameMsgTap::default();
+    t.capture_text_char(b'A', 1, 1);
+    finish_text_capture(&mut t);
+    assert!(t.text_events().is_empty());
+}

@@ -2,7 +2,8 @@
 //!
 //! Модуль только раскладывает кадр по элементам: звёзды и объекты, надписи,
 //! переходы. Вся геометрия и состояние уже подготовлены подсистемами
-//! [`super::stars`], [`super::scene`] и [`super::transition`].
+//! [`super::stars`], [`super::scene`], [`super::transition`] и
+//! [`super::messages`].
 
 use crate::cockpit::CockpitGeom;
 use crate::display::Frame;
@@ -73,17 +74,12 @@ pub(super) fn draw(f: &mut Flight, frame: &mut Frame, geom: &CockpitGeom, font: 
                     t.warp_elapsed,
                 );
             } else {
-                // Во время отсчёта верхнюю надпись рисуем сами (подпись
-                // вида): перехваченные игра печатает в поле зрения цифры,
-                // их здесь не показываем. Само число идёт слева в той же
-                // строке, что и подпись вида.
-                draw_view_label(f, frame, font, vx, vy, vw, s, false);
+                // Во время отсчёта верхнюю надпись рисуем сами (подпись вида):
+                // перехваченные игра печатает в поле зрения цифры, их здесь не
+                // показываем. Само число идёт слева в той же строке, что и
+                // подпись вида.
+                draw_view_label(f, frame, font, vx, vy, vw, s);
                 draw_jump_countdown(frame, font, vx, vy, s, t.countdown);
-                // Строку «HYPERSPACE -- <планета>» печатает сама игра;
-                // показываем перехваченный текст внизу вида, как и раньше.
-                if let Some(label) = f.messages.jump_label() {
-                    draw_jump_label(frame, font, vx, vy, vw, vh, s, label);
-                }
             }
         }
         Some(t) if t.kind == super::TransitionKind::Docking => {
@@ -103,16 +99,22 @@ pub(super) fn draw(f: &mut Flight, frame: &mut Frame, geom: &CockpitGeom, font: 
         Some(_) => {
             // Остальные переходы (на данный момент их нет) — обычный вид.
             scene::draw_flight_scene(f, frame, &screen, &view_rot, view_bottom, s);
-            draw_view_label(f, frame, font, vx, vy, vw, s, true);
+            draw_view_label(f, frame, font, vx, vy, vw, s);
         }
         None => {
             scene::draw_flight_scene(f, frame, &screen, &view_rot, view_bottom, s);
             if f.game_over {
                 draw_game_over(frame, font, vx, vy, vw, vh, s);
             } else {
-                draw_view_label(f, frame, font, vx, vy, vw, s, true);
+                draw_view_label(f, frame, font, vx, vy, vw, s);
             }
         }
+    }
+
+    // Нижнее сообщение игры — только перехваченная строка 13. Позицию из
+    // ZX-экрана не используем: рендер всегда выводит текст по центру вида.
+    if let Some(label) = f.messages.bottom_label() {
+        draw_bottom_label(frame, font, vx, vy, vw, vh, s, label);
     }
     frame.clear_clip();
 }
@@ -149,14 +151,8 @@ fn draw_game_over(
 /// «E L I T E» на заставке — одной текстовой строкой ниже верхней рамки,
 /// по центру.
 ///
-/// Пока в верхней зоне вида есть свежее сообщение самой игры (перехват
-/// `sub_D499`), показываем его с большой буквы; иначе — подпись
-/// направления вида. При `use_tap == false` (отсчёт гиперпрыжка) вывод
-/// перехваченного текста отключён: игре печатает в эту зону цифры.
-///
-/// Переход «сообщение игры → подпись вида» внешне незаметен: у свежих
-/// подписей вида текст совпадает («FRONT VIEW» → «Front View», и подпись
-/// тоже «Front View»).
+/// Подпись направления вида. Остальные надписи в верхней зоне рендер
+/// показывает сам; перехватывается только нижняя строка сообщений.
 fn draw_view_label(
     f: &Flight,
     frame: &mut Frame,
@@ -165,13 +161,8 @@ fn draw_view_label(
     vy: i32,
     vw: i32,
     s: i32,
-    use_tap: bool,
 ) {
-    let text = if use_tap {
-        f.messages.top_label(f.view_dir)
-    } else {
-        super::messages::view_label(f.view_dir).to_string()
-    };
+    let text = super::messages::view_label(f.view_dir);
     let scale = s.max(1) as usize;
     text::draw_centered_text(
         frame,
@@ -179,7 +170,7 @@ fn draw_view_label(
         vx,
         vy + 8 * s,
         vw,
-        &text,
+        text,
         VIEW_LABEL_COLOR,
         scale,
     );
@@ -201,10 +192,10 @@ fn draw_jump_countdown(frame: &mut Frame, font: &[u8], vx: i32, vy: i32, s: i32,
     );
 }
 
-/// Строка гиперпрыжка из игры внизу вида: одна текстовая строка выше нижней
-/// рамки, по центру, тем же шрифтом и цветом, что подпись вида.
+/// Нижнее сообщение игры: одна текстовая строка выше нижней рамки. Позиция
+/// из ZX-строки не используется — текст всегда центрируется по ширине вида.
 #[allow(clippy::too_many_arguments)]
-fn draw_jump_label(
+fn draw_bottom_label(
     frame: &mut Frame,
     font: &[u8],
     vx: i32,

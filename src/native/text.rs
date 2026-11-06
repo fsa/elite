@@ -2,6 +2,7 @@
 //! сообщения (`game_msg`).
 
 use super::*;
+use crate::machine::MessageTag;
 
 /// Точное число тактов Z80, которое рутина `sub_5DFB` занимает для кода `a`
 /// (включая завершающий `RET`).
@@ -19,13 +20,35 @@ pub(crate) fn font_base_cycles(a: u8) -> u64 {
 }
 
 /// Нативная замена `sub_5DFB` для механизма хуков.
-pub(crate) fn font_base_hook(cpu: &mut Z80, _m: &mut Spectrum) -> u64 {
+///
+/// Заодно перехватывает готовый текст нижнего сообщения: `A` здесь —
+/// окончательный код символа (после регистра и раскрытия токенов), а
+/// `CrdXPrnSymbol` — точная ячейка глифа (курсор уже сдвинут). Символ
+/// складывается в 32-колоночный буфер строки; `msgNumber`/`msgTimeLife`
+/// подсказывают перехвату, когда началась новая надпись. Готовые строки
+/// уходят в очередь нативного вида полёта.
+pub(crate) fn font_base_hook(cpu: &mut Z80, m: &mut Spectrum) -> u64 {
     #[cfg(test)]
     FONT_BASE_CALLS.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
-    let hl = font_base(cpu.a);
+    let a = cpu.a;
+    let col = m
+        .mem
+        .get(KLADOV_CRD_X_PRN_SYMBOL)
+        .copied()
+        .unwrap_or(0);
+    let row = m
+        .mem
+        .get(KLADOV_CRD_X_PRN_SYMBOL + 1)
+        .copied()
+        .unwrap_or(0);
+    let tag = MessageTag {
+        number: m.mem.get(KLADOV_MSG_NUMBER).copied().unwrap_or(0),
+        life: m.mem.get(KLADOV_MSG_TIME_LIFE).copied().unwrap_or(0),
+    };
+    m.game_msg.capture_text_char_tagged(a, row, col, tag);
+    let hl = font_base(a);
     cpu.h = (hl >> 8) as u8;
     cpu.l = (hl & 0xFF) as u8;
-    let a = cpu.a;
     bump_r(cpu, font_base_steps(a));
     font_base_cycles(a)
 }
@@ -163,6 +186,15 @@ pub(crate) fn token_scan(cpu: &mut Z80, m: &mut Spectrum, pre_cycles: u64, pre_s
 /// `CrdXPrnSymbol` в версии Кладова (`0xD045`) — печатный курсор игры:
 /// колонка (0..31), строка хода. У оригинала адрес другой (`0xA80D`).
 pub(crate) const KLADOV_CRD_X_PRN_SYMBOL: usize = 0xD045;
+
+/// `msgTimeLife` (`0xDA73`) — сколько тактов ещё печатать текущее сообщение.
+/// `sub_DAB4` уменьшает счётчик перед печатью; когда приходит новое
+/// сообщение, он снова взводится вверх. По этому признаку перехват отличает
+/// новую надпись от повторной печати старой.
+pub(crate) const KLADOV_MSG_TIME_LIFE: usize = 0xDA73;
+
+/// `msgNumber` (`0xDA76`) — номер/токен текущего нижнего сообщения.
+pub(crate) const KLADOV_MSG_NUMBER: usize = 0xDA76;
 
 /// Перехват `sub_D499` (0xD499) — печать одного символа на экран ZX.
 ///
