@@ -55,14 +55,12 @@ pub fn install(m: &mut Spectrum) {
 }
 
 /// Включить перехват готового текста нижней строки: события получает нативный
-/// вид полёта, копия пишется в `debug.log` рядом с исполняемым файлом. Нужен
-/// только `font_base_hook` (`sub_5DFB`), поэтому работает и без остальных
-/// нативных замен.
+/// вид полёта. Нужен только `font_base_hook` (`sub_5DFB`), поэтому работает
+/// и без остальных нативных замен.
 pub fn install_text_capture(m: &mut Spectrum) {
     if !m.hooks.contains_key(&0x5DFB) {
         install_hook(m, 0x5DFB, font_base_hook, 120);
     }
-    m.game_msg.start_text_log();
 }
 
 /// Регистрирует хук вместе с верхней оценкой его тактов (см. `hook_max`).

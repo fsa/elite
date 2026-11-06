@@ -84,7 +84,7 @@ pub fn machine(opts: &Options) -> Spectrum {
     native::install_save(&mut machine, world::save_layout_kladov());
 
     // Перехват готового текста нижней строки: события уходят в нативный вид
-    // полёта и параллельно пишутся в debug.log рядом с исполняемым файлом.
+    // полёта.
     native::install_text_capture(&mut machine);
 
     install_debug_env(&mut machine);

@@ -135,13 +135,13 @@ fn tap_keeps_last_line_of_each_row() {
     );
 }
 
-/// Завершить кадр перехвата (в тестах файл не создаётся — только события).
+/// Завершить кадр перехвата (собираются только события).
 fn finish_text_capture(t: &mut GameMsgTap) {
     t.end_text_frame();
 }
 
 #[test]
-fn text_capture_builds_lines_for_debug_log() {
+fn text_capture_builds_line() {
     let mut t = GameMsgTap::default();
     t.enable_text_capture_for_test();
     for (i, c) in b"Hyperspace -- Lave".iter().enumerate() {
@@ -278,19 +278,6 @@ fn text_capture_clears_on_leaving_view() {
     t.capture_text_char(b'Y', BOTTOM_MESSAGE_ROW, 5);
     t.end_text_frame();
     assert_eq!(t.text_events()[0].text, "Y");
-}
-
-#[test]
-fn text_log_line_has_date_and_time() {
-    let event = TextEvent {
-        text: "HYPERSPACE".to_string(),
-        row: 13,
-        col: 6,
-    };
-    assert_eq!(
-        super::game_msg::format_log_line(&event, "2026-11-06 12:34:56.789"),
-        "[2026-11-06 12:34:56.789] [13:06] HYPERSPACE"
-    );
 }
 
 #[test]

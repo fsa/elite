@@ -26,7 +26,7 @@ pub(crate) fn font_base_cycles(a: u8) -> u64 {
 /// `CrdXPrnSymbol` — точная ячейка глифа (курсор уже сдвинут). Символ
 /// складывается в 32-колоночный буфер строки; `msgNumber`/`msgTimeLife`
 /// подсказывают перехвату, когда началась новая надпись. Готовые строки
-/// уходят в `debug.log` и в очередь нативного вида полёта.
+/// уходят в очередь нативного вида полёта.
 pub(crate) fn font_base_hook(cpu: &mut Z80, m: &mut Spectrum) -> u64 {
     #[cfg(test)]
     FONT_BASE_CALLS.fetch_add(1, std::sync::atomic::Ordering::Relaxed);

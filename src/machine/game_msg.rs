@@ -1,11 +1,4 @@
-//! Перехват игровой печати (`sub_D499`, `sub_5DFB`) для нативного вида полёта
-//! и отладочного журнала текста.
-
-use std::fs::{File, OpenOptions};
-use std::io::Write;
-use std::path::PathBuf;
-
-use chrono::Local;
+//! Перехват игровой печати (`sub_D499`, `sub_5DFB`) для нативного вида полёта.
 
 /// Текстовая строка ZX, в которой игра печатает нижние сообщения.
 /// Остальные надписи (вид, отсчёт, индикаторы) нативный рендер показывает сам.
@@ -59,10 +52,6 @@ struct TextCapture {
     /// Включён ли перехват. Приложение включает его только на нативном виде
     /// полёта (см. [`GameMsgTap::set_capture`]).
     enabled: bool,
-    /// Куда писать строки; `None` — только накопление (тесты).
-    log_path: Option<PathBuf>,
-    /// Готовые строки, ещё не записанные в файл.
-    log_events: Vec<TextEvent>,
     /// Готовые строки, ещё не забранные рендером.
     render_events: Vec<TextEvent>,
     /// 32 колонки нижней строки; пробел — пустая ячейка.
@@ -77,8 +66,6 @@ impl Default for TextCapture {
     fn default() -> Self {
         TextCapture {
             enabled: false,
-            log_path: None,
-            log_events: Vec::new(),
             render_events: Vec::new(),
             buffer: [b' '; BOTTOM_MESSAGE_LEN],
             message: None,
@@ -88,22 +75,8 @@ impl Default for TextCapture {
 }
 
 impl TextCapture {
-    /// Начать новый журнал рядом с исполняемым файлом.
-    fn start(&mut self) {
-        let path = std::env::current_exe()
-            .ok()
-            .and_then(|exe| exe.parent().map(|dir| dir.join("debug.log")))
-            .unwrap_or_else(|| PathBuf::from("debug.log"));
-        if let Err(e) = File::create(&path) {
-            eprintln!("cannot create {}: {e}", path.display());
-        }
-        self.log_path = Some(path);
-        self.reset_lines();
-    }
-
-    /// Сбросить накопленные строки и буфер, не трогая журнал и флаг перехвата.
+    /// Сбросить накопленные строки и буфер, не трогая флаг перехвата.
     fn reset_lines(&mut self) {
-        self.log_events.clear();
         self.render_events.clear();
         self.buffer.fill(b' ');
         self.message = None;
@@ -145,18 +118,16 @@ impl TextCapture {
     }
 
     /// Конец кадра: если в этом кадре что-то печаталось в нижнюю строку,
-    /// отдать всю накопленную строку журналу и рендеру. Повторная печать
-    /// каждый такт даёт повторные события — по ним видно, что надпись ещё
-    /// на экране.
+    /// отдать всю накопленную строку рендеру. Повторная печать каждый такт
+    /// даёт повторные события — по ним видно, что надпись ещё на экране.
     fn end_frame(&mut self) {
         if !self.enabled {
             return;
         }
         self.finish_line();
-        self.flush();
     }
 
-    /// Собрать строку из буфера и положить её в очередь журнала и рендера.
+    /// Собрать строку из буфера и положить её в очередь рендера.
     fn finish_line(&mut self) {
         if !self.touched {
             return;
@@ -170,7 +141,6 @@ impl TextCapture {
             row: BOTTOM_MESSAGE_ROW,
             col,
         };
-        self.log_events.push(event.clone());
         self.render_events.push(event);
         if self.render_events.len() > MAX_PENDING_EVENTS {
             let excess = self.render_events.len() - MAX_PENDING_EVENTS;
@@ -190,36 +160,10 @@ impl TextCapture {
         Some((first as u8, text))
     }
 
-    /// Дописать готовые строки в журнал.
-    fn flush(&mut self) {
-        let Some(path) = &self.log_path else {
-            return;
-        };
-        if self.log_events.is_empty() {
-            return;
-        }
-        let Ok(mut file) = OpenOptions::new().create(true).append(true).open(path) else {
-            self.log_events.clear();
-            return;
-        };
-        for event in self.log_events.drain(..) {
-            let time = Local::now().format("%Y-%m-%d %H:%M:%S%.3f").to_string();
-            let _ = writeln!(file, "{}", format_log_line(&event, &time));
-        }
-    }
-
     /// Забрать готовые строки для рендера.
     fn take_events(&mut self) -> Vec<TextEvent> {
         std::mem::take(&mut self.render_events)
     }
-}
-
-/// Строка журнала: дата и время события, позиция на ZX-экране и текст.
-pub(super) fn format_log_line(event: &TextEvent, time: &str) -> String {
-    format!(
-        "[{time}] [{:02}:{:02}] {}",
-        event.row, event.col, event.text
-    )
 }
 
 /// Одна строка, которую игра напечатала на ZX-экране.
@@ -251,8 +195,8 @@ pub struct GameMsgLine {
 /// сохраняет его.
 #[derive(Clone, Debug, Default)]
 pub struct GameMsgTap {
-    /// Копить ли старые поля `text`/`lines` (прежний перехват). Новый журнал
-    /// и очередь для рендера (`text_log`) работают независимо.
+    /// Копить ли старые поля `text`/`lines` (прежний перехват). Очередь для
+    /// рендера (`text_log`) работает независимо.
     pub enabled: bool,
     /// Последняя напечатанная строка (только печатные символы). Меняется,
     /// когда игра печатает следующий символ на ту же строку; смена позиции
@@ -267,18 +211,12 @@ pub struct GameMsgTap {
     pub frames: u32,
     /// Последняя строка для каждой ZX-строки, в которую печатала игра.
     pub lines: Vec<GameMsgLine>,
-    /// Перехват готового текста нижней строки: буфер строки, очередь для
-    /// рендера и `debug.log` рядом с исполняемым файлом.
+    /// Перехват готового текста нижней строки: буфер строки и очередь для
+    /// рендера.
     text_log: TextCapture,
 }
 
 impl GameMsgTap {
-    /// Начать отладочный журнал текста. Создаёт `debug.log` рядом с
-    /// исполняемым файлом (файл прошлого запуска перезаписывается).
-    pub fn start_text_log(&mut self) {
-        self.text_log.start();
-    }
-
     /// Включить или выключить перехват. При смене состояния буфер и очереди
     /// очищаются, чтобы на новом экране не висели строки с прошлого.
     ///
@@ -293,7 +231,7 @@ impl GameMsgTap {
     }
 
     /// Добавить готовый символ, который игра вывела на экран (`sub_5DFB`).
-    /// `row`/`col` — точная ячейка глифа после сдвига курсора. Для журнала
+    /// `row`/`col` — точная ячейка глифа после сдвига курсора. Для рендера
     /// берутся только символы нижней строки сообщений (`BOTTOM_MESSAGE_ROW`).
     #[allow(dead_code)] // используется тестами
     pub fn capture_text_char(&mut self, c: u8, row: u8, col: u8) {
@@ -313,13 +251,13 @@ impl GameMsgTap {
         self.text_log.push(c, row, col, tag);
     }
 
-    /// Завершить кадр журнала. Вызывается после прогона эмулятора: всё, что
-    /// игра напечатала за кадр, уходит в `debug.log`.
+    /// Завершить кадр перехвата. Вызывается после прогона эмулятора: всё,
+    /// что игра напечатала за кадр, уходит в очередь рендера.
     pub fn end_text_frame(&mut self) {
         self.text_log.end_frame();
     }
 
-    /// Включить перехват без файла (для тестов сборки строк).
+    /// Включить перехват для тестов сборки строк.
     #[cfg(test)]
     pub fn enable_text_capture_for_test(&mut self) {
         self.text_log.enabled = true;
