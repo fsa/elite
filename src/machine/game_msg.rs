@@ -5,13 +5,36 @@ use std::fs::{File, OpenOptions};
 use std::io::Write;
 use std::path::PathBuf;
 
+use chrono::Local;
+
 /// Текстовая строка ZX, в которой игра печатает нижние сообщения.
 /// Остальные надписи (вид, отсчёт, индикаторы) нативный рендер показывает сам.
 pub const BOTTOM_MESSAGE_ROW: u8 = 0x0D;
 
+/// Длина текстовой строки ZX в колонках. Буфер нижнего сообщения хранит
+/// ровно эту строку: символ, напечатанный в колонке `col`, ложится в ячейку
+/// `col` и остаётся там до конца жизни надписи.
+pub const BOTTOM_MESSAGE_LEN: usize = 32;
+
 /// Сколько готовых строк держать для рендера, если он их не забирает
 /// (например, в headless-прогоне). Старые строки отбрасываются.
 const MAX_PENDING_EVENTS: usize = 64;
+
+/// Состояние сообщения в памяти игры, по которому перехват отличает новую
+/// надпись от повторной печати той же самой.
+///
+/// `msgNumber` (`0xDA76`) — номер (токен) сообщения, `msgTimeLife` (`0xDA73`)
+/// — остаток тактов его показа. Игра перепечатывает строку каждые несколько
+/// кадров, уменьшая `msgTimeLife`; когда приходит новое сообщение, счётчик
+/// снова взводится вверх. Это и служит признаком новой надписи, даже если
+/// номер сообщения совпал.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct MessageTag {
+    /// `msgNumber`: номер/токен сообщения.
+    pub number: u8,
+    /// `msgTimeLife`: остаток тактов показа.
+    pub life: u8,
+}
 
 /// Одна готовая строка, которую игра вывела на экран.
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -24,12 +47,17 @@ pub struct TextEvent {
     pub col: u8,
 }
 
-/// Сборка готовых строк из символов, которые игра напечатала через
-/// `sub_5DFB`. Берёт только нижнее сообщение (`BOTTOM_MESSAGE_ROW`), пишет
-/// строки в `debug.log` и отдаёт их рендеру.
-#[derive(Clone, Debug, Default)]
+/// Сборка строки из символов, которые игра напечатала через `sub_5DFB`.
+///
+/// Буфер — 32 колонки нижней строки ZX. Игра может печатать одну надпись
+/// несколькими кусками (в разных тактах или с пропуском колонок), поэтому
+/// символы складываются в буфер по колонкам, а не в растущую строку. Буфер
+/// живёт всё время показа надписи; готовое событие всегда содержит всю
+/// строку с обрезанными пустыми краями.
+#[derive(Clone, Debug)]
 struct TextCapture {
-    /// Включён ли перехват. Включается один раз при старте приложения.
+    /// Включён ли перехват. Приложение включает его только на нативном виде
+    /// полёта (см. [`GameMsgTap::set_capture`]).
     enabled: bool,
     /// Куда писать строки; `None` — только накопление (тесты).
     log_path: Option<PathBuf>,
@@ -37,13 +65,26 @@ struct TextCapture {
     log_events: Vec<TextEvent>,
     /// Готовые строки, ещё не забранные рендером.
     render_events: Vec<TextEvent>,
-    /// Строка и колонка начала текущей строки.
-    row: u8,
-    col: u8,
-    /// Ячейка последнего напечатанного символа (включая значки).
-    last_col: Option<u8>,
-    /// Текст текущей строки.
-    text: String,
+    /// 32 колонки нижней строки; пробел — пустая ячейка.
+    buffer: [u8; BOTTOM_MESSAGE_LEN],
+    /// Сообщение, которому принадлежит буфер.
+    message: Option<MessageTag>,
+    /// Был ли напечатан хотя бы один символ нижней строки в этом кадре.
+    touched: bool,
+}
+
+impl Default for TextCapture {
+    fn default() -> Self {
+        TextCapture {
+            enabled: false,
+            log_path: None,
+            log_events: Vec::new(),
+            render_events: Vec::new(),
+            buffer: [b' '; BOTTOM_MESSAGE_LEN],
+            message: None,
+            touched: false,
+        }
+    }
 }
 
 impl TextCapture {
@@ -56,56 +97,57 @@ impl TextCapture {
         if let Err(e) = File::create(&path) {
             eprintln!("cannot create {}: {e}", path.display());
         }
-        self.enabled = true;
         self.log_path = Some(path);
         self.reset_lines();
     }
 
-    /// Сбросить накопленные строки, не трогая журнал и флаг перехвата.
+    /// Сбросить накопленные строки и буфер, не трогая журнал и флаг перехвата.
     fn reset_lines(&mut self) {
         self.log_events.clear();
         self.render_events.clear();
-        self.text.clear();
-        self.last_col = None;
+        self.buffer.fill(b' ');
+        self.message = None;
+        self.touched = false;
     }
 
     /// Добавить символ, напечатанный на ZX-экране. `row`/`col` — точная
     /// ячейка глифа (`CrdXPrnSymbol` после продвижения курсора). Символы вне
     /// нижней строки сообщений игнорируются.
-    fn push(&mut self, c: u8, row: u8, col: u8) {
+    ///
+    /// `tag` — состояние `msgNumber`/`msgTimeLife` в момент печати. Если
+    /// сообщение сменилось, буфер очищается: в нём не остаются хвосты
+    /// предыдущей надписи.
+    fn push(&mut self, c: u8, row: u8, col: u8, tag: MessageTag) {
         if !self.enabled
             || row != BOTTOM_MESSAGE_ROW
             || !(0x20..=0x7E).contains(&c)
         {
             return;
         }
-        let continuing = self.row == row
-            && self
-                .last_col
-                .map_or(false, |last| last.wrapping_add(1) == col);
-        if !continuing {
-            self.finish_line();
-            self.row = row;
-            self.col = col;
+        let new_message = self
+            .message
+            .is_none_or(|prev| prev.number != tag.number || tag.life > prev.life);
+        if new_message {
+            self.buffer.fill(b' ');
+            self.message = Some(tag);
         }
-        self.last_col = Some(col);
 
         // `0x21..=0x26` — служебные значки, а не текст. Они занимают ячейку,
-        // поэтому `last_col` выше всё равно обновлён.
-        if (0x21..=0x26).contains(&c) {
-            return;
-        }
-        let ch = match c {
-            0x2A => '!',
-            0x40 => '_',
-            _ => c as char,
+        // поэтому в буфере остаётся пробел: слова не слипаются.
+        let cell = match c {
+            0x21..=0x26 => b' ',
+            0x2A => b'!',
+            0x40 => b'_',
+            _ => c,
         };
-        self.text.push(ch);
+        self.buffer[usize::from(col) % BOTTOM_MESSAGE_LEN] = cell;
+        self.touched = true;
     }
 
-    /// Конец кадра: завершить накопленную строку и записать готовые строки.
-    /// Если игра перепечатывает сообщение каждый кадр, каждая копия попадёт
-    /// в журнал — по ним видно, что надпись ещё на экране.
+    /// Конец кадра: если в этом кадре что-то печаталось в нижнюю строку,
+    /// отдать всю накопленную строку журналу и рендеру. Повторная печать
+    /// каждый такт даёт повторные события — по ним видно, что надпись ещё
+    /// на экране.
     fn end_frame(&mut self) {
         if !self.enabled {
             return;
@@ -114,23 +156,38 @@ impl TextCapture {
         self.flush();
     }
 
-    /// Завершить текущую строку и положить её в очередь журнала и рендера.
+    /// Собрать строку из буфера и положить её в очередь журнала и рендера.
     fn finish_line(&mut self) {
-        if !self.text.trim().is_empty() {
-            let event = TextEvent {
-                text: std::mem::take(&mut self.text),
-                row: self.row,
-                col: self.col,
-            };
-            self.log_events.push(event.clone());
-            self.render_events.push(event);
-            if self.render_events.len() > MAX_PENDING_EVENTS {
-                let excess = self.render_events.len() - MAX_PENDING_EVENTS;
-                self.render_events.drain(..excess);
-            }
+        if !self.touched {
+            return;
         }
-        self.text.clear();
-        self.last_col = None;
+        self.touched = false;
+        let Some((col, text)) = self.buffer_text() else {
+            return;
+        };
+        let event = TextEvent {
+            text,
+            row: BOTTOM_MESSAGE_ROW,
+            col,
+        };
+        self.log_events.push(event.clone());
+        self.render_events.push(event);
+        if self.render_events.len() > MAX_PENDING_EVENTS {
+            let excess = self.render_events.len() - MAX_PENDING_EVENTS;
+            self.render_events.drain(..excess);
+        }
+    }
+
+    /// Вся непустая часть буфера с обрезанными пробелами по краям.
+    /// Возвращает колонку первого символа и готовый текст.
+    fn buffer_text(&self) -> Option<(u8, String)> {
+        let first = self.buffer.iter().position(|&b| b != b' ')?;
+        let last = self.buffer.iter().rposition(|&b| b != b' ')?;
+        let text = self.buffer[first..=last]
+            .iter()
+            .map(|&b| b as char)
+            .collect();
+        Some((first as u8, text))
     }
 
     /// Дописать готовые строки в журнал.
@@ -146,11 +203,8 @@ impl TextCapture {
             return;
         };
         for event in self.log_events.drain(..) {
-            let _ = writeln!(
-                file,
-                "[{:02}:{:02}] {}",
-                event.row, event.col, event.text
-            );
+            let time = Local::now().format("%Y-%m-%d %H:%M:%S%.3f").to_string();
+            let _ = writeln!(file, "{}", format_log_line(&event, &time));
         }
     }
 
@@ -158,6 +212,14 @@ impl TextCapture {
     fn take_events(&mut self) -> Vec<TextEvent> {
         std::mem::take(&mut self.render_events)
     }
+}
+
+/// Строка журнала: дата и время события, позиция на ZX-экране и текст.
+pub(super) fn format_log_line(event: &TextEvent, time: &str) -> String {
+    format!(
+        "[{time}] [{:02}:{:02}] {}",
+        event.row, event.col, event.text
+    )
 }
 
 /// Одна строка, которую игра напечатала на ZX-экране.
@@ -205,8 +267,8 @@ pub struct GameMsgTap {
     pub frames: u32,
     /// Последняя строка для каждой ZX-строки, в которую печатала игра.
     pub lines: Vec<GameMsgLine>,
-    /// Перехват готового текста нижней строки: очередь для рендера и
-    /// `debug.log` рядом с исполняемым файлом.
+    /// Перехват готового текста нижней строки: буфер строки, очередь для
+    /// рендера и `debug.log` рядом с исполняемым файлом.
     text_log: TextCapture,
 }
 
@@ -217,11 +279,38 @@ impl GameMsgTap {
         self.text_log.start();
     }
 
+    /// Включить или выключить перехват. При смене состояния буфер и очереди
+    /// очищаются, чтобы на новом экране не висели строки с прошлого.
+    ///
+    /// Приложение включает перехват только пока открыт нативный вид полёта
+    /// (режимы View); на заставке, карте, станции и в меню он выключен.
+    pub fn set_capture(&mut self, enabled: bool) {
+        if self.enabled != enabled {
+            self.clear();
+        }
+        self.enabled = enabled;
+        self.text_log.enabled = enabled;
+    }
+
     /// Добавить готовый символ, который игра вывела на экран (`sub_5DFB`).
     /// `row`/`col` — точная ячейка глифа после сдвига курсора. Для журнала
     /// берутся только символы нижней строки сообщений (`BOTTOM_MESSAGE_ROW`).
+    #[allow(dead_code)] // используется тестами
     pub fn capture_text_char(&mut self, c: u8, row: u8, col: u8) {
-        self.text_log.push(c, row, col);
+        self.text_log.push(c, row, col, MessageTag::default());
+    }
+
+    /// То же, что [`Self::capture_text_char`], но с состоянием сообщения из
+    /// памяти игры (`msgNumber`/`msgTimeLife`). По нему перехват понимает,
+    /// что началась новая надпись, и очищает буфер.
+    pub fn capture_text_char_tagged(
+        &mut self,
+        c: u8,
+        row: u8,
+        col: u8,
+        tag: MessageTag,
+    ) {
+        self.text_log.push(c, row, col, tag);
     }
 
     /// Завершить кадр журнала. Вызывается после прогона эмулятора: всё, что
@@ -248,7 +337,7 @@ impl GameMsgTap {
         &self.text_log.render_events
     }
 
-    /// Сбросить строки (при включении перехвата).
+    /// Сбросить строки и буфер (при включении перехвата).
     pub fn clear(&mut self) {
         self.text.clear();
         self.row = 0;

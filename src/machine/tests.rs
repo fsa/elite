@@ -174,15 +174,17 @@ fn text_capture_maps_quirks_and_skips_icons() {
     assert_eq!(
         t.text_events(),
         &[TextEvent {
-            text: "A!_B".to_string(),
+            // Значок занимает колонку, но не превращается в текст: на его
+            // месте остаётся пробел, поэтому слова не слипаются.
+            text: "A!_ B".to_string(),
             row: 13,
-            col: 5,
+            col: 6,
         }]
     );
 }
 
 #[test]
-fn text_capture_starts_new_line_on_gap() {
+fn text_capture_keeps_gaps_in_one_line() {
     let mut t = GameMsgTap::default();
     t.enable_text_capture_for_test();
     t.capture_text_char(b'A', BOTTOM_MESSAGE_ROW, 5);
@@ -190,25 +192,104 @@ fn text_capture_starts_new_line_on_gap() {
     t.capture_text_char(b'C', BOTTOM_MESSAGE_ROW, 9); // ещё разрыв
     finish_text_capture(&mut t);
 
+    // Разрывы не делят строку на события: пустые колонки остаются внутри.
     assert_eq!(
         t.text_events(),
-        &[
-            TextEvent {
-                text: "A".to_string(),
-                row: BOTTOM_MESSAGE_ROW,
-                col: 5,
-            },
-            TextEvent {
-                text: "B".to_string(),
-                row: BOTTOM_MESSAGE_ROW,
-                col: 7,
-            },
-            TextEvent {
-                text: "C".to_string(),
-                row: BOTTOM_MESSAGE_ROW,
-                col: 9,
-            },
-        ]
+        &[TextEvent {
+            text: "A B C".to_string(),
+            row: BOTTOM_MESSAGE_ROW,
+            col: 5,
+        }]
+    );
+}
+
+#[test]
+fn text_capture_keeps_parts_from_different_frames() {
+    let mut t = GameMsgTap::default();
+    t.enable_text_capture_for_test();
+    let tag = MessageTag {
+        number: 0xC0,
+        life: 14,
+    };
+    for (i, c) in b"HYPERSPACE -- ".iter().enumerate() {
+        t.capture_text_char_tagged(*c, BOTTOM_MESSAGE_ROW, 5 + i as u8, tag);
+    }
+    finish_text_capture(&mut t);
+    assert_eq!(t.text_events().last().unwrap().text, "HYPERSPACE --");
+
+    // Второй кусок приходит в следующем кадре. Буфер хранит первый, поэтому
+    // событие содержит всю строку, а не только хвост.
+    let next = MessageTag {
+        life: tag.life - 1,
+        ..tag
+    };
+    for (i, c) in b"LAVE".iter().enumerate() {
+        t.capture_text_char_tagged(*c, BOTTOM_MESSAGE_ROW, 19 + i as u8, next);
+    }
+    finish_text_capture(&mut t);
+    assert_eq!(
+        t.text_events().last().unwrap().text,
+        "HYPERSPACE -- LAVE"
+    );
+}
+
+#[test]
+fn text_capture_starts_fresh_for_new_message() {
+    let mut t = GameMsgTap::default();
+    t.enable_text_capture_for_test();
+    let old = MessageTag {
+        number: 0xC0,
+        life: 10,
+    };
+    for (i, c) in b"OLD".iter().enumerate() {
+        t.capture_text_char_tagged(*c, BOTTOM_MESSAGE_ROW, 5 + i as u8, old);
+    }
+    finish_text_capture(&mut t);
+    assert_eq!(t.text_events().last().unwrap().text, "OLD");
+
+    // Новая надпись с тем же номером, но снова взведённым временем жизни.
+    let new = MessageTag {
+        number: 0xC0,
+        life: 14,
+    };
+    for (i, c) in b"NEW".iter().enumerate() {
+        t.capture_text_char_tagged(*c, BOTTOM_MESSAGE_ROW, 5 + i as u8, new);
+    }
+    finish_text_capture(&mut t);
+    assert_eq!(
+        t.text_events().last().unwrap().text,
+        "NEW",
+        "хвост старой строки остался"
+    );
+}
+
+#[test]
+fn text_capture_clears_on_leaving_view() {
+    let mut t = GameMsgTap::default();
+    t.set_capture(true);
+    t.capture_text_char(b'X', BOTTOM_MESSAGE_ROW, 5);
+    t.end_text_frame();
+    assert!(!t.text_events().is_empty());
+
+    t.set_capture(false);
+    assert!(t.text_events().is_empty(), "событие осталось после выхода");
+
+    t.set_capture(true);
+    t.capture_text_char(b'Y', BOTTOM_MESSAGE_ROW, 5);
+    t.end_text_frame();
+    assert_eq!(t.text_events()[0].text, "Y");
+}
+
+#[test]
+fn text_log_line_has_date_and_time() {
+    let event = TextEvent {
+        text: "HYPERSPACE".to_string(),
+        row: 13,
+        col: 6,
+    };
+    assert_eq!(
+        super::game_msg::format_log_line(&event, "2026-11-06 12:34:56.789"),
+        "[2026-11-06 12:34:56.789] [13:06] HYPERSPACE"
     );
 }
 
