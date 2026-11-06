@@ -1,14 +1,9 @@
 //! Отрисовка переходов: тоннель станции и тоннель гиперпрыжка.
 
 use crate::display::Frame;
-use crate::render3d::{Rotation, Screen};
 
-use super::super::palette::{BG, STATION_RING_COLOR, TRANSITION_TEXT, WARP_RING_COLOR};
-use super::super::stars::Star;
-use super::super::view;
-use super::super::Flight;
+use super::super::palette::{BG, STATION_RING_COLOR, WARP_RING_COLOR};
 use super::scene::draw_planet;
-use super::text::draw_centered_text;
 
 /// Радиус планеты на экране, доля меньшей стороны вида.
 ///
@@ -35,6 +30,62 @@ const STATION_RING_PERIOD: f32 = 2.0;
 const STATION_RING_STOP: f32 = 7.0;
 /// Сколько белых колец рисуется в тоннеле станции.
 const STATION_RING_COUNT: usize = 6;
+
+/// Насколько далеко от камеры выход трубы гиперпрыжка в начале ролика.
+///
+/// Вдвое дальше, чем у станции: начальное кольцо получается примерно вдвое
+/// меньше по диаметру, и игровое пространство открывается постепенно.
+const HYPERSPACE_EXIT_DISTANCE_START: f32 = 14.0;
+/// Сколько длится тоннель гиперпрыжка.
+///
+/// Оригинал ведёт трубу счётчиком `byte_93D2` (0x42 = 66 шагов), но шаг
+/// приходится примерно на 7.5 кадров основного цикла, поэтому весь переход
+/// занимает около 500 кадров (~10 с). Ролик должен тянуться до самого конца
+/// перехода, иначе труба заканчивается задолго до смены системы.
+const HYPERSPACE_EXIT_TIME: f32 = 10.0;
+/// За сколько секунд кольцо гиперпрыжка пролетает путь до края вида.
+const HYPERSPACE_RING_PERIOD: f32 = 0.6;
+/// Когда в тоннеле гиперпрыжка перестают рождаться кольца.
+///
+/// Кольца идут весь ролик и пропадают только когда выходное кольцо уходит
+/// за край вида, открывая сцену новой системы.
+const HYPERSPACE_RING_STOP: f32 = HYPERSPACE_EXIT_TIME;
+/// Сколько колец рисуется в тоннеле гиперпрыжка.
+const HYPERSPACE_RING_COUNT: usize = 8;
+
+/// Геометрия трубы перехода: кольца на стенке и центральный выход.
+struct Tunnel {
+    /// Сколько колец рисуется на стенке.
+    ring_count: usize,
+    /// За сколько секунд кольцо пролетает путь до края вида.
+    ring_period: f32,
+    /// Когда кольца перестают рождаться.
+    ring_stop: f32,
+    /// Во сколько раз выход дальше камеры в начале ролика.
+    distance_start: f32,
+    /// За сколько секунд камера долетает до выхода.
+    time: f32,
+    /// Цвет колец трубы.
+    color: u32,
+}
+
+const STATION_TUNNEL: Tunnel = Tunnel {
+    ring_count: STATION_RING_COUNT,
+    ring_period: STATION_RING_PERIOD,
+    ring_stop: STATION_RING_STOP,
+    distance_start: STATION_EXIT_DISTANCE_START,
+    time: STATION_EXIT_TIME,
+    color: STATION_RING_COLOR,
+};
+
+const HYPERSPACE_TUNNEL: Tunnel = Tunnel {
+    ring_count: HYPERSPACE_RING_COUNT,
+    ring_period: HYPERSPACE_RING_PERIOD,
+    ring_stop: HYPERSPACE_RING_STOP,
+    distance_start: HYPERSPACE_EXIT_DISTANCE_START,
+    time: HYPERSPACE_EXIT_TIME,
+    color: WARP_RING_COLOR,
+};
 
 /// Тоннель станции: камера летит к выходу трубы.
 ///
@@ -123,137 +174,62 @@ fn mask_outside_aperture(
 /// как `1 / distance`: в конце кольцо проносится мимо и уходит за экран.
 /// `None` — кольцо уже за камерой.
 fn station_gate_radius(planet_r: f32, elapsed: f32) -> Option<f32> {
-    let t = (elapsed / STATION_EXIT_TIME).clamp(0.0, 1.0);
-    let distance = STATION_EXIT_DISTANCE_START * (1.0 - t);
+    tunnel_gate_radius(planet_r, &STATION_TUNNEL, elapsed)
+}
+
+/// Радиус выхода трубы на момент `elapsed` для любой трубы.
+fn tunnel_gate_radius(base_r: f32, tunnel: &Tunnel, elapsed: f32) -> Option<f32> {
+    let t = (elapsed / tunnel.time).clamp(0.0, 1.0);
+    let distance = tunnel.distance_start * (1.0 - t);
     if distance <= f32::EPSILON {
         return None;
     }
-    Some((planet_r.max(4.0) / distance).max(1.0))
+    Some((base_r.max(4.0) / distance).max(1.0))
 }
 
-/// Тоннель гиперпрыжка/стыковки: полосы звёзд и расходящиеся кольца.
+/// Тоннель гиперпрыжка: игровая сцена видна только в центральном кольце.
+///
+/// Сцена уже нарисована вызывающей стороной. Всё снаружи выходного кольца
+/// закрывается фоном, а на стенке трубы рисуются кольца. В начале кольцо
+/// маленькое, поэтому виден лишь узкий тоннель; к концу оно проносится мимо
+/// камеры и открывает всю сцену.
 #[allow(clippy::too_many_arguments)]
-pub(super) fn draw_warp(
-    f: &Flight,
+pub(super) fn draw_hyperspace(
     frame: &mut Frame,
-    font: &[u8],
-    screen: &Screen,
     vx: i32,
     vy: i32,
     vw: i32,
     vh: i32,
     s: i32,
     elapsed: f32,
-    title: Option<&str>,
-) {
-    let view_rot = view::rotation(f.view_dir);
-    draw_star_streaks(
-        frame,
-        screen,
-        &f.stars.stars,
-        &view_rot,
-        vx,
-        vy,
-        vw,
-        vh,
-        300.0 + elapsed * 1400.0,
-    );
-    draw_tunnel_rings(
-        frame,
-        vx,
-        vy,
-        vw,
-        vh,
-        (elapsed * 1.7).fract(),
-        6,
-        WARP_RING_COLOR,
-    );
-    if let Some(title) = title {
-        let scale = (s * 2).max(1) as usize;
-        draw_centered_text(
-            frame,
-            font,
-            vx,
-            vy + 4 * s,
-            vw,
-            title,
-            TRANSITION_TEXT,
-            scale,
-        );
-    }
-}
-
-/// Полосы звёзд, летящих на камеру.
-///
-/// Для каждой звезды строим отрезок из её чуть более далёкого положения в
-/// текущее: в перспективе он расходится от центра, как след разгона.
-#[allow(clippy::too_many_arguments)]
-fn draw_star_streaks(
-    frame: &mut Frame,
-    screen: &Screen,
-    stars: &[Star],
-    view_rot: &Rotation,
-    vx: i32,
-    vy: i32,
-    vw: i32,
-    vh: i32,
-    streak: f32,
 ) {
     if vw <= 0 || vh <= 0 {
         return;
     }
-    let cam = view_rot.transpose();
-    let (xmin, ymin) = (vx as f32, vy as f32);
-    let (xmax, ymax) = ((vx + vw - 1) as f32, (vy + vh - 1) as f32);
-    for star in stars {
-        let v = cam.apply(star.pos);
-        if v[2] <= view::NEAR {
-            continue;
-        }
-        let near = v[2];
-        let far = near + streak.max(1.0);
-        let x1 = screen.cx + v[0] / near * screen.k;
-        let y1 = screen.cy - v[1] / near * screen.k;
-        let x0 = screen.cx + v[0] / far * screen.k;
-        let y0 = screen.cy - v[1] / far * screen.k;
-        let Some((ax, ay, bx, by)) = view::clip_segment_2d(x0, y0, x1, y1, xmin, ymin, xmax, ymax)
-        else {
-            continue;
-        };
-        let bright = 0.35 + star.mag as f32 / 255.0 * 0.65;
-        let c = 0xFF00_0000
-            | ((bright * 210.0) as u32) << 16
-            | ((bright * 235.0) as u32) << 8
-            | (bright * 255.0) as u32;
-        frame.line(ax, ay, bx, by, c);
-    }
-}
-
-/// Расходящиеся кольца тоннеля. `phase` — 0..1, сдвиг между кольцами.
-#[allow(clippy::too_many_arguments)]
-fn draw_tunnel_rings(
-    frame: &mut Frame,
-    vx: i32,
-    vy: i32,
-    vw: i32,
-    vh: i32,
-    phase: f32,
-    count: usize,
-    color: u32,
-) {
-    if vw <= 0 || vh <= 0 || count == 0 {
-        return;
-    }
     let cx = vx + vw / 2;
     let cy = vy + vh / 2;
+    let min_dim = vw.min(vh) as f32;
     let max_r = ((vw * vw + vh * vh) as f32).sqrt() * 0.5;
-    for i in 0..count {
-        let t = (i as f32 / count as f32 + phase).fract();
-        // В перспективе кольцо ускоряется по мере приближения к камере.
-        let r = (t * t * max_r).round() as i32;
-        if r > 1 {
-            frame.circle(cx, cy, r, color);
-        }
+    let base_r = (min_dim * STATION_PLANET_RADIUS).max(4.0);
+    let gate_r = tunnel_gate_radius(base_r, &HYPERSPACE_TUNNEL, elapsed);
+    let ring_ratio = tunnel_ring_ratio(base_r, max_r, &HYPERSPACE_TUNNEL);
+    if let Some(gate) = gate_r {
+        mask_outside_aperture(frame, vx, vy, vw, vh, cx, cy, gate);
+    }
+    let inner_r = gate_r.unwrap_or(max_r * 2.0);
+    draw_tunnel_rings(
+        frame,
+        cx,
+        cy,
+        max_r,
+        inner_r,
+        ring_ratio,
+        elapsed,
+        s,
+        &HYPERSPACE_TUNNEL,
+    );
+    if let Some(r) = gate_r.filter(|&r| r <= max_r) {
+        draw_thick_circle(frame, cx, cy, r, (s / 2).max(1), WARP_RING_COLOR);
     }
 }
 
@@ -262,24 +238,23 @@ fn draw_tunnel_rings(
 /// Считается один раз по начальному положению выхода, чтобы кольца уходили
 /// за экран, а не растягивались вместе с ним.
 fn station_ring_ratio(planet_r: f32, max_r: f32) -> f32 {
-    let start = (planet_r / STATION_EXIT_DISTANCE_START).max(1.0);
-    let span = STATION_RING_COUNT as f32 - 0.5;
+    tunnel_ring_ratio(planet_r, max_r, &STATION_TUNNEL)
+}
+
+fn tunnel_ring_ratio(base_r: f32, max_r: f32, tunnel: &Tunnel) -> f32 {
+    if tunnel.ring_count == 0 {
+        return 1.0;
+    }
+    let start = (base_r / tunnel.distance_start).max(1.0);
+    let span = tunnel.ring_count as f32 - 0.5;
     // Чуть не доводим внешнее кольцо до угла вида, чтобы оно гарантированно
     // пересекало край и не отбрасывалось проверкой `r <= max_r`.
     (max_r * 0.98 / start)
         .max(1.0)
-        .powf(STATION_RING_COUNT as f32 / span)
+        .powf(tunnel.ring_count as f32 / span)
 }
 
-/// Белые кольца трубы.
-///
-/// Кольца равномерно распределены по стенке трубы от выхода до камеры
-/// (геометрическая прогрессия радиусов). Камера летит вперёд, поэтому каждое
-/// кольцо растёт и уходит за экран, а у выхода рождается новое. В начале
-/// выход далеко и колец много, к концу ролика их становится всё меньше.
-///
-/// `inner_r` — радиус выхода: при вылете в нём планета, при стыковке —
-/// чёрный фон.
+/// Белые кольца трубы станции.
 #[allow(clippy::too_many_arguments)]
 fn draw_station_rings(
     frame: &mut Frame,
@@ -291,9 +266,40 @@ fn draw_station_rings(
     elapsed: f32,
     s: i32,
 ) {
+    draw_tunnel_rings(
+        frame,
+        cx,
+        cy,
+        max_r,
+        inner_r,
+        ring_ratio,
+        elapsed,
+        s,
+        &STATION_TUNNEL,
+    );
+}
+
+/// Кольца на стенке трубы: от выхода до камеры.
+///
+/// Кольца равномерно распределены по стенке (геометрическая прогрессия
+/// радиусов). Камера летит вперёд, поэтому каждое кольцо растёт и уходит за
+/// экран, а у выхода рождается новое. В начале выход далеко и колец много,
+/// к концу ролика их становится всё меньше.
+#[allow(clippy::too_many_arguments)]
+fn draw_tunnel_rings(
+    frame: &mut Frame,
+    cx: i32,
+    cy: i32,
+    max_r: f32,
+    inner_r: f32,
+    ring_ratio: f32,
+    elapsed: f32,
+    s: i32,
+    tunnel: &Tunnel,
+) {
     let thickness = (s / 2).max(1);
-    for r in station_ring_radii(inner_r, max_r, ring_ratio, elapsed) {
-        draw_thick_circle(frame, cx, cy, r as f32, thickness, STATION_RING_COLOR);
+    for r in tunnel_ring_radii(inner_r, max_r, ring_ratio, elapsed, tunnel) {
+        draw_thick_circle(frame, cx, cy, r as f32, thickness, tunnel.color);
     }
 }
 
@@ -307,17 +313,30 @@ fn draw_thick_circle(frame: &mut Frame, cx: i32, cy: i32, r: f32, thickness: i32
     }
 }
 
-/// Радиусы видимых колец на момент `elapsed`, от центра к краю вида.
+/// Радиусы видимых колец станции на момент `elapsed`.
+#[cfg(test)]
 fn station_ring_radii(inner_r: f32, max_r: f32, ring_ratio: f32, elapsed: f32) -> Vec<i32> {
-    if inner_r <= 1.0 || max_r <= inner_r + 1.0 {
+    tunnel_ring_radii(inner_r, max_r, ring_ratio, elapsed, &STATION_TUNNEL)
+}
+
+/// Радиусы видимых колец на момент `elapsed`, от центра к краю вида.
+fn tunnel_ring_radii(
+    inner_r: f32,
+    max_r: f32,
+    ring_ratio: f32,
+    elapsed: f32,
+    tunnel: &Tunnel,
+) -> Vec<i32> {
+    if inner_r <= 1.0 || max_r <= inner_r + 1.0 || tunnel.ring_count == 0 {
         return Vec::new();
     }
-    let phase = (elapsed / STATION_RING_PERIOD).fract();
-    let mut radii = Vec::with_capacity(STATION_RING_COUNT);
-    for i in 0..STATION_RING_COUNT {
+    let phase = (elapsed / tunnel.ring_period).fract();
+    let mut radii = Vec::with_capacity(tunnel.ring_count);
+    for i in 0..tunnel.ring_count {
         // 0 — кольцо только что родилось у выхода, 1 — у края вида.
-        let t = ((i as f32 + 0.5) / STATION_RING_COUNT as f32 + phase).fract();
-        if !ring_is_alive(t, elapsed) {
+        let t = ((i as f32 + 0.5) / tunnel.ring_count as f32 + phase).fract();
+        // После `ring_stop` новые кольца не рождаются, а старые долетают.
+        if elapsed - t * tunnel.ring_period > tunnel.ring_stop {
             continue;
         }
         let r = inner_r * ring_ratio.powf(t);
@@ -328,12 +347,6 @@ fn station_ring_radii(inner_r: f32, max_r: f32, ring_ratio: f32, elapsed: f32) -
     radii.sort_unstable();
     radii.dedup();
     radii
-}
-
-/// Живо ли кольцо: после [`STATION_RING_STOP`] новые не рождаются, а старые
-/// долетают и уходят за экран.
-fn ring_is_alive(t: f32, elapsed: f32) -> bool {
-    elapsed - t * STATION_RING_PERIOD <= STATION_RING_STOP
 }
 
 #[cfg(test)]
@@ -532,5 +545,86 @@ mod tests {
             frame.pixels().iter().all(|&p| p == BG),
             "в конце стыковки остались кольца"
         );
+    }
+
+    #[test]
+    fn hyperspace_starts_with_smaller_ring_than_station() {
+        let base_r = 100.0;
+        let hyper = tunnel_gate_radius(base_r, &HYPERSPACE_TUNNEL, 0.0).unwrap();
+        let station = station_gate_radius(base_r, 0.0).unwrap();
+        assert!(
+            hyper < station,
+            "кольцо гиперпрыжка не меньше станционного: {hyper} >= {station}"
+        );
+        assert!(
+            (station / hyper - 2.0).abs() < 0.01,
+            "кольцо гиперпрыжка не вдвое меньше станционного: {hyper} vs {station}"
+        );
+    }
+
+    #[test]
+    fn hyperspace_gate_flies_past_by_the_end() {
+        let base_r = 100.0;
+        let max_r = 141.4;
+        let late = tunnel_gate_radius(base_r, &HYPERSPACE_TUNNEL, HYPERSPACE_EXIT_TIME * 0.99)
+            .unwrap();
+        assert!(
+            late > max_r,
+            "кольцо гиперпрыжка не улетело за экран к концу: {late}"
+        );
+        assert!(
+            tunnel_gate_radius(base_r, &HYPERSPACE_TUNNEL, HYPERSPACE_EXIT_TIME).is_none(),
+            "кольцо гиперпрыжка осталось перед камерой в конце"
+        );
+    }
+
+    #[test]
+    fn hyperspace_rings_last_the_whole_transition() {
+        let base_r = 64.0;
+        let max_r = ((256.0f32 * 256.0 + 128.0 * 128.0).sqrt()) * 0.5;
+        let ratio = tunnel_ring_ratio(base_r, max_r, &HYPERSPACE_TUNNEL);
+        // Кольца должны быть видны почти до самого конца ролика, а не
+        // заканчиваться на его середине.
+        for part in [0.1, 0.3, 0.5, 0.7, 0.9, 0.95] {
+            let elapsed = HYPERSPACE_EXIT_TIME * part;
+            let gate = tunnel_gate_radius(base_r, &HYPERSPACE_TUNNEL, elapsed).unwrap();
+            let radii = tunnel_ring_radii(gate, max_r, ratio, elapsed, &HYPERSPACE_TUNNEL);
+            assert!(
+                !radii.is_empty(),
+                "на {elapsed} с (доля {part}) в тоннеле гиперпрыжка нет колец"
+            );
+        }
+    }
+
+    #[test]
+    fn hyperspace_tunnel_covers_the_real_transition() {
+        // Реальный переход Z80 длится около 500 кадров (~10 с). Ролик не
+        // должен заканчиваться заметно раньше, иначе труба пропадает до
+        // смены системы.
+        assert!(
+            HYPERSPACE_EXIT_TIME >= 9.5,
+            "тоннель гиперпрыжка короче настоящего перехода: {HYPERSPACE_EXIT_TIME} с"
+        );
+    }
+
+    #[test]
+    fn hyperspace_shows_scene_only_inside_the_ring() {
+        const SCENE: u32 = 0xFF00_8040;
+        let (w, h) = (200usize, 200usize);
+        let mut frame = Frame::new(w, h);
+        frame.fill_rect(0, 0, w, h, SCENE);
+        draw_hyperspace(&mut frame, 0, 0, w as i32, h as i32, 1, 0.0);
+        let gate = tunnel_gate_radius(100.0, &HYPERSPACE_TUNNEL, 0.0).unwrap();
+        assert_eq!(pixel(&frame, 100, 100), SCENE, "в центре нет сцены");
+        for y in 0..h as i32 {
+            for x in 0..w as i32 {
+                let dx = (x - 100) as f32;
+                let dy = (y - 100) as f32;
+                if (dx * dx + dy * dy).sqrt() > gate + 2.0 {
+                    let p = pixel(&frame, x, y);
+                    assert_ne!(p, SCENE, "сцена видна за кольцом ({x},{y})");
+                }
+            }
+        }
     }
 }

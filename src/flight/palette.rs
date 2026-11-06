@@ -21,8 +21,6 @@ pub(super) fn planet_rim(color: u32) -> u32 {
     let g = ((color >> 8) & 0xFF) + 0x58;
     0xFF00_0000 | (g.min(0xFF) << 8)
 }
-/// Цвет надписей в переходе: приглушённый циан, чтобы не спорить с HUD.
-pub(super) const TRANSITION_TEXT: u32 = 0xFF80_FFFF;
 /// Белый — цвет подписи направления вида и строки гиперпрыжка, как у
 /// надписей на заставке (`E L I T E`, приглашение).
 pub(super) const VIEW_LABEL_COLOR: u32 = 0xFFD7_D7D7;

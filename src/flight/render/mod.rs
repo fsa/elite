@@ -57,20 +57,33 @@ pub(super) fn draw(f: &mut Flight, frame: &mut Frame, geom: &CockpitGeom, font: 
         Some(t) if t.kind == super::TransitionKind::Launch => {
             transition::draw_station(frame, vx, vy, vw, vh, s, t.elapsed, true, f.planet_color);
         }
-        Some(t) if t.kind == super::TransitionKind::Hyperspace && !t.warp => {
-            // До нуля отсчёта показываем обычный полёт: игрок ещё может
-            // осмотреться, а цифра говорит, сколько осталось.
+        Some(t) if t.kind == super::TransitionKind::Hyperspace => {
+            // Во время прыжка игра рисует обычное пространство, а тоннель
+            // ограничивает вид центральным кольцом. До нуля отсчёта
+            // показываем ещё и цифру.
             scene::draw_flight_scene(f, frame, &screen, &view_rot, view_bottom, s);
-            // Во время отсчёта верхнюю надпись рисуем сами (подпись вида):
-            // перехваченные игра печатает в поле зрения цифры, их здесь не
-            // показываем. Само число идёт слева в той же строке, что и
-            // подпись вида.
-            draw_view_label(f, frame, font, vx, vy, vw, s, false);
-            draw_jump_countdown(frame, font, vx, vy, s, t.countdown);
-            // Строку «HYPERSPACE -- <планета>» печатает сама игра; показываем
-            // перехваченный текст внизу вида, как и раньше.
-            if let Some(label) = f.messages.jump_label() {
-                draw_jump_label(frame, font, vx, vy, vw, vh, s, label);
+            if t.warp {
+                transition::draw_hyperspace(
+                    frame,
+                    vx,
+                    vy,
+                    vw,
+                    vh,
+                    s,
+                    t.warp_elapsed,
+                );
+            } else {
+                // Во время отсчёта верхнюю надпись рисуем сами (подпись
+                // вида): перехваченные игра печатает в поле зрения цифры,
+                // их здесь не показываем. Само число идёт слева в той же
+                // строке, что и подпись вида.
+                draw_view_label(f, frame, font, vx, vy, vw, s, false);
+                draw_jump_countdown(frame, font, vx, vy, s, t.countdown);
+                // Строку «HYPERSPACE -- <планета>» печатает сама игра;
+                // показываем перехваченный текст внизу вида, как и раньше.
+                if let Some(label) = f.messages.jump_label() {
+                    draw_jump_label(frame, font, vx, vy, vw, vh, s, label);
+                }
             }
         }
         Some(t) if t.kind == super::TransitionKind::Docking => {
@@ -87,21 +100,10 @@ pub(super) fn draw(f: &mut Flight, frame: &mut Frame, geom: &CockpitGeom, font: 
                 f.planet_color,
             );
         }
-        Some(t) => {
-            // Гиперпрыжок: только тоннель и полосы звёзд, без надписей.
-            transition::draw_warp(
-                f,
-                frame,
-                font,
-                &screen,
-                vx,
-                vy,
-                vw,
-                vh,
-                s,
-                t.warp_elapsed,
-                None,
-            );
+        Some(_) => {
+            // Остальные переходы (на данный момент их нет) — обычный вид.
+            scene::draw_flight_scene(f, frame, &screen, &view_rot, view_bottom, s);
+            draw_view_label(f, frame, font, vx, vy, vw, s, true);
         }
         None => {
             scene::draw_flight_scene(f, frame, &screen, &view_rot, view_bottom, s);
