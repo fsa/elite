@@ -3,10 +3,21 @@ name = "elite"
 version = "0.1.0"
 edition = "2024"
 
+[features]
+# Гибридный звук. По умолчанию собираются оба бэкенда: PipeWire пробуется
+# первым (Linux), cpal остаётся запасным и единственным на macOS/Windows.
+#   --no-default-features --features audio-pipewire  — только PipeWire
+#   --no-default-features --features audio-cpal     — только cpal
+default = ["audio-pipewire", "audio-cpal"]
+audio-pipewire = ["dep:pipewire"]
+audio-cpal = ["dep:cpal"]
+
 [dependencies]
 chrono = { version = "0.4.45", default-features = false, features = ["clock"] }
-pipewire = { version = "0.10", features = ["v0_3_49"] }
 rfd = "0.17.2"
+# Кросс-платформенный бэкенд: ALSA на Linux, CoreAudio на macOS, WASAPI на
+# Windows. На Linux для сборки нужны заголовки ALSA (alsa-lib-devel).
+cpal = { version = "0.18", optional = true }
 # Оконный слой — только нативный Wayland.  Клавиши берём как `physical_key`
 # (код позиции клавиши), поэтому раскладка на ввод не влияет.  `wayland-dlopen`
 # открывает libwayland-client динамически — dev-заголовки при сборке не нужны.
@@ -21,3 +32,8 @@ softbuffer = { version = "0.4", default-features = false, features = [
     "wayland",
     "wayland-dlopen",
 ] }
+
+[target.'cfg(target_os = "linux")'.dependencies]
+# Нативный PipeWire. Зависимость только для Linux и только при включённой
+# фиче `audio-pipewire`, поэтому на macOS она не собирается.
+pipewire = { version = "0.10", features = ["v0_3_49"], optional = true }

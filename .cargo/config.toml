@@ -1,6 +1,8 @@
-# bindgen (используется крейтом `pipewire` через pipewire-sys/libspa-sys) на
-# этом хосте установлен только как clang-libs, без пакета `clang`, поэтому не
-# находит встроенные заголовки clang (stdbool.h и т.п.). Указываем каталоги
-# вручную. При обновлении clang/gcc путь нужно поправить.
+# bindgen (используется крейтом `pipewire` через pipewire-sys/libspa-sys
+# только при сборке с фичей `audio-pipewire`) на этом хосте установлен только
+# как clang-libs, без пакета `clang`, поэтому не находит встроенные заголовки
+# clang (stdbool.h и т.п.). Указываем каталоги вручную. При обновлении
+# clang/gcc путь нужно поправить. Для сборки только с cpal эта настройка не
+# используется.
 [env]
 BINDGEN_EXTRA_CLANG_ARGS = "-isystem /usr/lib/clang/23/include -isystem /usr/lib/gcc/x86_64-redhat-linux/16/include"

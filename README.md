@@ -362,13 +362,34 @@ ZX-кадр рисуется по-прежнему в 256x192 (видеопам�
 ## Звук
 
 Игра использует только 1-битный бипер ZX-Spectrum (порт `0xFE`). Звук
-выводится через PipeWire; `--mute` отключает вывод, `--wav FILE` сохраняет
-моно-PCM (44100 Гц) в WAV-файл.
+выводится через PipeWire (основной бэкенд на Linux) или cpal (запасной и
+кросс-платформенный: ALSA на Linux, CoreAudio на macOS). `--mute` отключает
+вывод, `--wav FILE` сохраняет моно-PCM (44100 Гц) в WAV-файл.
 
-Для сборки нужны заголовки PipeWire (`pipewire-devel`/`libpipewire-0.3`).
-Крейт `pipewire` использует bindgen: если установлен только `clang-libs` без
-пакета `clang`, каталоги заголовков clang приходится задавать вручную — см.
-`.cargo/config.toml` (`BINDGEN_EXTRA_CLANG_ARGS`).
+При запуске через `run.sh`/`build.sh`/`check.sh` бэкенд выбирается
+автоматически: если `pkg-config` находит `libpipewire-0.3`, собирается
+PipeWire с запасным cpal; иначе — только cpal. Принудительный выбор:
+
+- `ELITE_AUDIO=pipewire ./run.sh` или `./run.sh --pipewire` — только PipeWire;
+- `ELITE_AUDIO=cpal ./run.sh` или `./run.sh --cpal` — только cpal;
+- то же для `./build.sh` и `./check.sh`;
+- напрямую cargo: `cargo build --release --no-default-features --features audio-pipewire`
+  или `cargo build --release --no-default-features --features audio-cpal`.
+  По умолчанию включены обе фичи (`audio-pipewire` + `audio-cpal`): PipeWire
+  пробуется первым, при ошибке инициализации происходит переход на cpal.
+
+Прямой `cargo build` не умеет сам менять набор фич по установленным пакетам,
+поэтому автоопределение сделано в `build.sh`/`run.sh`/`check.sh`. На Linux без
+заголовков PipeWire собирайте через `./build.sh` (он выберет cpal) или явно:
+`cargo build --release --no-default-features --features audio-cpal`.
+
+Для сборки PipeWire-бэкенда нужны заголовки PipeWire
+(`pipewire-devel`/`libpipewire-0.3`); для cpal на Linux — заголовки ALSA
+(`alsa-lib-devel`/`libasound2-dev`). На macOS PipeWire не собирается, нужен
+только Xcode Command Line Tools. Крейт `pipewire` использует bindgen: если
+установлен только `clang-libs` без пакета `clang`, каталоги заголовков clang
+приходится задавать вручную — см. `.cargo/config.toml`
+(`BINDGEN_EXTRA_CLANG_ARGS`); при сборке только с cpal bindgen не используется.
 
 Образ версии Кладова (`zx_bin/kladov.bin`) собирается из снапшота
 `zx_src/kladov.snapshot` скриптом `python3 tools/make_kladov_image.py` (запускается
