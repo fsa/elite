@@ -97,51 +97,63 @@ pub(crate) fn teleport_kladov_hook(cpu: &mut Z80, m: &mut Spectrum) -> u64 {
     teleport(cpu, m, KLADOV_SAVE)
 }
 
-/// Нативная замена ветки «в полёте» перед вызовом `MenuSaveLoad`: переводит
-/// управление прямо на вызов, как если бы игрок был на станции.
+/// Тело хука загрузки (см. [`request_load`]).
 ///
-/// Перед этим обязательно вызывается родная `SaveCocpitInBuffer`
-/// ([`SaveLayout::save_cocpit`]): буфер кокпита актуален только на станции, а в
-/// полёте его затирает буфер космического вида. Без этого перезапуск нарисовал
-/// бы вместо кокпита мусор (перезапуск копирует `DataCocpit` на экран, а затем
-/// сохраняет получившийся экран обратно в буфер). Вызов делаем «вложенным»:
-/// кладём адрес возврата на стек игры и встаём на вход рутины — её `ret` вернёт
-/// управление на вызов `MenuSaveLoad`. Стек остаётся сбалансированным.
-pub(crate) fn load_gate(cpu: &mut Z80, m: &mut Spectrum, layout: SaveLayout) -> u64 {
-    // Удаляем одноразовый хук в любом случае
-    let gate_addr = layout.load_gate;
-    if let Some(gate) = gate_addr {
-        m.hooks.remove(&gate);
+/// Родная загрузка из меню возвращает управление на `loc_7394`: та сбрасывает
+/// `WhatOnScreen`, очищает экран и рисует кабину из `DataCocpit`, после чего
+/// попадает в цикл заставки. Когда игрок нажимает `SPACE`, ветка
+/// [`SaveLayout::docked_setup`] вызывает `SaveCocpitInBuffer` — то есть
+/// сохраняет в `DataCocpit` уже нарисованную кабину.
+///
+/// Поэтому просто перейти в `docked_setup` нельзя: при загрузке со станции
+/// (а сохраниться можно только там) `SaveCocpitInBuffer` записал бы в буфер
+/// текущий экран станции, и после вылета приборная панель оказалась бы
+/// забита станционным текстом. Повторяем подготовку оригинала, но без
+/// заставки и ожидания `SPACE`: `ClsAndPrintRamk` → `PrnCocpit_Ifn` →
+/// `docked_init` (та же ветка старта, но после настройки `FlagsSetUp`).
+pub(crate) fn load_into_docked(cpu: &mut Z80, m: &mut Spectrum, layout: SaveLayout) -> u64 {
+    // Снимаем хук со всех точек, куда его ставил `request_load`.
+    for &addr in layout.intro_loop_start {
+        m.hooks.remove(&addr);
+        m.hook_max.remove(&addr);
     }
-    // Если загрузка не запрошена (случайный проход через gate), просто
-    // пропускаем инструкцию jr nz (как будто не взята в docked-состоянии)
-    if !m.load_requested {
+    m.hooks.remove(&layout.game_main);
+    m.hook_max.remove(&layout.game_main);
+    m.load_requested = false;
+
+    // На виде из кабины (и на заставке, где `WhatOnScreen` тоже 0) нижняя
+    // треть экрана уже занята кабиной — `SaveCocpitInBuffer` ниже снимет её
+    // ровно как при обычном старте. Перерисовывать нечего.
+    if m.mem[layout.what_on_screen as usize] < 4 {
+        cpu.pc = layout.docked_init;
         m.hook_yield = true;
-        if let Some(gate) = gate_addr {
-            cpu.pc = gate + 2;
-        } else {
-            // fallback: не трогаем PC
-        }
         return 0;
     }
-    // load_requested == true: форсируем путь к MenuSaveLoad с обновлением кокпит-буферов
+
+    // Станция, торговля, карта и прочие экраны: в нижней трети экрана лежит
+    // не кабина. Родной `loc_7394` в этом случае сбрасывает `WhatOnScreen`,
+    // очищает экран и рисует кабину из `DataCocpit`, а уже потом заставка по
+    // `SPACE` уходит в `docked_setup`. Повторяем эту подготовку без заставки:
+    // `ClsAndPrintRamk` → `PrnCocpit_Ifn` → `docked_init`.
+    m.mem[layout.what_on_screen as usize] = 0;
+
+    // Возвраты на стеке: `ClsAndPrintRamk` вернётся в `PrnCocpit_Ifn`, а та —
+    // в `docked_init`. `docked_init` уже не возвращается (уходит в `GameMain`).
+    let mut sp = cpu.sp.wrapping_sub(2);
+    m.mem[sp as usize] = layout.docked_init as u8;
+    m.mem[sp.wrapping_add(1) as usize] = (layout.docked_init >> 8) as u8;
+    sp = sp.wrapping_sub(2);
+    m.mem[sp as usize] = layout.print_cockpit as u8;
+    m.mem[sp.wrapping_add(1) as usize] = (layout.print_cockpit >> 8) as u8;
+    cpu.sp = sp;
+    cpu.pc = layout.clear_screen;
     m.hook_yield = true;
-    match layout.save_cocpit {
-        Some(save) => {
-            let ret = layout.menu_save_load_callsite;
-            cpu.sp = cpu.sp.wrapping_sub(2);
-            m.mem[cpu.sp as usize] = ret as u8;
-            m.mem[cpu.sp.wrapping_add(1) as usize] = (ret >> 8) as u8;
-            cpu.pc = save;
-        }
-        None => cpu.pc = layout.menu_save_load_callsite,
-    }
     0
 }
 
-/// Ветка «в полёте» для версии Кладова (`0x7493`).
-pub(crate) fn load_gate_kladov_hook(cpu: &mut Z80, m: &mut Spectrum) -> u64 {
-    load_gate(cpu, m, KLADOV_SAVE)
+/// Хук загрузки для версии Кладова.
+pub(crate) fn load_kladov_hook(cpu: &mut Z80, m: &mut Spectrum) -> u64 {
+    load_into_docked(cpu, m, KLADOV_SAVE)
 }
 
 /// Включить перехват игрового сохранения: при вызове `MenuSaveLoad` игра
@@ -162,41 +174,16 @@ pub fn install_save(m: &mut Spectrum, layout: SaveLayout) {
 /// открывается бесконечно). Хук подменяет рутину целиком, поэтому сброс
 /// делаем сами.
 ///
-/// Если приложение попросило загрузку ([`request_load`]), возвращает
-/// «загружено» (A=0, Z=0) — главный цикл уходит на ветку переинициализации
-/// (`jp nz, 0x7394`).
-///
-/// Иначе возвращает «не загружено» (A=0, Z=1), как родная рутина при обычном
-/// возврате: главный цикл только выставит `machine.save_requested`.
+/// Возвращает «не загружено» (`A=0`, `Z=1`) — как родная рутина при обычном
+/// возврате: главный цикл не уходит на перезапуск, а только выставляет
+/// `machine.save_requested`. Загрузка идёт отдельным путём ([`request_load`])
+/// и `MenuSaveLoad` не использует.
 pub(crate) fn menu_save_load(cpu: &mut Z80, m: &mut Spectrum, layout: SaveLayout) -> u64 {
     let a = layout.control_key1 as usize;
     m.mem[a..a + PRESSED_KEY_BYTES].fill(0);
     cpu.a = 0;
-    if m.load_requested {
-        m.load_requested = false;
-        m.save_requested = false;
-        // Обновим буферы кокпита перед перезапуском, чтобы панель
-        // отрисовалась корректно (особенно при загрузке со станции).
-        if layout.save_cocpit.is_some() {
-            // Вложенный вызов: кладём адрес возврата 0 (пустышка) и
-            // временно уходим в SaveCocpitInBuffer; она сделает RET.
-            // Но нам нужно вернуться обратно в этот хук? Проще -
-            // Копируем буферы кокпита вручную (DataCocpit -> 0xC000, 0x5A00 -> 0x5B00)
-            {
-                let mem = &mut m.mem;
-                for i in 0..0x800 {
-                    mem[0xC000 + i] = mem[0x5000 + i];
-                }
-                for i in 0..0x100 {
-                    mem[0x5B00 + i] = mem[0x5A00 + i];
-                }
-            }
-        }
-        cpu.f &= !ZF;
-    } else {
-        m.save_requested = true;
-        cpu.f |= ZF;
-    }
+    m.save_requested = true;
+    cpu.f |= ZF;
     0
 }
 

@@ -1174,12 +1174,83 @@ use crate::world::{current_planet_color, save_layout_kladov, scene_markers};
         // Пункт «загрузить» (2) работает: просит загрузку у игры.
         app.menu_sel = 2;
         app.key_event(KeyCode::Enter, true, false);
+        app.key_event(KeyCode::Enter, false, false);
         assert!(!app.menu, "загрузка должна закрыть меню");
         assert!(app.machine.load_requested, "загрузка не запрошена");
     }
 
-    /// Меню паузы в игре: стрелки двигают выбор, Enter по «сохранить»
-    /// закрывает меню и просит игру сохраниться.
+    /// Загрузка из меню с заставки доводит игру до станции, и после неё
+    /// клавиши снова управляют игрой, а не остаются в нативном экране.
+    #[test]
+    fn menu_load_from_intro_leaves_station_playable() {
+        let base = env!("CARGO_MANIFEST_DIR");
+        let dir = format!("{base}/tmp");
+        fs::create_dir_all(&dir).unwrap();
+        let path = format!("{dir}/app_load_intro.zxelite");
+
+        // Готовим сохранение: стартуем и сохраняемся на станции.
+        let (intro, game) = scene_markers();
+        let mut src = boot_kladov();
+        src.intro_range = intro;
+        src.game_marker = game;
+        for f in 0..900u64 {
+            src.release_all_keys();
+            if f >= 30 && f % 16 < 6 {
+                src.set_key(7, 0, true); // SPACE
+            }
+            src.run_frame();
+        }
+        assert_eq!(src.mem[0x7104], 0, "подготовка: не на станции");
+        native::commander_save(&mut src, &path, save_layout_kladov()).unwrap();
+
+        // Свежий запуск: заставка, меню паузы, пункт «загрузить».
+        let mut m = boot_kladov();
+        m.intro_range = intro;
+        m.game_marker = game;
+        for _ in 0..60 {
+            m.run_frame();
+        }
+        assert!(m.intro_seen, "подготовка: нет заставки");
+        let mut opts = test_options();
+        opts.save = Some(path.clone());
+        let mut app = App::new(m, &opts);
+        app.key_event(KeyCode::Escape, true, false);
+        assert!(app.menu, "Esc не открыл меню");
+        app.menu_sel = 2;
+        app.key_event(KeyCode::Enter, true, false);
+        app.key_event(KeyCode::Enter, false, false);
+        assert!(!app.menu, "загрузка должна закрыть меню");
+        assert!(app.machine.load_requested, "загрузка не запрошена");
+
+        // Даём игре дойти до станции.
+        for _ in 0..900u64 {
+            app.machine.release_all_keys();
+            app.machine.run_frame();
+        }
+        let _ = fs::remove_file(&path);
+        assert!(!app.machine.intro_seen, "после загрузки осталась заставка");
+        assert_eq!(app.machine.mem[0x7104], 0, "после загрузки не станция");
+        assert_eq!(
+            app.machine.mem[0x70E3], 0x0B,
+            "после загрузки не станционный экран"
+        );
+
+        // Управление работает: клавиша `1` запускает вылет.
+        app.key_event(KeyCode::Digit1, true, false);
+        for f in 0..900u64 {
+            app.apply_input();
+            if f == 2 {
+                app.key_event(KeyCode::Digit1, false, false);
+            }
+            app.machine.run_frame();
+        }
+        assert_ne!(
+            app.machine.mem[0x7104], 0,
+            "после загрузки клавиша вылета не работает"
+        );
+    }
+
+
     #[test]
     fn pause_menu_selection_and_actions() {
         let base = env!("CARGO_MANIFEST_DIR");

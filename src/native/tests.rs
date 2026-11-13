@@ -1497,11 +1497,8 @@ fn save_request_fires_once_per_press() {
     );
 }
 
-/// Загрузка прерывает текущий процесс и перезапускает игру: пилот из файла
-/// сохраняется, а после стартовой последовательности корабль пристыкован
-/// (`IndDanger=0`) — то есть мы на станции. Загрузка выполняется «в полёте»
-/// (родная игра разрешает её только на станции, поэтому [`request_load`]
-/// обходит эту проверку).
+/// Загрузка на станции сразу возвращает на станцию: пилот из файла
+/// сохраняется, корабль пристыкован (`IndDanger=0`), заставки нет.
 #[test]
 fn load_restarts_docked_with_saved_pilot() {
     let base = env!("CARGO_MANIFEST_DIR");
@@ -1518,20 +1515,19 @@ fn load_restarts_docked_with_saved_pilot() {
         }
     };
 
-    for (layout, ind_danger, mut m) in [
-        (KLADOV_SAVE, 0x7104u16, boot_kladov()),
+    for (layout, ind_danger, what_on_screen, mut m) in [
+        (KLADOV_SAVE, 0x7104u16, 0x70E3u16, boot_kladov()),
     ] {
         install_save(&mut m, layout);
 
-        // Приводим игру в рабочее состояние и имитируем полёт.
-        for f in 0..150u64 {
+        // Приводим игру в рабочее состояние (на станцию).
+        for f in 0..900u64 {
             impulse(&mut m, f);
             m.run_frame();
         }
-        m.mem[ind_danger as usize] = 4; // «в полёте» (вылет со станции)
-        assert_ne!(
+        assert_eq!(
             m.mem[ind_danger as usize], 0,
-            "подготовка: корабль должен быть в полёте"
+            "подготовка: корабль должен быть на станции"
         );
 
         // Готовим файл: валидный командир из образа с помеченным именем.
@@ -1544,10 +1540,9 @@ fn load_restarts_docked_with_saved_pilot() {
         request_load(&mut m, layout);
         assert!(m.load_requested, "запрос загрузки не выставлен");
 
-        // Игра сама доходит до вызова `MenuSaveLoad` и уходит на перезапуск;
-        // стартовая последовательность требует нажатия SPACE.
-        for f in 0..900u64 {
-            impulse(&mut m, f);
+        // Клавиши не подаём: хук сам возвращает игру на станцию.
+        for _ in 0..900u64 {
+            m.release_all_keys();
             m.run_frame();
         }
 
@@ -1561,6 +1556,18 @@ fn load_restarts_docked_with_saved_pilot() {
             m.mem[ind_danger as usize], 0,
             "после загрузки корабль не пристыкован (IndDanger 0x{:04X})",
             ind_danger
+        );
+        assert_eq!(
+            m.mem[what_on_screen as usize], 0x0B,
+            "после загрузки показан не станционный экран"
+        );
+        assert!(
+            !m.intro_seen,
+            "после загрузки игра осталась на заставке"
+        );
+        assert!(
+            !m.load_requested,
+            "запрос загрузки не снят после срабатывания хука"
         );
 
         let _ = std::fs::remove_file(&path);
@@ -1596,14 +1603,89 @@ fn start_game_from_intro_proceeds() {
     }
 }
 
-/// Регрессия: после загрузки сейва «в полёте» игра не разваливается.
+/// Загрузка с заставки: `request_load` вешает хук и на цикл интро, поэтому
+/// игра сразу уходит на станцию, не требуя SPACE.
+#[test]
+fn load_from_intro_starts_station() {
+    let base = env!("CARGO_MANIFEST_DIR");
+    let dir = format!("{base}/tmp");
+    std::fs::create_dir_all(&dir).unwrap();
+
+    for (layout, ind_danger, what_on_screen, mut m) in [
+        (KLADOV_SAVE, 0x7104u16, 0x70E3u16, boot_kladov()),
+    ] {
+        let (intro, game) = crate::world::scene_markers();
+        m.intro_range = intro;
+        m.game_marker = game;
+        install_save(&mut m, layout);
+        for _ in 0..60 {
+            m.run_frame();
+        }
+        assert!(m.intro_seen, "подготовка: игра должна быть на заставке");
+
+        let mut data = commander_block(&m, layout).to_vec();
+        data[0..8].copy_from_slice(b"INTROPIL");
+        let path = format!("{dir}/load_intro_{:04X}.zxelite", layout.pilot_name);
+        std::fs::write(&path, &data).unwrap();
+        commander_load(&mut m, &path, layout).unwrap();
+        request_load(&mut m, layout);
+        let _ = std::fs::remove_file(&path);
+
+        for _ in 0..900u64 {
+            m.release_all_keys();
+            m.run_frame();
+        }
+        assert!(
+            !m.intro_seen,
+            "после загрузки с заставки игра осталась на интро"
+        );
+        assert_eq!(
+            m.mem[ind_danger as usize], 0,
+            "после загрузки с заставки корабль не на станции"
+        );
+        assert_eq!(
+            m.mem[what_on_screen as usize], 0x0B,
+            "после загрузки с заставки показан не станционный экран"
+        );
+        assert_eq!(
+            &m.mem[layout.pilot_name as usize..][..8],
+            b"INTROPIL",
+            "загруженный с заставки пилот сброшен"
+        );
+
+        // Вылет со станции: панель не должна превратиться в мусор из
+        // заставки. Именно этого не хватало, когда загрузка пропускала
+        // `SaveCocpitInBuffer` и оставляла в `0x5B00` данные интро.
+        for f in 0..900u64 {
+            m.release_all_keys();
+            if (10..13).contains(&f) {
+                m.set_key(3, 0, true); // '1' = LaunchDocking
+            }
+            m.run_frame();
+        }
+        assert_ne!(
+            m.mem[ind_danger as usize], 0,
+            "после загрузки с заставки корабль не вылетел со станции"
+        );
+        let is_garbage = |v: u8| v & 0xF8 != 0 && v != 0x10 && v != 0x17;
+        let garbage: Vec<(usize, u8)> = (0x5800..0x5B00)
+            .filter(|&a| is_garbage(m.mem[a]))
+            .map(|a| (a, m.mem[a]))
+            .collect();
+        assert!(
+            garbage.is_empty(),
+            "после вылета с загруженной заставки кокпит залит мусором: {garbage:04X?}"
+        );
+    }
+}
+
+/// Загрузка из полёта не разваливает игру и не искажает кокпит.
 ///
-/// Загрузка выполняется родным путём (см. [`request_load`]): игра сама
-/// уходит на перезапуск со своего главного цикла. Если же войти в ветку
-/// перезапуска вручную с кадровой границы (минуя главный цикл), стек
-/// постепенно уезжает в ПЗУ и через ~1000 кадров
-/// игра «рассыпается»: атрибуты заполняются мусором, а `SP` уходит ниже
-/// `0x4000`. Проверяем, что ни того, ни другого нет.
+/// Раньше загрузка шла через `loc_7394` и оставляла игру на заставке; кроме
+/// того, перезапуск вызывал `SaveCocpitInBuffer` прямо в полёте и записывал
+/// космический вид в `DataCocpit`. Теперь одноразовый хук в полёте сразу
+/// уводит Z80 в `docked_init` (кабина уже на экране), а на станции сначала
+/// возвращает кабину, как это делает `loc_7394`.
 #[test]
 fn load_restart_keeps_screen_clean() {
     let base = env!("CARGO_MANIFEST_DIR");
@@ -1624,30 +1706,41 @@ fn load_restart_keeps_screen_clean() {
             m.set_key(3, 0, true); // '1' = LaunchDocking
         }
     };
-    let run = |m: &mut Spectrum, n: u64| {
-        for f in 0..n {
-            frame_input(m, f);
-            m.run_frame();
-        }
-    };
 
     for (layout, ind_danger, mut m) in [
         (KLADOV_SAVE, 0x7104u16, boot_kladov()),
     ] {
         install_save(&mut m, layout);
-        // Полёт, в котором сохраняем сейв, затем загрузка и перезапуск.
-        run(&mut m, 1508);
+        // Полёт, в котором сохраняем сейв, затем загрузка.
+        for f in 0..1508u64 {
+            frame_input(&mut m, f);
+            m.run_frame();
+        }
+        assert_ne!(
+            m.mem[ind_danger as usize], 0,
+            "0x{:04X}: подготовка: корабль должен быть в полёте",
+            layout.pilot_name
+        );
         let path = format!("{dir}/load_restart_screen_{:04X}.zxelite", layout.pilot_name);
         commander_save(&mut m, &path, layout).unwrap();
         commander_load(&mut m, &path, layout).unwrap();
         request_load(&mut m, layout);
-        // Длинный прогон: прежний сломанный путь разваливался к ~1000 кадров.
-        run(&mut m, 3000);
+        // Длинный прогон без клавиш: прежний сломанный путь разваливался
+        // к ~1000 кадров, а теперь игра должна просто стоять на станции.
+        for _ in 0..3000u64 {
+            m.release_all_keys();
+            m.run_frame();
+        }
         let _ = std::fs::remove_file(&path);
 
-        assert_ne!(
+        assert_eq!(
             m.mem[ind_danger as usize], 0,
-            "0x{:04X}: после вылета корабль должен быть в полёте",
+            "0x{:04X}: после загрузки корабль не пристыкован",
+            layout.pilot_name
+        );
+        assert_eq!(
+            m.mem[0x70E3], 0x0B,
+            "0x{:04X}: после загрузки показан не станционный экран",
             layout.pilot_name
         );
         // Стек игры живёт в экранной памяти (0x40xx); уход ниже 0x4000 —
@@ -1666,6 +1759,30 @@ fn load_restart_keeps_screen_clean() {
         assert!(
             garbage.is_empty(),
             "0x{:04X}: после загрузки в атрибутах остался мусор: {garbage:04X?}",
+            layout.pilot_name
+        );
+
+        // И вылет: буфер кокпита, снятый при загрузке, не должен оставить
+        // мусор в нижней панели.
+        for f in 0..900u64 {
+            m.release_all_keys();
+            if (10..13).contains(&f) {
+                m.set_key(3, 0, true); // '1' = LaunchDocking
+            }
+            m.run_frame();
+        }
+        assert_ne!(
+            m.mem[ind_danger as usize], 0,
+            "0x{:04X}: после загрузки корабль не вылетел со станции",
+            layout.pilot_name
+        );
+        let garbage: Vec<(usize, u8)> = (0x5800..0x5B00)
+            .filter(|&a| is_garbage(m.mem[a]))
+            .map(|a| (a, m.mem[a]))
+            .collect();
+        assert!(
+            garbage.is_empty(),
+            "0x{:04X}: после вылета кокпит залит мусором: {garbage:04X?}",
             layout.pilot_name
         );
     }
@@ -1881,4 +1998,61 @@ fn teleport_docks_at_selected_system() {
             layout.pilot_name
         );
     }
+}
+
+/// Загрузка на станции не должна портить буфер кабины.
+///
+/// Сохраниться можно только пристыкованным, и на экране станции нижняя треть
+/// занята её меню. Если сразу уйти в `docked_setup`, его
+/// `SaveCocpitInBuffer` запишет в `DataCocpit` этот станционный экран, и после
+/// вылета приборная панель будет из станционного текста. Родной `loc_7394`
+/// поэтому сначала возвращает кабину на экран; проверяем, что повтор этой
+/// подготовки не меняет буфер.
+#[test]
+fn load_at_station_keeps_cockpit_buffer() {
+    let base = env!("CARGO_MANIFEST_DIR");
+    let dir = format!("{base}/tmp");
+    std::fs::create_dir_all(&dir).unwrap();
+    let layout = KLADOV_SAVE;
+
+    let mut m = boot_kladov();
+    install_save(&mut m, layout);
+    // Титул -> старт -> станция.
+    for f in 0..900u64 {
+        m.release_all_keys();
+        if f >= 30 && f % 16 < 6 {
+            m.set_key(7, 0, true); // SPACE
+        }
+        m.run_frame();
+    }
+    assert_eq!(m.mem[0x7104], 0, "подготовка: корабль не на станции");
+    let cockpit_before = m.mem[0xC000..0xC800].to_vec();
+    let attrs_before = m.mem[0x5B00..0x5C00].to_vec();
+    assert_ne!(
+        cockpit_before,
+        m.mem[0x5000..0x5800],
+        "подготовка: на станции буфер кабины не должен совпадать с экраном"
+    );
+
+    let path = format!("{dir}/load_cocpit.zxelite");
+    commander_save(&mut m, &path, layout).unwrap();
+    commander_load(&mut m, &path, layout).unwrap();
+    request_load(&mut m, layout);
+    for _ in 0..900u64 {
+        m.release_all_keys();
+        m.run_frame();
+    }
+    let _ = std::fs::remove_file(&path);
+
+    assert_eq!(m.mem[0x7104], 0, "после загрузки корабль не на станции");
+    assert_eq!(
+        m.mem[0xC000..0xC800],
+        cockpit_before[..],
+        "загрузка на станции затёрла буфер кабины"
+    );
+    assert_eq!(
+        m.mem[0x5B00..0x5C00],
+        attrs_before[..],
+        "загрузка на станции затёрла резерв атрибутов кабины"
+    );
 }
