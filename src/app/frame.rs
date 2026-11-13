@@ -48,13 +48,9 @@ impl App<'_> {
             self.follow_flight_screen();
         }
         self.flight.sync_from_z80(&self.machine.mem);
-        // Сначала старим прошлое сообщение, затем забираем новые строки:
-        // повтор текста в этом кадре сбрасывает возраст и продлевает показ.
+        // Повтор текста в этом кадре продлевает показ сообщения.
         self.flight.advance_messages(frames);
         self.flight.sync_game_msg(&mut self.machine.game_msg);
-        for _ in 0..frames {
-            self.machine.game_msg.next_frame();
-        }
         self.flight.tick(frames as f32 / 50.0);
     }
 
@@ -70,6 +66,7 @@ impl App<'_> {
         let capture = self.flight.active
             && !self.hdmap.active
             && !self.shop.active
+            && !self.status.active
             && !self.machine.intro_seen
             && !self.menu;
         self.machine.game_msg.set_capture(capture);
@@ -78,11 +75,17 @@ impl App<'_> {
         // во время эмуляции, показ накладывает слой поверх ZX-кадра.
         let size = window.inner_size();
         let layout = display::layout(size.width, size.height);
-        if self.hdmap.active || self.shop.active || self.machine.intro_seen || self.flight.active {
-            // Отдельный нативный экран (карта/закупка/заставка/полёт): HD-слой
-            // во всё окно. Закупка и заставка ставят игру на паузу; под картой
-            // и экраном полёта эмулятор продолжает работать. Слой непрозрачный
-            // и покрывает окно целиком, поэтому композитится в угол (0, 0).
+        if self.hdmap.active
+            || self.shop.active
+            || self.status.active
+            || self.machine.intro_seen
+            || self.flight.active
+        {
+            // Отдельный нативный экран (карта/закупка/статус/заставка/полёт):
+            // HD-слой во всё окно. Закупка, статус и заставка ставят игру на
+            // паузу; под картой и экраном полёта эмулятор продолжает
+            // работать. Слой непрозрачный и покрывает окно целиком, поэтому
+            // композитится в угол (0, 0).
             self.machine
                 .hd
                 .resize(size.width as usize, size.height as usize);
@@ -101,6 +104,10 @@ impl App<'_> {
                 }
             } else if self.shop.active {
                 // Закупка по-прежнему ставит игру на паузу.
+                self.machine.release_all_keys();
+                self.machine.release_joystick();
+            } else if self.status.active {
+                // Экран статуса — только просмотр: игра на паузе.
                 self.machine.release_all_keys();
                 self.machine.release_joystick();
             } else if self.flight.active {
@@ -184,6 +191,8 @@ impl App<'_> {
         } else if self.shop.active {
             self.shop
                 .draw(&mut self.machine.hd, ZX_FONT, &self.machine.mem);
+        } else if self.status.active {
+            self.status.draw(&mut self.machine.hd, ZX_FONT);
         } else if self.machine.intro_seen {
             // Нативная заставка; внизу — тот же кокпит, что в полёте.
             // Заголовок с фигурой занимают верхнюю область, поэтому не
@@ -233,7 +242,12 @@ impl App<'_> {
         out.fill(0);
         // Отдельный нативный экран (карта/закупка/заставка/полёт)
         // показывается вместо ZX-кадра: слой непрозрачный и покрывает всё окно.
-        if self.hdmap.active || self.shop.active || self.machine.intro_seen || self.flight.active {
+        if self.hdmap.active
+            || self.shop.active
+            || self.status.active
+            || self.machine.intro_seen
+            || self.flight.active
+        {
             self.machine.hd.composite_onto(&mut out, ow, oh, 0, 0);
             window.pre_present_notify();
             let _ = out.present();

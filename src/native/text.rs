@@ -196,32 +196,6 @@ pub(crate) const KLADOV_MSG_TIME_LIFE: usize = 0xDA73;
 /// `msgNumber` (`0xDA76`) — номер/токен текущего нижнего сообщения.
 pub(crate) const KLADOV_MSG_NUMBER: usize = 0xDA76;
 
-/// Перехват `sub_D499` (0xD499) — печать одного символа на экран ZX.
-///
-/// Через `sub_D499` проходят **все** печатаемые символы всех сообщений
-/// игры (диспетчер `PrintMessage1_A` → литералы здесь, диграфы тоже
-/// через неё, `PrintMessage2` → `sub_D470` → сюда). Хук только подглядывает:
-/// пока [`Spectrum::game_msg`] включён, он записывает символ и позицию
-/// печати (`CrdXPrnSymbol` до продвижения курсора), после чего аккуратно
-/// отдаёт управление Z80 на второй инструкции рутины. Первая инструкция
-/// `cp 0x41h` заряжается флагами и тактами вручную, поэтому состояние
-/// машины (регистры, память, `R`, число тактов) не отличается от прогона
-/// без хука — `hooks_match_plain_run` это проверяет.
-pub(crate) fn print_char_tap_hook(cpu: &mut Z80, m: &mut Spectrum) -> u64 {
-    if m.game_msg.enabled {
-        let col = m.mem.get(KLADOV_CRD_X_PRN_SYMBOL).copied().unwrap_or(0);
-        let row = m.mem.get(KLADOV_CRD_X_PRN_SYMBOL + 1).copied().unwrap_or(0);
-        m.game_msg.push_char(cpu.a, row, col);
-    }
-    // `cp 0x41h`: только флаги, `A` не меняется (как `sub8(a, v, 0)` без
-    // сохранения результата).
-    let _ = cpu.sub8(cpu.a, 0x41, 0);
-    bump_r(cpu, 1);
-    cpu.pc = 0xD49B;
-    m.hook_yield = true;
-    7 // `cp n` в этой машине — 7 тактов
-}
-
 /// Счётчик обращений к хуку (только для тестов).
 #[cfg(test)]
 pub(crate) static FONT_BASE_CALLS: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);

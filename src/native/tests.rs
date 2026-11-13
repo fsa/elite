@@ -833,55 +833,17 @@ fn print_message1_matches_z80() {
     }
 }
 
-/// Сквозная печать сообщения через нативные хуки: диспетчер
-/// `PrintMessage1_A` раскрывает токен, `sub_D499` печатает символы —
-/// хук перехвата копит их в [`Spectrum::game_msg`].
-#[test]
-fn message_capture_collects_token_string() {
-    let mut n = kladov();
-    install(&mut n);
-    n.game_msg.enabled = true;
-
-    // Детерминированная таблица токенов, как в `print_message1_matches_z80`:
-    // строка 0x87 (135) — четыре буквы 'F'.
-    const TBL: u16 = 0x9000;
-    let mut p = TBL as usize;
-    for i in 0..201usize {
-        let ch = b'A' + (i % 26) as u8;
-        for _ in 0..(1 + i % 4) {
-            n.mem[p] = ch;
-            p += 1;
-        }
-        n.mem[p] = 0;
-        p += 1;
-    }
-    n.mem[0xF11A] = TBL as u8;
-    n.mem[0xF11B] = (TBL >> 8) as u8;
-    // Печатный курсор (CrdXPrnSymbol версии Кладова): строка 2, колонка 0.
-    n.mem[KLADOV_CRD_X_PRN_SYMBOL] = 0;
-    n.mem[KLADOV_CRD_X_PRN_SYMBOL + 1] = 2;
-
-    // Токен `0x15` → `0x15 + 0x72 = 0x87` → "FFFF".
-    set(&mut n.cpu, 0x15, 0x1234, 0x5678, 0x00);
-    n.cpu.b = 0x11;
-    n.cpu.c = 0x22;
-    n.cpu.r = 0x3E;
-    run_until_ret(&mut n, 0xD425, 0x4116, true);
-
-    assert_eq!(n.game_msg.text, "FFFF", "хук печати не собрал строку");
-    assert_eq!(n.game_msg.row, 2);
-    assert_eq!(n.game_msg.col, 0);
-    assert_eq!(n.game_msg.frames, 0);
-}
-
 /// Строка гиперпрыжка из настоящей таблицы токенов: `msgNumber = 0xC0`
-/// раскрывается в `HYPERSPACE -- <PlanetName>`. Печать идёт в ZX-строку 13,
-/// как её ставит `sub_DAB4`, и остаётся в истории строк.
+/// раскрывается в токен `hyperspace` и имя планеты. Печать идёт в ZX-строку
+/// 13, как её ставит `sub_DAB4`, и уходит готовым событием для рендера.
+///
+/// В оригинале нет принудительного верхнего регистра: `sub_D499` переводит
+/// буквы в нижний (`add a, 20h`), оставляя заглавной только первую букву
+/// после не-буквы — поэтому на экране `hyperspace -- Lave`.
 #[test]
 fn message_capture_collects_hyperspace_line() {
     let mut n = kladov();
     install(&mut n);
-    n.game_msg.enabled = true;
     n.game_msg.enable_text_capture_for_test();
 
     // Имя планеты (`PlanetName`), которое печатает управляющий код 3
@@ -897,22 +859,12 @@ fn message_capture_collects_hyperspace_line() {
     n.cpu.r = 0x3E;
     run_until_ret(&mut n, 0xD425, 0x4116, true);
 
-    assert_eq!(n.game_msg.text, "HYPERSPACE -- LAVE");
-    let line = n
-        .game_msg
-        .lines
-        .iter()
-        .find(|l| l.row == 13)
-        .expect("строка гиперпрыжка не попала в историю");
-    assert_eq!(line.text, "HYPERSPACE -- LAVE");
-    assert_eq!(line.col, 5);
-
-    // Тот же текст приходит готовым событием для рендера: строка 13,
-    // позиция из `CrdXPrnSymbol` после сдвига курсора.
+    // Текст приходит готовым событием для рендера: строка 13, позиция из
+    // `CrdXPrnSymbol` после сдвига курсора.
     n.game_msg.end_text_frame();
     let events = n.game_msg.take_text_events();
     assert_eq!(events.len(), 1, "ожидалось одно событие строки 13");
-    assert_eq!(events[0].text, "HYPERSPACE -- LAVE");
+    assert_eq!(events[0].text, "hyperspace -- Lave");
     assert_eq!(events[0].row, 13);
     // Хук `sub_5DFB` видит курсор уже сдвинутым: стартовая колонка 5
     // превращается в ячейку первого напечатанного глифа — 6.

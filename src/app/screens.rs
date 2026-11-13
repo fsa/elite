@@ -5,6 +5,7 @@ use crate::equip;
 use crate::flight;
 use crate::galaxy;
 use crate::native;
+use crate::status;
 use crate::world;
 
 impl App<'_> {
@@ -22,6 +23,7 @@ impl App<'_> {
         self.machine.mem[flight::Z80_WHAT_ON_SCREEN] = flight::Z80_SCREEN_LOCAL_MAP;
         self.sync_hdmap_target();
         self.shop.close();
+        self.status.close();
         self.menu = false;
         self.pending_key = None;
         self.pending_flight = None;
@@ -66,6 +68,7 @@ impl App<'_> {
             self.shop.resize(size.width, size.height);
         }
         self.close_hdmap();
+        self.status.close();
         self.menu = false;
         self.pending_key = None;
         self.pending_flight = None;
@@ -87,6 +90,20 @@ impl App<'_> {
         }
     }
 
+    /// Открыть нативный экран статуса пилота (F9). Игра ставится на паузу,
+    /// как и на экране закупки: экран только для просмотра.
+    pub(super) fn open_status(&mut self) {
+        self.status.open(&self.machine.mem, status::KLADOV_STATUS);
+        self.close_hdmap();
+        self.shop.close();
+        self.flight.close();
+        self.menu = false;
+        self.pending_key = None;
+        self.pending_shop = false;
+        self.pending_flight = None;
+        self.pending_launch = false;
+    }
+
     /// Открыть нативный экран полёта поверх текущего состояния игры.
     fn open_flight(&mut self, dir: flight::ViewDir) {
         let planet_color = world::current_planet_color(&self.machine.mem);
@@ -94,6 +111,7 @@ impl App<'_> {
         self.flight.set_view_dir(dir);
         self.close_hdmap();
         self.shop.close();
+        self.status.close();
         self.menu = false;
         self.pending_key = None;
         self.pending_shop = false;

@@ -316,6 +316,57 @@ use crate::world::{current_planet_color, save_layout_kladov, scene_markers};
         assert!(!app.shop.active, "F4 не закрыл экран закупки");
     }
 
+    /// F9 — нативный экран статуса пилота. Доступен только на станции:
+    /// в полёте клавиша ничего не делает. Экран не пропускает ввод в игру,
+    /// Esc и повторный F9 закрывают его, а игровая клавиша возвращает экран
+    /// игры и уходит эмулятору.
+    #[test]
+    fn f9_opens_status_only_on_station() {
+        let opts = test_options();
+        let mut app = App::new(boot(), &opts);
+        assert!(
+            flight::z80_is_docked(&app.machine.mem),
+            "подготовка: ожидалась станция"
+        );
+        assert!(!app.status.active);
+        app.key_event(KeyCode::F9, true, false);
+        assert!(app.status.active, "F9 не открыл экран статуса");
+
+        // Пока экран открыт, ввод не попадает в эмулятор.
+        app.apply_input();
+        assert_eq!(app.machine.kempston, 0, "ввод не должен уходить в игру");
+
+        // Esc закрывает экран.
+        app.key_event(KeyCode::Escape, true, false);
+        assert!(!app.status.active, "Esc не закрыл экран статуса");
+
+        // Повторный F9 открывает и закрывает экран.
+        app.key_event(KeyCode::F9, true, false);
+        assert!(app.status.active, "F9 не открыл статус повторно");
+        app.key_event(KeyCode::F9, true, false);
+        assert!(!app.status.active, "F9 не закрыл экран статуса");
+
+        // Игровая клавиша закрывает экран и передаётся игре.
+        app.key_event(KeyCode::F9, true, false);
+        assert!(app.status.active);
+        app.key_event(KeyCode::Digit1, true, false);
+        assert!(!app.status.active, "игровая клавиша не закрыла статус");
+        app.apply_input();
+        let (row, bit) = matrix_pos(KeyCode::Digit1).expect("1 в матрице");
+        assert_eq!(
+            app.machine.keyboard[row] & (1 << bit),
+            0,
+            "клавиша не ушла в эмулятор"
+        );
+
+        // В полёте F9 ничего не открывает.
+        let mut app = App::new(boot(), &opts);
+        app.key_event(KeyCode::F1, true, false);
+        assert!(app.flight.active);
+        app.key_event(KeyCode::F9, true, false);
+        assert!(!app.status.active, "F9 открыл статус в полёте");
+    }
+
     /// F1 включает нативный экран полёта и одновременно отдаёт игре клавишу 1.
     /// F1-4 под полётом — это клавиши 1-4 оригинала (виды), а `1` возвращает
     /// ZX-кадр; Esc открывает меню паузы.

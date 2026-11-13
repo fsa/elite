@@ -14,7 +14,7 @@
 //! - `app` — окно, ввод, нативные экраны и кадр;
 //! - `audio`, `machine`, `z80`, `native` — звук и эмуляция;
 //! - `cockpit`, `display`, `equip`, `flight`, `galaxy`, `hdmap`, `render3d`,
-//!   `shipdata`, `splash` — графика и игровые подсистемы;
+//!   `shipdata`, `splash`, `status` — графика и игровые подсистемы;
 //! - `font` — встроенный знакогенератор ZX для нативного интерфейса.
 
 mod app;
@@ -35,6 +35,7 @@ mod native;
 mod render3d;
 mod shipdata;
 mod splash;
+mod status;
 mod storage;
 mod ui;
 mod world;

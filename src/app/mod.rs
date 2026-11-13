@@ -26,6 +26,7 @@ use crate::flight;
 use crate::hdmap;
 use crate::machine::Spectrum;
 use crate::splash;
+use crate::status;
 use crate::ui::present::{SRC_H, SRC_W};
 
 mod frame;
@@ -74,6 +75,8 @@ struct App<'a> {
     hdmap_screen: Option<u8>,
     /// Нативный экран закупки оборудования (F4) — заменяет экран игры.
     shop: equip::Shop,
+    /// Нативный экран статуса пилота (F9) — заменяет экран игры.
+    status: status::Status,
     /// Экран полёта (F1) — нативный рендер по данным Z80. Пока он активен,
     /// окно занимает вид из кабины и нативная приборная панель; эмулятор
     /// продолжает работать и задаёт мир, поэтому ввод идёт в игру.
@@ -143,6 +146,7 @@ impl<'a> App<'a> {
             hdmap: hdmap::Map::new(),
             hdmap_screen: None,
             shop: equip::Shop::new(),
+            status: status::Status::new(),
             flight: flight::Flight::new(),
             splash: splash::Splash::new(),
             cockpit: cockpit::Cockpit::new(),

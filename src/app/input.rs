@@ -109,6 +109,21 @@ impl App<'_> {
             self.shop.close();
             return;
         }
+        // F9 — нативный экран статуса пилота. На станции заменяет родной
+        // экран; в полёте остаётся неиспользуемой клавишей (как в оригинале,
+        // где статус доступен только на станции).
+        if code == KeyCode::F9 && !repeat {
+            if self.status.active {
+                self.status.close();
+            } else if !self.menu
+                && !self.machine.intro_seen
+                && !self.flight.active
+                && flight::z80_is_docked(&self.machine.mem)
+            {
+                self.open_status();
+            }
+            return;
+        }
         // При открытой карте всё управление принадлежит ей; Z80 при этом
         // продолжает работать, но ввод в игру не передаётся.
         if self.hdmap.active {
@@ -214,6 +229,25 @@ impl App<'_> {
                     } else if is_game_key(code) {
                         // Игровая клавиша: закрываем закупку и отдаём нажатие игре.
                         self.shop.close();
+                        self.pending_key = matrix_pos(code);
+                    }
+                }
+            }
+            return;
+        }
+        // При открытом экране статуса всё управление принадлежит ему:
+        // Esc/F9 закрывают, игровые клавиши возвращают экран игры и уходят
+        // в эмулятор (как на карте и в закупке).
+        if self.status.active {
+            match code {
+                KeyCode::Escape if !repeat => self.status.close(),
+                KeyCode::F1 | KeyCode::F2 | KeyCode::F3 | KeyCode::F4 if !repeat => {
+                    self.status.close();
+                    self.function_key(code);
+                }
+                _ => {
+                    if is_game_key(code) {
+                        self.status.close();
                         self.pending_key = matrix_pos(code);
                     }
                 }
@@ -338,7 +372,7 @@ impl App<'_> {
 
     /// Перенести состояние клавиатуры и джойстика в эмулятор.
     pub(super) fn apply_input(&mut self) {
-        if self.menu || self.hdmap.active || self.shop.active {
+        if self.menu || self.hdmap.active || self.shop.active || self.status.active {
             self.machine.release_all_keys();
             self.machine.release_joystick();
             return;
