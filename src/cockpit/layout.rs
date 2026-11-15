@@ -238,8 +238,8 @@ impl CockpitLayout {
 /// `CompasPointerCrdX/Y` лежат в диапазоне `-8..=8`.
 const COMPASS_POINTER_MAX: i8 = 8;
 
-/// Атрибут экрана, которым `PrintIndDanger` задаёт цвет кружка опасности
-/// (левый верхний угол 2x2 знакоместа, адрес в области атрибутов `0x5A28`).
+/// Атрибут кружка опасности на панели кокпита (`WhatOnScreen < 4`):
+/// `PrintIndDanger` пишет цвет в левый верхний угол 2x2 знакоместа.
 ///
 /// Читать нужно именно экранный атрибут, а не переменную `IndDanger`:
 /// `PrintIndDanger` в конце каждой печати снова записывает в `IndDanger`
@@ -249,9 +249,26 @@ const COMPASS_POINTER_MAX: i8 = 8;
 /// момент может быть жёлтый, красный или погасший кружок.
 pub(super) const DANGER_ATTR: u16 = 0x5A28;
 
+/// Атрибут того же кружка на вспомогательных экранах (`WhatOnScreen >= 4`).
+///
+/// Там `PrintIndDanger` рисует кружок в правом верхнем углу (строка 1,
+/// колонка 28, символы `0x21`-`0x24`) и пишет его цвет по адресу `0x583C`.
+/// Адрес `0x5A28` принадлежит панели кокпита: на картах и экране капитана
+/// там лежат атрибуты текста, поэтому читать его на этих экранах нельзя.
+pub(super) const DANGER_SCREEN_ATTR: u16 = 0x583C;
+
 /// Прочитать текущий цвет индикатора опасности с экрана.
-fn read_danger(mem: &[u8]) -> Danger {
-    Danger::from_attribute(mem.get(DANGER_ATTR as usize).copied().unwrap_or(0))
+pub(super) fn read_danger(mem: &[u8]) -> Danger {
+    let screen = mem
+        .get(crate::flight::Z80_WHAT_ON_SCREEN)
+        .copied()
+        .unwrap_or(0);
+    let at = if screen >= 4 {
+        DANGER_SCREEN_ATTR
+    } else {
+        DANGER_ATTR
+    };
+    Danger::from_attribute(mem.get(at as usize).copied().unwrap_or(0))
 }
 
 /// Прочитать 24-битную координату в формате знак-величина.

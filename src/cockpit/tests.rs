@@ -1,7 +1,7 @@
 
 use super::indicators::missile_icon_rect;
 use super::labels::{SPEED_ICON, indicator_label};
-use super::layout::DANGER_ATTR;
+use super::layout::{DANGER_ATTR, DANGER_SCREEN_ATTR};
 use super::*;
 
 /// Шрифт-заглушка: все знаки — сплошной прямоугольник.
@@ -570,6 +570,71 @@ fn danger_indicator_uses_original_colors() {
         sample(&draw(Danger::BlinkingRed, false)),
         BACKGROUND,
         "мигающий красный не погас"
+    );
+}
+
+/// Полукруг опасности на вспомогательных экранах: нижняя половина кружка с
+/// центром на верхней линии рамки, цвет и размер — как у индикатора на радаре.
+#[test]
+fn danger_half_circle_sits_on_screen_frame() {
+    let (w, h) = (1024u32, 768u32);
+    let g = panel_geometry(w, h);
+    let r = super::danger::radius(g.danger_cell());
+    let right = g.margin + (w as i32 - 2 * g.margin) - LINE;
+    let cx = right - (r * 23 / 7);
+    let mem = |attr: u8| {
+        let mut m = vec![0u8; 0x10000];
+        m[DANGER_ATTR as usize] = attr;
+        m[0x7104] = 1; // не пристыкован
+        m
+    };
+    let render = |attr: u8| {
+        let mut f = Frame::new(w as usize, h as usize);
+        draw_danger_half(&mut f, &mem(attr), g.margin, LINE);
+        f
+    };
+    let f = render(0x04);
+    let px = |x: i32, y: i32| f.pixels()[y as usize * w as usize + x as usize];
+    assert_eq!(px(cx, g.margin), DANGER_GREEN, "полукруг не на рамке");
+    // Всё выше рамки отсечено.
+    for y in 0..g.margin {
+        for x in 0..w as i32 {
+            assert_eq!(px(x, y), 0, "полукруг вышел за рамку");
+        }
+    }
+    // Нижняя точка уже верхней, ниже полукруга ничего нет.
+    assert_eq!(px(cx, g.margin + r), DANGER_GREEN);
+    assert_ne!(px(cx - r, g.margin + r), DANGER_GREEN);
+    assert_ne!(px(cx, g.margin + r + 1), DANGER_GREEN);
+    // Цвет следует индикатору опасности, погашенный не рисуется.
+    assert!(render(0x06).pixels().contains(&DANGER_YELLOW));
+    assert!(render(0x02).pixels().contains(&DANGER_COLOR));
+    assert!(!render(0x00).pixels().contains(&DANGER_GREEN));
+
+    // На вспомогательных экранах (`WhatOnScreen >= 4`) цвет кружка лежит по
+    // адресу `0x583C`, а `0x5A28` занят атрибутами текста самого экрана.
+    let screen_mem = |attr: u8| {
+        let mut m = vec![0u8; 0x10000];
+        m[crate::flight::Z80_WHAT_ON_SCREEN] = crate::flight::Z80_SCREEN_PILOT_INFO;
+        m[DANGER_SCREEN_ATTR as usize] = attr;
+        m[DANGER_ATTR as usize] = 0x07; // белый текст экрана капитана
+        m[0x7104] = 1; // не пристыкован
+        m
+    };
+    let screen_render = |attr: u8| {
+        let mut f = Frame::new(w as usize, h as usize);
+        draw_danger_half(&mut f, &screen_mem(attr), g.margin, LINE);
+        f
+    };
+    assert!(
+        screen_render(0x04).pixels().contains(&DANGER_GREEN),
+        "цвет кружка не прочитан с экрана"
+    );
+    // На карте (`WhatOnScreen < 9`) к цвету добавлен бит бумаги: 0x14.
+    assert!(screen_render(0x14).pixels().contains(&DANGER_GREEN));
+    assert!(
+        !screen_render(0x07).pixels().contains(&DANGER_GREEN),
+        "атрибут текста принят за кружок опасности"
     );
 }
 

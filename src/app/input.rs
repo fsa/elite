@@ -109,18 +109,16 @@ impl App<'_> {
             self.shop.close();
             return;
         }
-        // F9 — нативный экран статуса пилота. На станции заменяет родной
-        // экран; в полёте остаётся неиспользуемой клавишей (как в оригинале,
-        // где статус доступен только на станции).
+        // F9 — нативная альтернатива экрану капитана (`L`): показываем свой
+        // интерфейс, а эмулятору отдаём нажатие `L`, чтобы игра перешла в
+        // режим показа капитана. Родная команда `L` работает и на станции,
+        // и в полёте, поэтому F9 доступна там же. Повторный F9 экран не
+        // закрывает: он остаётся открытым (закрывает `Esc` или игровая
+        // клавиша).
         if code == KeyCode::F9 && !repeat {
-            if self.status.active {
-                self.status.close();
-            } else if !self.menu
-                && !self.machine.intro_seen
-                && !self.flight.active
-                && flight::z80_is_docked(&self.machine.mem)
-            {
+            if !self.status.active && !self.menu && !self.machine.intro_seen {
                 self.open_status();
+                self.pending_key = matrix_pos(KeyCode::KeyL);
             }
             return;
         }
@@ -235,19 +233,22 @@ impl App<'_> {
             }
             return;
         }
-        // При открытом экране статуса всё управление принадлежит ему:
-        // Esc/F9 закрывают, игровые клавиши возвращают экран игры и уходят
-        // в эмулятор (как на карте и в закупке).
+        // При открытом альтернативном экране капитана всё управление
+        // принадлежит ему: Esc закрывает и возвращает прежний экран игры,
+        // игровые клавиши уходят в эмулятор (как на карте и в закупке).
+        // `L` — родная команда: убирает нативную надстройку и оставляет
+        // классический экран капитана.
         if self.status.active {
             match code {
-                KeyCode::Escape if !repeat => self.status.close(),
+                KeyCode::Escape if !repeat => self.close_status(),
+                KeyCode::KeyL if !repeat => self.close_status_to_classic(),
                 KeyCode::F1 | KeyCode::F2 | KeyCode::F3 | KeyCode::F4 if !repeat => {
-                    self.status.close();
+                    self.close_status();
                     self.function_key(code);
                 }
                 _ => {
                     if is_game_key(code) {
-                        self.status.close();
+                        self.close_status();
                         self.pending_key = matrix_pos(code);
                     }
                 }

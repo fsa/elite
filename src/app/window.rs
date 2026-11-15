@@ -21,9 +21,17 @@ impl App<'_> {
         if self.window.is_some() {
             return;
         }
+        let debug_w = if self.opts.debug {
+            display::DEBUG_W as f64
+        } else {
+            0.0
+        };
         let attrs = Window::default_attributes()
             .with_title("Elite — F1: полёт, Esc: меню, F10: карта, F4: закупка, F11: полный экран, F12: ускорение x2, Ctrl+Q: выход")
-            .with_inner_size(LogicalSize::new(4.0 * SRC_W as f64, 4.0 * SRC_H as f64));
+            .with_inner_size(LogicalSize::new(
+                4.0 * SRC_W as f64 + debug_w,
+                4.0 * SRC_H as f64,
+            ));
         let window = match event_loop.create_window(attrs) {
             Ok(w) => Rc::new(w),
             Err(e) => {
@@ -101,7 +109,7 @@ impl ApplicationHandler for App<'_> {
                 // та же математика, что в `present`).
                 if let Some(w) = &self.window {
                     let size = w.inner_size();
-                    let l = display::layout(size.width, size.height);
+                    let l = self.zx_layout(size.width, size.height);
                     let px = position.x - l.x as f64;
                     let py = position.y - l.y as f64;
                     if px >= 0.0 && px < l.w as f64 && py >= 0.0 && py < l.h as f64 {

@@ -11,7 +11,7 @@ use crate::display;
 use crate::font::ZX_FONT;
 use crate::storage;
 use crate::ui::menu::draw_pause_menu;
-use crate::ui::present::blit_zx_frame;
+use crate::ui::present::{blit_zx_frame, draw_debug_panel};
 
 impl App<'_> {
     /// Сколько кадров Z80 прогнать за один кадр показа. `F12` включает
@@ -54,6 +54,36 @@ impl App<'_> {
         self.flight.tick(frames as f32 / 50.0);
     }
 
+    /// Кадр альтернативного экрана капитана (`F9`). Эмулятор продолжает
+    /// работать: нажатие `L`, отложенное при открытии, уходит игре один раз,
+    /// а дальше клавиатура и джойстик не передаются — ими владеет нативный
+    /// интерфейс.
+    pub(super) fn status_tick(&mut self) {
+        self.machine.release_all_keys();
+        self.machine.release_joystick();
+        if let Some((row, bit)) = self.pending_key.take() {
+            self.machine.set_key(row, bit, true);
+        }
+        if !self.menu {
+            let frames = self.emulation_frames();
+            self.machine.run_frames(frames);
+            self.play_frame_audio();
+        }
+    }
+
+    /// Полукруг индикатора опасности в правом верхнем углу вспомогательного
+    /// экрана с рамкой (карта, экран капитана). В оригинале он есть только в
+    /// полёте: на станции индикатор погашен.
+    fn draw_danger_half(&mut self) {
+        let mem = &self.machine.mem;
+        if crate::flight::z80_is_docked(mem) {
+            return;
+        }
+        let (w, h) = (self.machine.hd.width as u32, self.machine.hd.height as u32);
+        let margin = cockpit::panel_geometry(w, h).margin;
+        cockpit::draw_danger_half(&mut self.machine.hd, mem, margin, cockpit::LINE);
+    }
+
     /// Один кадр: ввод, эмуляция, звук, отрисовка и показ.
     pub(super) fn frame(&mut self) {
         let Some(window) = self.window.clone() else {
@@ -74,7 +104,9 @@ impl App<'_> {
         // Слой очищается каждый кадр: нативные хуки рисуют в него заново
         // во время эмуляции, показ накладывает слой поверх ZX-кадра.
         let size = window.inner_size();
-        let layout = display::layout(size.width, size.height);
+        let layout = self.zx_layout(size.width, size.height);
+        // Нативные экраны рисуются в игровой области (без отладочной полосы).
+        let (game_w, game_h) = self.game_size(size.width, size.height);
         if self.hdmap.active
             || self.shop.active
             || self.status.active
@@ -82,13 +114,11 @@ impl App<'_> {
             || self.flight.active
         {
             // Отдельный нативный экран (карта/закупка/статус/заставка/полёт):
-            // HD-слой во всё окно. Закупка, статус и заставка ставят игру на
-            // паузу; под картой и экраном полёта эмулятор продолжает
-            // работать. Слой непрозрачный и покрывает окно целиком, поэтому
-            // композитится в угол (0, 0).
-            self.machine
-                .hd
-                .resize(size.width as usize, size.height as usize);
+            // HD-слой во всё окно. Закупка и заставка ставят игру на паузу;
+            // под картой, экраном капитана и экраном полёта эмулятор
+            // продолжает работать. Слой непрозрачный и покрывает окно целиком,
+            // поэтому композитится в угол (0, 0).
+            self.machine.hd.resize(game_w as usize, game_h as usize);
             self.machine.hd.clear(display::TRANSPARENT);
             if self.hdmap.active {
                 // Карта — только наложение: Z80 продолжает идти обычным ходом,
@@ -107,9 +137,10 @@ impl App<'_> {
                 self.machine.release_all_keys();
                 self.machine.release_joystick();
             } else if self.status.active {
-                // Экран статуса — только просмотр: игра на паузе.
-                self.machine.release_all_keys();
-                self.machine.release_joystick();
+                // Альтернатива экрану капитана (`L`): эмулятор продолжает
+                // работать и получает нажатие `L`, а ввод принадлежит
+                // нативному интерфейсу.
+                self.status_tick();
             } else if self.flight.active {
                 // Экран полёта: рисует то, что посчитал Z80, поэтому эмулятор
                 // продолжает работать, а ввод идёт в игру. На паузе (меню)
@@ -165,10 +196,11 @@ impl App<'_> {
         self.machine.render_rgba(&mut self.buf);
         if self.hdmap.active {
             self.hdmap.draw(&mut self.machine.hd, ZX_FONT);
+            self.draw_danger_half();
         } else if self.flight.active {
             // Экран полёта: нативный вид в верхней части окна (по данным Z80)
             // и тот же кокпит, что на заставке, — внизу.
-            let g = cockpit::panel_geometry(size.width, size.height);
+            let g = cockpit::panel_geometry(game_w, game_h);
             self.flight.draw(&mut self.machine.hd, &g, ZX_FONT);
             let values = {
                 let mut values = cockpit::KLADOV_COCKPIT.read(&self.machine.mem);
@@ -193,11 +225,12 @@ impl App<'_> {
                 .draw(&mut self.machine.hd, ZX_FONT, &self.machine.mem);
         } else if self.status.active {
             self.status.draw(&mut self.machine.hd, ZX_FONT);
+            self.draw_danger_half();
         } else if self.machine.intro_seen {
             // Нативная заставка; внизу — тот же кокпит, что в полёте.
             // Заголовок с фигурой занимают верхнюю область, поэтому не
             // заходят под панель.
-            let g = cockpit::panel_geometry(size.width, size.height);
+            let g = cockpit::panel_geometry(game_w, game_h);
             self.splash.draw_in(&mut self.machine.hd, ZX_FONT, &g);
             self.cockpit.draw_with_geom(
                 &mut self.machine.hd,
@@ -249,17 +282,19 @@ impl App<'_> {
             || self.flight.active
         {
             self.machine.hd.composite_onto(&mut out, ow, oh, 0, 0);
-            window.pre_present_notify();
-            let _ = out.present();
-            return;
+        } else {
+            // Целочисленное масштабирование: каждый пиксель ZX — квадрат
+            // scale x scale, картинка строго без смаза.
+            blit_zx_frame(src, &mut out, ow, oh, l);
+            // HD-слой нативного рендера поверх масштабированного ZX-кадра.
+            self.machine
+                .hd
+                .composite_onto(&mut out, ow, oh, l.x as usize, l.y as usize);
         }
-        // Целочисленное масштабирование: каждый пиксель ZX — квадрат
-        // scale x scale, картинка строго без смаза.
-        blit_zx_frame(src, &mut out, ow, oh, l);
-        // HD-слой нативного рендера поверх масштабированного ZX-кадра.
-        self.machine
-            .hd
-            .composite_onto(&mut out, ow, oh, l.x as usize, l.y as usize);
+        // Режим отладки: справа — кадр эмулятора 1:1 и чёрный фон ниже.
+        if self.opts.debug {
+            draw_debug_panel(src, &mut out, ow, oh);
+        }
         window.pre_present_notify();
         let _ = out.present();
     }

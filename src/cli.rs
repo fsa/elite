@@ -24,6 +24,10 @@ pub struct Options {
     /// Запустить игру сразу в полноэкранном режиме (borderless).
     /// Переключение во время игры: F11 или Alt+Enter.
     pub fullscreen: bool,
+    /// Режим отладки: справа от игры показывается полоса 256 пикселей с
+    /// кадром эмулятора 1:1. Ниже миниатюры полоса остаётся чёрной — там
+    /// позже появится отладочная информация.
+    pub debug: bool,
 }
 
 pub fn parse_args() -> Options {
@@ -39,6 +43,7 @@ pub fn parse_args() -> Options {
         native: false,
         save: None,
         fullscreen: false,
+        debug: false,
     };
     let mut args = env::args().skip(1);
     while let Some(a) = args.next() {
@@ -56,9 +61,10 @@ pub fn parse_args() -> Options {
             "--wav" => opts.wav = args.next(),
             "--save" => opts.save = args.next(),
             "--fullscreen" => opts.fullscreen = true,
+            "--debug" => opts.debug = true,
             "-h" | "--help" => {
                 println!(
-                    "usage: elite [game.bin] [--rom rom.bin] [--headless] [--frames N] [--dump out.ppm] [--mute] [--audio] [--wav out.wav] [--native] [--save FILE] [--fullscreen]"
+                    "usage: elite [game.bin] [--rom rom.bin] [--headless] [--frames N] [--dump out.ppm] [--mute] [--audio] [--wav out.wav] [--native] [--save FILE] [--fullscreen] [--debug]"
                 );
                 println!("  загружается версия Кладова (zx_bin/kladov.bin)");
                 println!("  --mute     отключить вывод звука через PipeWire");
@@ -67,9 +73,13 @@ pub fn parse_args() -> Options {
                 println!("  --native   включить нативные (Rust) замены подпрограмм");
                 println!("  --save FILE фиксированный файл командира вместо диалога");
                 println!("  --fullscreen запуск в полноэкранном режиме (borderless)");
+                println!("  --debug    отладка: справа полоса 256 px с кадром");
+                println!("             эмулятора 1:1 (ниже миниатюры — чёрный фон)");
                 println!("В игре: F1-F4 — оригинальные клавиши 1-4 (F1 включает");
                 println!("        нативный вид полёта после вылета, F4 на станции —");
-                println!("        нативную закупку), F10 — карта галактики,");
+                println!("        нативную закупку), F9 — альтернативный экран");
+                println!("        капитана (как и L, на станции и в полёте),");
+                println!("        F10 — карта галактики,");
                 println!("        Esc — меню паузы, F11 — полный экран, F12 — ускорение x2.");
                 println!();
                 println!("Заставка нативная: [SPACE] — начать игру, [Esc] — меню");
@@ -85,6 +95,8 @@ pub fn parse_args() -> Options {
                 println!("  F1-F4      клавиши 1-4 оригинала; F1 включает нативный");
                 println!("             вид полёта (на станции — после вылета), F4 на");
                 println!("             станции — нативную закупку");
+                println!("  F9         альтернативный экран капитана (как L,");
+                println!("             L переключает на классический экран)");
                 println!("  F10        нативная карта галактики");
                 println!("  F11, Alt+Enter полный экран");
                 println!("  F12        ускорение эмуляции Z80 вдвое (вкл/выкл)");

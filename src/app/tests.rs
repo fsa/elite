@@ -27,7 +27,7 @@ use crate::machine::Spectrum;
 use crate::native;
 use crate::splash;
 use crate::ui::menu::draw_pause_menu;
-use crate::ui::present::{SRC_H, SRC_W, blit_zx_frame};
+use crate::ui::present::{SRC_H, SRC_W, blit_zx_frame, draw_debug_panel};
 use crate::world::{current_planet_color, save_layout_kladov, scene_markers};
 
 
@@ -167,6 +167,7 @@ use crate::world::{current_planet_color, save_layout_kladov, scene_markers};
             native: false,
             save: None,
             fullscreen: false,
+            debug: false,
         }
     }
 
@@ -194,6 +195,38 @@ use crate::world::{current_planet_color, save_layout_kladov, scene_markers};
         let last = l.y as usize + (SRC_H - 1) * l.scale;
         assert!(last + l.scale <= h, "нижние строки кадра обрезаны");
         assert_eq!(out[last * w + l.x as usize] & 0xFF, (SRC_H - 1) as u32);
+    }
+
+    /// Режим `--debug`: окно делится на игровую часть слева и полосу
+    /// отладки справа. Полоса шириной ровно 256 пикселей, кадр эмулятора
+    /// выводится в ней 1:1, ниже — чёрный фон.
+    #[test]
+    fn debug_mode_reserves_256px_panel_on_right() {
+        let (w, h) = (1280u32, 768u32);
+        let l = display::layout_for(w, h, true);
+        assert_eq!(l.scale, 4);
+        assert_eq!((l.x, l.y, l.w, l.h), (0, 0, 1024, 768));
+        assert_eq!(display::debug_panel_x(w), 1024);
+        assert_eq!(display::game_area(w, h, true), (1024, 768));
+        // Без отладки игра по-прежнему занимает всё окно.
+        assert_eq!(display::game_area(w, h, false), (w, h));
+
+        // Миниатюра — сырой кадр эмулятора 1:1 (номер строки в младшем
+        // байте), ниже 192 строк полоса чёрная.
+        let mut src = vec![0u32; SRC_W * SRC_H];
+        for y in 0..SRC_H {
+            for x in 0..SRC_W {
+                src[y * SRC_W + x] = 0xFF00_0000 | y as u32;
+            }
+        }
+        let mut out = vec![0xFFFF_FFFFu32; w as usize * h as usize];
+        draw_debug_panel(&src, &mut out, w as usize, h as usize);
+        let x0 = display::debug_panel_x(w) as usize;
+        assert_eq!(out[x0] & 0xFF, 0);
+        assert_eq!(out[(SRC_H - 1) * w as usize + x0] & 0xFF, (SRC_H - 1) as u32);
+        assert_eq!(out[SRC_H * w as usize + x0], 0, "ниже миниатюры не чёрно");
+        assert_eq!(out[0], 0xFFFF_FFFF, "игровая часть затёрта");
+        assert_eq!(out[x0 - 1], 0xFFFF_FFFF, "полоса задела игру");
     }
 
     /// F10 открывает отдельную нативную карту галактики: игра не встаёт, но
@@ -316,41 +349,90 @@ use crate::world::{current_planet_color, save_layout_kladov, scene_markers};
         assert!(!app.shop.active, "F4 не закрыл экран закупки");
     }
 
-    /// F9 — нативный экран статуса пилота. Доступен только на станции:
-    /// в полёте клавиша ничего не делает. Экран не пропускает ввод в игру,
-    /// Esc и повторный F9 закрывают его, а игровая клавиша возвращает экран
-    /// игры и уходит эмулятору.
+    /// F9 — нативная альтернатива экрану капитана (`L`). Работает так же,
+    /// как родная команда `L`: и на станции, и в полёте. Экран показывает свой
+    /// интерфейс, а эмулятору уходит нажатие `L`, и оригинал переходит в режим
+    /// показа капитана. Повторный F9 оставляет экран открытым, Esc закрывает,
+    /// а `L` переключает на классический экран капитана.
     #[test]
-    fn f9_opens_status_only_on_station() {
+    fn f9_opens_captain_alternative() {
         let opts = test_options();
-        let mut app = App::new(boot(), &opts);
+        // Запускаем игру до станции: снапшот сам по себе ещё на заставке.
+        let mut m = boot();
+        let (intro, game) = scene_markers();
+        m.intro_range = intro;
+        m.game_marker = game;
+        for _ in 0..30 {
+            m.run_frame();
+        }
+        let mut app = App::new(m, &opts);
+        native::start_game(&mut app.machine, save_layout_kladov());
+        for _ in 0..5000 {
+            app.machine.run_frame();
+            if !app.machine.intro_seen {
+                break;
+            }
+        }
+        assert!(!app.machine.intro_seen, "подготовка: игра не запустилась");
         assert!(
             flight::z80_is_docked(&app.machine.mem),
             "подготовка: ожидалась станция"
         );
+        // На станции оригинал уже показывает капитана; откатываем экран,
+        // чтобы проверить, что F9 действительно возвращает его нажатием L.
+        app.machine.mem[flight::Z80_WHAT_ON_SCREEN] = 0;
         assert!(!app.status.active);
         app.key_event(KeyCode::F9, true, false);
-        assert!(app.status.active, "F9 не открыл экран статуса");
+        assert!(app.status.active, "F9 не открыл альтернативный экран");
+
+        // Эмулятору подготовлено нажатие `L`, и кадр статуса отдаёт его игре.
+        let (lrow, lbit) = matrix_pos(KeyCode::KeyL).expect("L в матрице");
+        assert_eq!(app.pending_key, Some((lrow, lbit)), "F9 не отдал игре L");
+        app.status_tick();
+        assert_eq!(
+            app.machine.keyboard[lrow] & (1 << lbit),
+            0,
+            "L не ушёл в эмулятор"
+        );
+        assert_eq!(
+            app.machine.mem[flight::Z80_WHAT_ON_SCREEN],
+            flight::Z80_SCREEN_PILOT_INFO,
+            "эмулятор не перешёл в режим показа капитана"
+        );
 
         // Пока экран открыт, ввод не попадает в эмулятор.
         app.apply_input();
         assert_eq!(app.machine.kempston, 0, "ввод не должен уходить в игру");
 
-        // Esc закрывает экран.
+        // Esc закрывает экран и возвращает прежний экран игры.
         app.key_event(KeyCode::Escape, true, false);
-        assert!(!app.status.active, "Esc не закрыл экран статуса");
+        assert!(!app.status.active, "Esc не закрыл экран");
+        assert_eq!(
+            app.machine.mem[flight::Z80_WHAT_ON_SCREEN], 0,
+            "прежний экран игры не восстановлен"
+        );
 
-        // Повторный F9 открывает и закрывает экран.
+        // Повторный F9 не закрывает экран.
         app.key_event(KeyCode::F9, true, false);
-        assert!(app.status.active, "F9 не открыл статус повторно");
+        assert!(app.status.active, "F9 не открыл экран повторно");
         app.key_event(KeyCode::F9, true, false);
-        assert!(!app.status.active, "F9 не закрыл экран статуса");
+        assert!(app.status.active, "повторный F9 закрыл экран");
+
+        // L убирает нативную надстройку и оставляет классический экран.
+        app.key_event(KeyCode::KeyL, true, false);
+        assert!(!app.status.active, "L не переключил на классический экран");
+        assert_eq!(
+            app.machine.mem[flight::Z80_WHAT_ON_SCREEN],
+            flight::Z80_SCREEN_PILOT_INFO,
+            "игра не осталась на классическом экране капитана"
+        );
+        assert_eq!(app.pending_key, None, "L не должен уходить в эмулятор");
 
         // Игровая клавиша закрывает экран и передаётся игре.
         app.key_event(KeyCode::F9, true, false);
         assert!(app.status.active);
         app.key_event(KeyCode::Digit1, true, false);
-        assert!(!app.status.active, "игровая клавиша не закрыла статус");
+        assert!(!app.status.active, "игровая клавиша не закрыла экран");
         app.apply_input();
         let (row, bit) = matrix_pos(KeyCode::Digit1).expect("1 в матрице");
         assert_eq!(
@@ -359,12 +441,17 @@ use crate::world::{current_planet_color, save_layout_kladov, scene_markers};
             "клавиша не ушла в эмулятор"
         );
 
-        // В полёте F9 ничего не открывает.
+        // В полёте F9 тоже открывает альтернативу и отдаёт игре L.
         let mut app = App::new(boot(), &opts);
+        app.machine.mem[flight::Z80_WHAT_ON_SCREEN] = 0;
+        app.machine.mem[flight::Z80_IND_DANGER] = 1;
         app.key_event(KeyCode::F1, true, false);
         assert!(app.flight.active);
         app.key_event(KeyCode::F9, true, false);
-        assert!(!app.status.active, "F9 открыл статус в полёте");
+        assert!(app.status.active, "F9 не открыл экран в полёте");
+        assert!(!app.flight.active, "нативный вид остался под экраном");
+        let (lrow, lbit) = matrix_pos(KeyCode::KeyL).expect("L в матрице");
+        assert_eq!(app.pending_key, Some((lrow, lbit)), "F9 не отдал игре L");
     }
 
     /// F1 включает нативный экран полёта и одновременно отдаёт игре клавишу 1.

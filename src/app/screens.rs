@@ -16,14 +16,15 @@ impl App<'_> {
         self.hdmap.open(&self.machine.mem, galaxy::KLADOV_GALAXY);
         if let Some(w) = &self.window {
             let size = w.inner_size();
-            self.hdmap.resize(size.width, size.height);
+            let (gw, gh) = self.game_size(size.width, size.height);
+            self.hdmap.resize(gw, gh);
         }
         let prev = self.machine.mem[flight::Z80_WHAT_ON_SCREEN];
         self.hdmap_screen = Some(prev);
         self.machine.mem[flight::Z80_WHAT_ON_SCREEN] = flight::Z80_SCREEN_LOCAL_MAP;
         self.sync_hdmap_target();
         self.shop.close();
-        self.status.close();
+        self.close_status();
         self.menu = false;
         self.pending_key = None;
         self.pending_flight = None;
@@ -65,10 +66,11 @@ impl App<'_> {
         self.shop.open(&self.machine.mem, equip::KLADOV_SHOP);
         if let Some(w) = &self.window {
             let size = w.inner_size();
-            self.shop.resize(size.width, size.height);
+            let (gw, gh) = self.game_size(size.width, size.height);
+            self.shop.resize(gw, gh);
         }
         self.close_hdmap();
-        self.status.close();
+        self.close_status();
         self.menu = false;
         self.pending_key = None;
         self.pending_flight = None;
@@ -90,18 +92,44 @@ impl App<'_> {
         }
     }
 
-    /// Открыть нативный экран статуса пилота (F9). Игра ставится на паузу,
-    /// как и на экране закупки: экран только для просмотра.
+    /// Открыть нативный экран статуса пилота (F9) — альтернативу экрану `L`.
+    /// Пока он открыт, Z80 продолжает работать: в эмулятор уходит нажатие
+    /// `L`, и оригинал переходит в режим показа капитана.
     pub(super) fn open_status(&mut self) {
-        self.status.open(&self.machine.mem, status::KLADOV_STATUS);
         self.close_hdmap();
         self.shop.close();
         self.flight.close();
+        self.status_screen = Some(self.machine.mem[flight::Z80_WHAT_ON_SCREEN]);
+        self.status.open(&self.machine.mem, status::KLADOV_STATUS);
         self.menu = false;
         self.pending_key = None;
         self.pending_shop = false;
         self.pending_flight = None;
         self.pending_launch = false;
+    }
+
+    /// Закрыть нативный экран статуса и вернуть прежний экран игры, если
+    /// оригинал всё ещё показывает экран капитана (`L`).
+    pub(super) fn close_status(&mut self) {
+        if !self.status.active {
+            return;
+        }
+        self.status.close();
+        self.pending_key = None;
+        if let Some(prev) = self.status_screen.take() {
+            if self.machine.mem[flight::Z80_WHAT_ON_SCREEN] == flight::Z80_SCREEN_PILOT_INFO {
+                self.machine.mem[flight::Z80_WHAT_ON_SCREEN] = prev;
+            }
+        }
+    }
+
+    /// Убрать нативную надстройку и оставить классический экран капитана:
+    /// по `L` игра показывает свой родной экран, а не прежний вид.
+    pub(super) fn close_status_to_classic(&mut self) {
+        self.status.close();
+        self.pending_key = None;
+        self.status_screen = None;
+        self.machine.mem[flight::Z80_WHAT_ON_SCREEN] = flight::Z80_SCREEN_PILOT_INFO;
     }
 
     /// Открыть нативный экран полёта поверх текущего состояния игры.
@@ -111,7 +139,7 @@ impl App<'_> {
         self.flight.set_view_dir(dir);
         self.close_hdmap();
         self.shop.close();
-        self.status.close();
+        self.close_status();
         self.menu = false;
         self.pending_key = None;
         self.pending_shop = false;

@@ -60,6 +60,9 @@ pub struct GalaxyLayout {
     /// Координаты текущей системы: X и «сырой» Y.
     pub sys_x: usize,
     pub sys_y: usize,
+    /// Координаты выбранной для гиперпрыжка системы: X и «сырой» Y.
+    pub target_x: usize,
+    pub target_y: usize,
     /// Топливо (`Pilot_Fuel`): задаёт радиус достижимости на карте.
     pub fuel: usize,
     /// Особенности расчёта расстояний в этой версии игры.
@@ -73,6 +76,8 @@ pub const KLADOV_GALAXY: GalaxyLayout = GalaxyLayout {
     galaxy: 0xD065,
     sys_x: 0xD099,
     sys_y: 0xD097,
+    target_x: 0xD0BB,
+    target_y: 0xD0BC,
     fuel: 0xD082,
     metric: Metric::Kladov,
 };

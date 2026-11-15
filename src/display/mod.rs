@@ -18,6 +18,28 @@ pub const ZX_W: usize = 256;
 /// Высота кадра ZX Spectrum.
 pub const ZX_H: usize = 192;
 
+/// Ширина отладочной полосы: кадр эмулятора выводится в ней 1:1, как на
+/// экране ZX Spectrum (256 пикселей). Полоса занимает правый край окна,
+/// ниже миниатюры остаётся чёрный фон для будущей отладочной информации.
+pub const DEBUG_W: usize = ZX_W;
+
+/// Левый край отладочной полосы в окне шириной `win_w`. Если окно уже
+/// полосы, полоса прижимается к левому краю и обрезается по окну.
+pub fn debug_panel_x(win_w: u32) -> u32 {
+    win_w.saturating_sub(DEBUG_W as u32)
+}
+
+/// Размер игровой области окна: при включённой отладке справа остаётся
+/// полоса [`DEBUG_W`], иначе игра занимает всё окно.
+pub fn game_area(win_w: u32, win_h: u32, debug: bool) -> (u32, u32) {
+    let w = if debug {
+        win_w.saturating_sub(DEBUG_W as u32)
+    } else {
+        win_w
+    };
+    (w, win_h)
+}
+
 /// Прозрачный пиксель HD-слоя: накладывается только непрозрачный цвет
 /// (со старшим байтом != 0, например `0xFFRRGGBB`).
 pub const TRANSPARENT: u32 = 0;
@@ -51,6 +73,13 @@ pub fn layout(win_w: u32, win_h: u32) -> Layout {
         w,
         h,
     }
+}
+
+/// Раскладка ZX-кадра в игровой области окна. При отладке игра сдвигается
+/// влево, чтобы справа поместилась полоса [`DEBUG_W`].
+pub fn layout_for(win_w: u32, win_h: u32, debug: bool) -> Layout {
+    let (w, h) = game_area(win_w, win_h, debug);
+    layout(w, h)
 }
 
 mod frame;

@@ -30,3 +30,19 @@ pub(crate) fn blit_zx_frame(
         }
     }
 }
+
+/// Отладочная полоса справа: кадр эмулятора 1:1 вверху (ширина ZX-экрана,
+/// 256 пикселей), ниже — чёрный фон под будущую информацию.
+pub(crate) fn draw_debug_panel(src: &[u32], out: &mut [u32], out_w: usize, out_h: usize) {
+    let panel_w = SRC_W.min(out_w);
+    let x0 = out_w - panel_w;
+    // Вся полоса чёрная, включая нижнюю часть под миниатюрой.
+    for y in 0..out_h {
+        out[y * out_w + x0..y * out_w + out_w].fill(0);
+    }
+    let h = SRC_H.min(out_h);
+    for y in 0..h {
+        let dst = y * out_w + x0;
+        out[dst..dst + panel_w].copy_from_slice(&src[y * SRC_W..y * SRC_W + panel_w]);
+    }
+}

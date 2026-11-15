@@ -21,6 +21,7 @@ use winit::window::Window;
 use crate::audio::{self, Audio};
 use crate::cli::Options;
 use crate::cockpit;
+use crate::display;
 use crate::equip;
 use crate::flight;
 use crate::hdmap;
@@ -75,8 +76,11 @@ struct App<'a> {
     hdmap_screen: Option<u8>,
     /// Нативный экран закупки оборудования (F4) — заменяет экран игры.
     shop: equip::Shop,
-    /// Нативный экран статуса пилота (F9) — заменяет экран игры.
+    /// Нативный экран статуса пилота (F9) — альтернатива экрану `L`.
     status: status::Status,
+    /// Значение `WhatOnScreen` до открытия статуса: по нему экран игры
+    /// возвращается при закрытии нативного интерфейса.
+    status_screen: Option<u8>,
     /// Экран полёта (F1) — нативный рендер по данным Z80. Пока он активен,
     /// окно занимает вид из кабины и нативная приборная панель; эмулятор
     /// продолжает работать и задаёт мир, поэтому ввод идёт в игру.
@@ -147,6 +151,7 @@ impl<'a> App<'a> {
             hdmap_screen: None,
             shop: equip::Shop::new(),
             status: status::Status::new(),
+            status_screen: None,
             flight: flight::Flight::new(),
             splash: splash::Splash::new(),
             cockpit: cockpit::Cockpit::new(),
@@ -174,6 +179,18 @@ impl<'a> App<'a> {
             mouse_wheel_down: false,
             next_frame: Instant::now(),
         }
+    }
+
+    /// Размер игровой области окна. В режиме `--debug` справа остаётся
+    /// отладочная полоса шириной [`display::DEBUG_W`] пикселей.
+    pub(super) fn game_size(&self, win_w: u32, win_h: u32) -> (u32, u32) {
+        display::game_area(win_w, win_h, self.opts.debug)
+    }
+
+    /// Раскладка ZX-кадра: в отладочном режиме — в левой части окна,
+    /// чтобы не заходить под отладочную полосу.
+    pub(super) fn zx_layout(&self, win_w: u32, win_h: u32) -> display::Layout {
+        display::layout_for(win_w, win_h, self.opts.debug)
     }
 
     /// Записать накопленный звук в WAV (если запрошено `--wav`).
