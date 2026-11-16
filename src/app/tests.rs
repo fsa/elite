@@ -349,6 +349,59 @@ use crate::world::{current_planet_color, save_layout_kladov, scene_markers};
         assert!(!app.shop.active, "F4 не закрыл экран закупки");
     }
 
+    /// F7 — нативная альтернатива экрану информации о планете (`P`).
+    /// Эмулятору уходит нажатие `P`, нативный экран открывается после кадра,
+    /// когда оригинал обработал команду. Esc закрывает экран и возвращает
+    /// прежний экран игры.
+    #[test]
+    fn f7_opens_planet_info() {
+        let opts = test_options();
+        let mut m = boot();
+        let (intro, game) = scene_markers();
+        m.intro_range = intro;
+        m.game_marker = game;
+        for _ in 0..30 {
+            m.run_frame();
+        }
+        let mut app = App::new(m, &opts);
+        native::start_game(&mut app.machine, save_layout_kladov());
+        for _ in 0..5000 {
+            app.machine.run_frame();
+            if !app.machine.intro_seen {
+                break;
+            }
+        }
+        assert!(!app.machine.intro_seen, "подготовка: игра не запустилась");
+
+        app.key_event(KeyCode::F7, true, false);
+        assert!(!app.sysinfo.active, "экран не должен открыться до кадра");
+        assert!(app.pending_sysinfo, "F7 не запросил экран информации");
+        let (prow, pbit) = matrix_pos(KeyCode::KeyP).expect("P в матрице");
+        assert_eq!(app.pending_key, Some((prow, pbit)), "F7 не отдал игре P");
+
+        // Кадр, в котором оригинал обрабатывает P, затем открывается нативный экран.
+        app.apply_input();
+        app.machine.run_frame();
+        app.open_pending_sysinfo();
+        assert!(app.sysinfo.active, "F7 не открыл нативный экран");
+        assert_eq!(
+            app.machine.mem[flight::Z80_WHAT_ON_SCREEN],
+            flight::Z80_SCREEN_INFO_PLANET,
+            "эмулятор не перешёл в режим экрана планеты"
+        );
+        assert!(!app.sysinfo.info.name.is_empty(), "данные планеты не прочитаны");
+
+        app.key_event(KeyCode::Escape, true, false);
+        assert!(!app.sysinfo.active, "Esc не закрыл экран информации");
+
+        // Повторное открытие работает.
+        app.key_event(KeyCode::F7, true, false);
+        app.apply_input();
+        app.machine.run_frame();
+        app.open_pending_sysinfo();
+        assert!(app.sysinfo.active, "повторный F7 не открыл экран");
+    }
+
     /// F9 — нативная альтернатива экрану капитана (`L`). Работает так же,
     /// как родная команда `L`: и на станции, и в полёте. Экран показывает свой
     /// интерфейс, а эмулятору уходит нажатие `L`, и оригинал переходит в режим

@@ -15,6 +15,8 @@ pub(super) const Z80_MEM_MIN: usize = 0x7EE0;
 pub const Z80_WHAT_ON_SCREEN: usize = 0x70E3;
 /// `WhatOnScreen` для локальной карты (`SHORT RANGE CHART`).
 pub const Z80_SCREEN_LOCAL_MAP: u8 = 8;
+/// `WhatOnScreen` для экрана информации о планете (`Cmd_P_InfoPlanet`, `P`).
+pub const Z80_SCREEN_INFO_PLANET: u8 = 9;
 /// `WhatOnScreen` для экрана пилота (`Cmd_L_PilotInfo`, клавиша `L`).
 pub const Z80_SCREEN_PILOT_INFO: u8 = 0x0B;
 /// `IndDanger`: `0` — корабль пристыкован к станции, иначе — в полёте.

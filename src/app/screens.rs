@@ -6,6 +6,7 @@ use crate::flight;
 use crate::galaxy;
 use crate::native;
 use crate::status;
+use crate::sysinfo;
 use crate::world;
 
 impl App<'_> {
@@ -25,6 +26,8 @@ impl App<'_> {
         self.sync_hdmap_target();
         self.shop.close();
         self.close_status();
+        self.close_sysinfo();
+        self.pending_sysinfo = false;
         self.menu = false;
         self.pending_key = None;
         self.pending_flight = None;
@@ -71,6 +74,8 @@ impl App<'_> {
         }
         self.close_hdmap();
         self.close_status();
+        self.close_sysinfo();
+        self.pending_sysinfo = false;
         self.menu = false;
         self.pending_key = None;
         self.pending_flight = None;
@@ -99,6 +104,8 @@ impl App<'_> {
         self.close_hdmap();
         self.shop.close();
         self.flight.close();
+        self.close_sysinfo();
+        self.pending_sysinfo = false;
         self.status_screen = Some(self.machine.mem[flight::Z80_WHAT_ON_SCREEN]);
         self.status.open(&self.machine.mem, status::KLADOV_STATUS);
         self.menu = false;
@@ -132,6 +139,43 @@ impl App<'_> {
         self.machine.mem[flight::Z80_WHAT_ON_SCREEN] = flight::Z80_SCREEN_PILOT_INFO;
     }
 
+    /// Открыть нативный экран информации о планете (F7), отложенный до
+    /// обработки клавиши `P` оригиналом.
+    pub(super) fn open_pending_sysinfo(&mut self) {
+        if !self.pending_sysinfo {
+            return;
+        }
+        self.pending_sysinfo = false;
+        if self.machine.intro_seen || self.menu {
+            self.sysinfo_screen = None;
+            return;
+        }
+        self.close_hdmap();
+        self.shop.close();
+        self.flight.close();
+        self.close_status();
+        self.pending_flight = None;
+        self.pending_launch = false;
+        self.sysinfo.open(&self.machine.mem, sysinfo::KLADOV_SYSINFO);
+    }
+
+    /// Закрыть нативный экран информации о планете и вернуть прежний экран
+    /// игры, если оригинал всё ещё показывает экран `P`.
+    pub(super) fn close_sysinfo(&mut self) {
+        if !self.sysinfo.active && self.sysinfo_screen.is_none() {
+            self.pending_sysinfo = false;
+            return;
+        }
+        self.sysinfo.close();
+        self.pending_sysinfo = false;
+        self.pending_key = None;
+        if let Some(prev) = self.sysinfo_screen.take() {
+            if self.machine.mem[flight::Z80_WHAT_ON_SCREEN] == flight::Z80_SCREEN_INFO_PLANET {
+                self.machine.mem[flight::Z80_WHAT_ON_SCREEN] = prev;
+            }
+        }
+    }
+
     /// Открыть нативный экран полёта поверх текущего состояния игры.
     fn open_flight(&mut self, dir: flight::ViewDir) {
         let planet_color = world::current_planet_color(&self.machine.mem);
@@ -140,6 +184,8 @@ impl App<'_> {
         self.close_hdmap();
         self.shop.close();
         self.close_status();
+        self.close_sysinfo();
+        self.pending_sysinfo = false;
         self.menu = false;
         self.pending_key = None;
         self.pending_shop = false;

@@ -36,6 +36,8 @@ impl App<'_> {
         let in_transition = flight::z80_in_transition(mem);
 
         self.shop.close();
+        self.close_sysinfo();
+        self.pending_sysinfo = false;
         self.menu = false;
         self.pending_shop = false;
         if docked {
@@ -109,6 +111,29 @@ impl App<'_> {
             self.shop.close();
             return;
         }
+        // F7 — нативная альтернатива экрану информации о планете (`P`).
+        // Эмулятору отдаём `P`, а нативный экран открываем после кадра,
+        // когда оригинал обработает команду и заполнит поля планеты.
+        if code == KeyCode::F7 && !repeat {
+            if !self.sysinfo.active
+                && !self.pending_sysinfo
+                && !self.menu
+                && !self.machine.intro_seen
+            {
+                self.close_hdmap();
+                self.shop.close();
+                self.close_status();
+                self.flight.close();
+                self.sysinfo_screen = Some(self.machine.mem[flight::Z80_WHAT_ON_SCREEN]);
+                self.pending_sysinfo = true;
+                self.pending_key = matrix_pos(KeyCode::KeyP);
+                self.menu = false;
+                self.pending_shop = false;
+                self.pending_flight = None;
+                self.pending_launch = false;
+            }
+            return;
+        }
         // F9 — нативная альтернатива экрану капитана (`L`): показываем свой
         // интерфейс, а эмулятору отдаём нажатие `L`, чтобы игра перешла в
         // режим показа капитана. Родная команда `L` работает и на станции,
@@ -117,6 +142,7 @@ impl App<'_> {
         // клавиша).
         if code == KeyCode::F9 && !repeat {
             if !self.status.active && !self.menu && !self.machine.intro_seen {
+                self.close_sysinfo();
                 self.open_status();
                 self.pending_key = matrix_pos(KeyCode::KeyL);
             }
@@ -249,6 +275,25 @@ impl App<'_> {
                 _ => {
                     if is_game_key(code) {
                         self.close_status();
+                        self.pending_key = matrix_pos(code);
+                    }
+                }
+            }
+            return;
+        }
+        // При открытом экране информации о планете всё управление принадлежит
+        // ему: Esc закрывает и возвращает прежний экран игры, игровые клавиши
+        // уходят в эмулятор.
+        if self.sysinfo.active {
+            match code {
+                KeyCode::Escape if !repeat => self.close_sysinfo(),
+                KeyCode::F1 | KeyCode::F2 | KeyCode::F3 | KeyCode::F4 if !repeat => {
+                    self.close_sysinfo();
+                    self.function_key(code);
+                }
+                _ => {
+                    if is_game_key(code) {
+                        self.close_sysinfo();
                         self.pending_key = matrix_pos(code);
                     }
                 }

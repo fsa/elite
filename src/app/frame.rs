@@ -71,6 +71,22 @@ impl App<'_> {
         }
     }
 
+    /// Кадр альтернативного экрана информации о планете (`F7`). Эмулятор
+    /// продолжает работать: нажатие `P`, отложенное при открытии, уходит игре
+    /// один раз, а дальше ввод принадлежит нативному интерфейсу.
+    pub(super) fn sysinfo_tick(&mut self) {
+        self.machine.release_all_keys();
+        self.machine.release_joystick();
+        if let Some((row, bit)) = self.pending_key.take() {
+            self.machine.set_key(row, bit, true);
+        }
+        if !self.menu {
+            let frames = self.emulation_frames();
+            self.machine.run_frames(frames);
+            self.play_frame_audio();
+        }
+    }
+
     /// Полукруг индикатора опасности в правом верхнем углу вспомогательного
     /// экрана с рамкой (карта, экран капитана). В оригинале он есть только в
     /// полёте: на станции индикатор погашен.
@@ -97,6 +113,7 @@ impl App<'_> {
             && !self.hdmap.active
             && !self.shop.active
             && !self.status.active
+            && !self.sysinfo.active
             && !self.machine.intro_seen
             && !self.menu;
         self.machine.game_msg.set_capture(capture);
@@ -129,6 +146,7 @@ impl App<'_> {
                 if !self.menu {
                     let frames = self.emulation_frames();
                     self.machine.run_frames(frames);
+                    self.open_pending_sysinfo();
                     self.sync_flight_after_frames(frames);
                     self.play_frame_audio();
                 }
@@ -141,6 +159,12 @@ impl App<'_> {
                 // работать и получает нажатие `L`, а ввод принадлежит
                 // нативному интерфейсу.
                 self.status_tick();
+                self.open_pending_sysinfo();
+            } else if self.sysinfo.active {
+                // Альтернатива экрану информации о планете (`P`): эмулятор
+                // продолжает работать и получает нажатие `P`, а ввод
+                // принадлежит нативному интерфейсу.
+                self.sysinfo_tick();
             } else if self.flight.active {
                 // Экран полёта: рисует то, что посчитал Z80, поэтому эмулятор
                 // продолжает работать, а ввод идёт в игру. На паузе (меню)
@@ -182,6 +206,7 @@ impl App<'_> {
                 self.apply_input();
                 self.machine.run_frames(self.emulation_frames());
                 self.open_pending_shop();
+                self.open_pending_sysinfo();
                 self.open_pending_flight();
                 if self.machine.save_requested {
                     self.machine.save_requested = false;
@@ -226,6 +251,8 @@ impl App<'_> {
         } else if self.status.active {
             self.status.draw(&mut self.machine.hd, ZX_FONT);
             self.draw_danger_half();
+        } else if self.sysinfo.active {
+            self.sysinfo.draw(&mut self.machine.hd, ZX_FONT);
         } else if self.machine.intro_seen {
             // Нативная заставка; внизу — тот же кокпит, что в полёте.
             // Заголовок с фигурой занимают верхнюю область, поэтому не

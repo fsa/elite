@@ -28,6 +28,7 @@ use crate::hdmap;
 use crate::machine::Spectrum;
 use crate::splash;
 use crate::status;
+use crate::sysinfo;
 use crate::ui::present::{SRC_H, SRC_W};
 
 mod frame;
@@ -81,6 +82,13 @@ struct App<'a> {
     /// Значение `WhatOnScreen` до открытия статуса: по нему экран игры
     /// возвращается при закрытии нативного интерфейса.
     status_screen: Option<u8>,
+    /// Нативный экран информации о планете (F7) — альтернатива экрану `P`.
+    sysinfo: sysinfo::SysInfo,
+    /// Значение `WhatOnScreen` до открытия экрана информации о планете.
+    sysinfo_screen: Option<u8>,
+    /// После кадра эмулятора открыть нативный экран информации о планете:
+    /// сначала игра должна обработать `P` и заполнить поля планеты.
+    pending_sysinfo: bool,
     /// Экран полёта (F1) — нативный рендер по данным Z80. Пока он активен,
     /// окно занимает вид из кабины и нативная приборная панель; эмулятор
     /// продолжает работать и задаёт мир, поэтому ввод идёт в игру.
@@ -152,6 +160,9 @@ impl<'a> App<'a> {
             shop: equip::Shop::new(),
             status: status::Status::new(),
             status_screen: None,
+            sysinfo: sysinfo::SysInfo::new(),
+            sysinfo_screen: None,
+            pending_sysinfo: false,
             flight: flight::Flight::new(),
             splash: splash::Splash::new(),
             cockpit: cockpit::Cockpit::new(),
