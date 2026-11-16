@@ -51,6 +51,77 @@ fn open_reads_commander_fields() {
     assert_eq!(status.rating_text(), "Competent");
 }
 
+/// Список оборудования — в порядке `Cmd_L_PilotInfo`: шесть флагов,
+/// лазеры по креплениям, компьютер и устройство невидимости.
+#[test]
+fn open_reads_equipment_in_original_order() {
+    let mut mem = fake_mem();
+    for addr in [0xD085, 0xD088, 0xD08A, 0xD08B, 0xD08C, 0xD08D] {
+        mem[addr] = 0xFF;
+    }
+    mem[0xD07D] = 1; // FRONT: pulse
+    mem[0xD07E] = 2; // REAR: beam
+    mem[0xD07F] = 0; // LEFT: нет лазера
+    mem[0xD080] = 4; // RIGHT: mining
+    mem[0xD086] = 1; // alien computer
+    mem[0xD0B0] = 0x40; // cloaking device
+    let mut status = Status::new();
+    status.open(&mem, KLADOV_STATUS);
+    assert_eq!(
+        status.info.equipment,
+        [
+            "E.C.M.System",
+            "Fuel Scoops",
+            "Energy Bomb",
+            "Energy Unit",
+            "Docking Computer",
+            "Galactic Hyperspace",
+            "Front Pulse Laser",
+            "Rear Beam Laser",
+            "Right Mining Laser",
+            "Alien Computer",
+            "Cloaking Device",
+        ]
+    );
+}
+
+/// Без оборудования список пуст, но заголовок на экране остаётся.
+#[test]
+fn no_equipment_gives_empty_list() {
+    assert!(opened().info.equipment.is_empty());
+}
+
+/// Блок оборудования белый и начинается через пустую строку после рейтинга.
+#[test]
+fn equipment_block_is_white_after_blank_line() {
+    let mut mem = fake_mem();
+    mem[0xD085] = 0xFF;
+    mem[0xD07D] = 1;
+    let mut status = Status::new();
+    status.open(&mem, KLADOV_STATUS);
+    let font = vec![0xFFu8; 0x300];
+    let mut f = Frame::new(1024, 768);
+    status.draw(&mut f, &font);
+
+    let l = draw::layout(1024, 768);
+    let x = l.margin + l.frame + 8 * l.text as i32;
+    let row_h = l.line + l.line / 2;
+    let blank_y = l.first_row_y + 6 * row_h;
+    let heading_y = l.first_row_y + 7 * row_h;
+    let item_y = l.first_row_y + 8 * row_h;
+    let width = f.width as usize;
+    let px = |x: i32, y: i32| f.pixels()[y as usize * width + x as usize];
+    // Строка между рейтингом и заголовком пустая.
+    assert_eq!(px(x, blank_y), 0xFF00_0000, "нет пустой строки");
+    // Заголовок и список — белые, предметы с отступом в 5 символов.
+    assert_eq!(px(x, heading_y), crate::cockpit::FRAME_COLOR, "заголовок");
+    assert_eq!(
+        px(x + 5 * 8 * l.text as i32, item_y),
+        crate::cockpit::FRAME_COLOR,
+        "предмет списка"
+    );
+}
+
 /// Пороги правового статуса — как в `Cmd_L_PilotInfo`: `0` — чист,
 /// `< 0x32` — нарушитель, дальше — беглец.
 #[test]
@@ -123,10 +194,11 @@ fn frame_matches_cockpit_geometry() {
         assert_eq!(l.margin, main.x, "{w}x{h}: левая рамка кокпита");
         assert_eq!(l.margin, main.y, "{w}x{h}: верхняя рамка кокпита");
         assert_eq!(main.w, w as i32 - 2 * l.margin, "{w}x{h}: ширина рамки");
-        // Шесть строк полей не заходят за нижнюю рамку.
+        // Шесть полей, пустая строка, заголовок и 12 строк оборудования
+        // не заходят за нижнюю рамку.
         let row_h = l.line + l.line / 2;
         assert!(
-            l.first_row_y + 5 * row_h + l.line < h as i32 - l.margin - l.frame,
+            l.first_row_y + 19 * row_h + l.line < h as i32 - l.margin - l.frame,
             "{w}x{h}: содержимое выходит за рамку"
         );
     }

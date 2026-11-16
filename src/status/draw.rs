@@ -1,4 +1,5 @@
-//! Отрисовка экрана статуса: рамка, строка командира по центру и поля.
+//! Отрисовка экрана статуса: рамка, строка командира по центру, поля и
+//! список установленного оборудования.
 
 use super::*;
 
@@ -10,6 +11,9 @@ const FRAME: u32 = crate::cockpit::FRAME_COLOR;
 const LABEL: u32 = 0xFF00_D7D7;
 /// Двоеточия и значения — белые.
 const VALUE: u32 = crate::cockpit::FRAME_COLOR;
+/// Отступ списка оборудования от колонки заголовков (в символах):
+/// в оригинале `EQUIPMENT:` печатается с колонки 1, предметы — с колонки 6.
+const EQUIP_INDENT: i32 = 5;
 
 /// Геометрия экрана, не зависящая от содержимого.
 pub(super) struct Layout {
@@ -78,6 +82,16 @@ pub(super) fn draw(status: &Status, info: &Info, f: &mut Frame, font: &[u8]) {
     row(f, y, "Legal Status", status.legal_text());
     y += row_h;
     row(f, y, "Rating", status.rating_text());
+
+    // Блок оборудования: пустая строка, белый заголовок и белый список —
+    // как в `Cmd_L_PilotInfo` (сразу после рейтинга).
+    let ix = x + EQUIP_INDENT * 8 * ts as i32;
+    y += 2 * row_h;
+    f.draw_text(font, x, y, "EQUIPMENT:", FRAME, ts);
+    for item in &info.equipment {
+        y += row_h;
+        f.draw_text(font, ix, y, item, FRAME, ts);
+    }
 
     // Рамка рисуется последней, чтобы не перекрывалась содержимым.
     draw_screen_frame(f, &l);

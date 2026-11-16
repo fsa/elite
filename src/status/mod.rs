@@ -7,8 +7,9 @@
 //! Показываются поля оригинала (`Cmd_L_PilotInfo` в версии Кладова):
 //! имя командира, текущая и целевая системы гиперпрыжка, деньги, топливо,
 //! правовой статус (`PilotLegalStatus`: `0` — чист, `< 0x32` — нарушитель,
-//! дальше — беглец) и боевой рейтинг (`PilotRating0..2`, пороги
-//! `8/16/32/64/128/512/2560/6400` — как в таблицах `byte_F0AE`/`byte_F0B4`).
+//! дальше — беглец), боевой рейтинг (`PilotRating0..2`, пороги
+//! `8/16/32/64/128/512/2560/6400` — как в таблицах `byte_F0AE`/`byte_F0B4`)
+//! и установленное оборудование — в том же порядке, что печатает оригинал.
 
 use crate::display::Frame;
 use crate::galaxy::{self, GalaxyLayout};
@@ -25,7 +26,47 @@ const OFF_LEGAL: usize = 11;
 const OFF_RATING: usize = 12;
 const OFF_CASH2: usize = 18;
 const OFF_CASH1: usize = 20;
+/// `PilotFrontLaser` и далее: FRONT, REAR, LEFT, RIGHT.
+const OFF_LASERS: usize = 41;
 const OFF_FUEL: usize = 46;
+/// `PilotECMSystem`.
+const OFF_ECM: usize = 49;
+/// `PilotAlienComputer` (бит 0 — компьютер установлен).
+const OFF_ALIEN: usize = 50;
+/// `PilotFuelScoops`.
+const OFF_FUEL_SCOOPS: usize = 52;
+/// `PilotEnergyBomb`.
+const OFF_ENERGY_BOMB: usize = 54;
+/// `PilotEnergyUnit`.
+const OFF_ENERGY_UNIT: usize = 55;
+/// `PilotDockingComputer`.
+const OFF_DOCKING_COMPUTER: usize = 56;
+/// `PilotGalacticHyper`.
+const OFF_GALACTIC: usize = 57;
+/// `PilotExtWeapon`: бит 6 — устройство невидимости.
+const OFF_EXT_WEAPON: usize = 0x5C;
+
+/// Флаги оборудования в порядке `Cmd_L_PilotInfo` (таблица `loc_F098+2`).
+const EQUIPMENT_FLAGS: [(usize, &str); 6] = [
+    (OFF_ECM, "E.C.M.System"),
+    (OFF_FUEL_SCOOPS, "Fuel Scoops"),
+    (OFF_ENERGY_BOMB, "Energy Bomb"),
+    (OFF_ENERGY_UNIT, "Energy Unit"),
+    (OFF_DOCKING_COMPUTER, "Docking Computer"),
+    (OFF_GALACTIC, "Galactic Hyperspace"),
+];
+
+/// Крепления лазеров — токены `0x60..0x63`.
+const MOUNTS: [&str; 4] = ["Front", "Rear", "Left", "Right"];
+/// Названия типов лазеров — токены `0x67/0x68/0x75/0x76`, неизвестный тип
+/// оригинал печатает как `SUPER LASER` (`0xF6`).
+const LASERS: [&str; 5] = [
+    "",
+    "Pulse Laser",
+    "Beam Laser",
+    "Military Laser",
+    "Mining Laser",
+];
 
 /// Раскладка экрана статуса (адреса версии Кладова).
 #[derive(Clone, Copy)]
@@ -57,6 +98,8 @@ struct Info {
     legal: u8,
     /// Боевой рейтинг (`PilotRating0..2`, 24 бита).
     rating: u32,
+    /// Установленное оборудование в порядке оригинала.
+    equipment: Vec<String>,
 }
 
 /// Состояние и отрисовка экрана статуса.
@@ -104,6 +147,7 @@ impl Status {
                 mem[p + OFF_RATING + 2],
                 0,
             ]),
+            equipment: read_equipment(&mem[p..]),
         };
         self.active = true;
     }
@@ -157,6 +201,33 @@ impl Default for Status {
     fn default() -> Self {
         Status::new()
     }
+}
+
+/// Список установленного оборудования в порядке `Cmd_L_PilotInfo`:
+/// шесть флагов, четыре лазера, компьютер и устройство невидимости.
+fn read_equipment(block: &[u8]) -> Vec<String> {
+    let mut list = Vec::new();
+    for &(off, name) in &EQUIPMENT_FLAGS {
+        if block[off] != 0 {
+            list.push(name.to_string());
+        }
+    }
+    for (i, &mount) in MOUNTS.iter().enumerate() {
+        match block[OFF_LASERS + i] {
+            0 => {}
+            t => {
+                let laser = LASERS.get(t as usize).copied().unwrap_or("Super Laser");
+                list.push(format!("{mount} {laser}"));
+            }
+        }
+    }
+    if block[OFF_ALIEN] & 1 != 0 {
+        list.push("Alien Computer".to_string());
+    }
+    if block[OFF_EXT_WEAPON] & 0x40 != 0 {
+        list.push("Cloaking Device".to_string());
+    }
+    list
 }
 
 /// Имя командира: строка до `NUL`, без хвостовых пробелов; непечатаемые
