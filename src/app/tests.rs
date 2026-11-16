@@ -220,11 +220,13 @@ use crate::world::{current_planet_color, save_layout_kladov, scene_markers};
             }
         }
         let mut out = vec![0xFFFF_FFFFu32; w as usize * h as usize];
-        draw_debug_panel(&src, &mut out, w as usize, h as usize);
+        draw_debug_panel(&src, &mut out, w as usize, h as usize, &[]);
         let x0 = display::debug_panel_x(w) as usize;
         assert_eq!(out[x0] & 0xFF, 0);
         assert_eq!(out[(SRC_H - 1) * w as usize + x0] & 0xFF, (SRC_H - 1) as u32);
         assert_eq!(out[SRC_H * w as usize + x0], 0, "ниже миниатюры не чёрно");
+        // Отступ в одно знакоместо от основного экрана (верх дампа) пустой.
+        assert_eq!(out[(SRC_H + 4) * w as usize + x0 + 8], 0);
         assert_eq!(out[0], 0xFFFF_FFFF, "игровая часть затёрта");
         assert_eq!(out[x0 - 1], 0xFFFF_FFFF, "полоса задела игру");
     }
