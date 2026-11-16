@@ -35,6 +35,7 @@ mod native;
 mod render3d;
 mod shipdata;
 mod splash;
+mod market;
 mod status;
 mod sysinfo;
 mod storage;

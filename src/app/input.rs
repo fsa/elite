@@ -37,6 +37,7 @@ impl App<'_> {
 
         self.shop.close();
         self.close_sysinfo();
+        self.close_market();
         self.pending_sysinfo = false;
         self.menu = false;
         self.pending_shop = false;
@@ -101,6 +102,7 @@ impl App<'_> {
             if self.hdmap.active {
                 self.close_hdmap();
             } else if !self.machine.intro_seen {
+                self.close_market();
                 self.open_hdmap();
             }
             return;
@@ -124,6 +126,7 @@ impl App<'_> {
                 self.shop.close();
                 self.close_status();
                 self.flight.close();
+                self.close_market();
                 self.sysinfo_screen = Some(self.machine.mem[flight::Z80_WHAT_ON_SCREEN]);
                 self.pending_sysinfo = true;
                 self.pending_key = matrix_pos(KeyCode::KeyP);
@@ -143,10 +146,42 @@ impl App<'_> {
         if code == KeyCode::F9 && !repeat {
             if !self.status.active && !self.menu && !self.machine.intro_seen {
                 self.close_sysinfo();
+                self.close_market();
                 self.open_status();
                 self.pending_key = matrix_pos(KeyCode::KeyL);
             }
             return;
+        }
+        // F8 — нативный показ экрана цен на станции (альтернатива `K`).
+        // Включаем нативную отрисовку и при необходимости переводим эмулятор
+        // в режим рынка клавишей `K`. Повторное нажатие не выключает показ.
+        // Работает и при открытых нативных экранах.
+        if code == KeyCode::F8 && !repeat {
+            if !self.menu
+                && !self.machine.intro_seen
+                && flight::z80_is_docked(&self.machine.mem)
+            {
+                self.close_hdmap();
+                self.shop.close();
+                self.close_status();
+                self.close_sysinfo();
+                self.flight.close();
+                self.pending_sysinfo = false;
+                self.pending_flight = None;
+                self.pending_launch = false;
+                let need_k = self.machine.mem[flight::Z80_WHAT_ON_SCREEN]
+                    != flight::Z80_SCREEN_MARKET;
+                self.open_market();
+                if need_k {
+                    self.pending_key = matrix_pos(KeyCode::KeyK);
+                }
+                return;
+            }
+        }
+        // `K` — оригинальная клавиша: показать оригинальный (эмуляторный)
+        // экран рынка. Нативная альтернатива выключается, ввод уходит в игру.
+        if code == KeyCode::KeyK && !repeat {
+            self.market.disable();
         }
         // При открытой карте всё управление принадлежит ей; Z80 при этом
         // продолжает работать, но ввод в игру не передаётся.
@@ -300,6 +335,8 @@ impl App<'_> {
             }
             return;
         }
+        // Нативный показ рынка не перехватывает ввод: это альтернативная
+        // отрисовка экрана `K`, управление остаётся за эмулятором.
         if repeat {
             return;
         }
@@ -418,7 +455,7 @@ impl App<'_> {
 
     /// Перенести состояние клавиатуры и джойстика в эмулятор.
     pub(super) fn apply_input(&mut self) {
-        if self.menu || self.hdmap.active || self.shop.active || self.status.active {
+        if self.menu || self.hdmap.active || self.shop.active || self.status.active || self.sysinfo.active {
             self.machine.release_all_keys();
             self.machine.release_joystick();
             return;

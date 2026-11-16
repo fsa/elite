@@ -26,6 +26,7 @@ use crate::equip;
 use crate::flight;
 use crate::hdmap;
 use crate::machine::Spectrum;
+use crate::market;
 use crate::splash;
 use crate::status;
 use crate::sysinfo;
@@ -89,6 +90,8 @@ struct App<'a> {
     /// После кадра эмулятора открыть нативный экран информации о планете:
     /// сначала игра должна обработать `P` и заполнить поля планеты.
     pending_sysinfo: bool,
+    /// Нативный (альтернативный) показ экрана цен на станции (`K`).
+    market: market::Market,
     /// Экран полёта (F1) — нативный рендер по данным Z80. Пока он активен,
     /// окно занимает вид из кабины и нативная приборная панель; эмулятор
     /// продолжает работать и задаёт мир, поэтому ввод идёт в игру.
@@ -163,6 +166,7 @@ impl<'a> App<'a> {
             sysinfo: sysinfo::SysInfo::new(),
             sysinfo_screen: None,
             pending_sysinfo: false,
+            market: market::Market::new(),
             flight: flight::Flight::new(),
             splash: splash::Splash::new(),
             cockpit: cockpit::Cockpit::new(),

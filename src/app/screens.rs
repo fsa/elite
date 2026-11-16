@@ -4,6 +4,7 @@ use super::App;
 use crate::equip;
 use crate::flight;
 use crate::galaxy;
+use crate::market;
 use crate::native;
 use crate::status;
 use crate::sysinfo;
@@ -27,6 +28,7 @@ impl App<'_> {
         self.shop.close();
         self.close_status();
         self.close_sysinfo();
+        self.close_market();
         self.pending_sysinfo = false;
         self.menu = false;
         self.pending_key = None;
@@ -75,6 +77,7 @@ impl App<'_> {
         self.close_hdmap();
         self.close_status();
         self.close_sysinfo();
+        self.close_market();
         self.pending_sysinfo = false;
         self.menu = false;
         self.pending_key = None;
@@ -105,6 +108,7 @@ impl App<'_> {
         self.shop.close();
         self.flight.close();
         self.close_sysinfo();
+        self.close_market();
         self.pending_sysinfo = false;
         self.status_screen = Some(self.machine.mem[flight::Z80_WHAT_ON_SCREEN]);
         self.status.open(&self.machine.mem, status::KLADOV_STATUS);
@@ -154,6 +158,7 @@ impl App<'_> {
         self.shop.close();
         self.flight.close();
         self.close_status();
+        self.close_market();
         self.pending_flight = None;
         self.pending_launch = false;
         self.sysinfo.open(&self.machine.mem, sysinfo::KLADOV_SYSINFO);
@@ -176,6 +181,27 @@ impl App<'_> {
         }
     }
 
+    /// Включить нативный показ экрана цен на станции (альтернатива `K`).
+    /// Эмулятор должен находиться в режиме рынка (`Z80_SCREEN_MARKET`).
+    pub(super) fn open_market(&mut self) {
+        self.close_hdmap();
+        self.shop.close();
+        self.flight.close();
+        self.close_status();
+        self.close_sysinfo();
+        self.pending_sysinfo = false;
+        self.market.enable(&self.machine.mem, market::KLADOV_MARKET);
+        self.menu = false;
+        self.pending_shop = false;
+        self.pending_flight = None;
+        self.pending_launch = false;
+    }
+
+    /// Выключить нативный показ экрана цен.
+    pub(super) fn close_market(&mut self) {
+        self.market.disable();
+    }
+
     /// Открыть нативный экран полёта поверх текущего состояния игры.
     fn open_flight(&mut self, dir: flight::ViewDir) {
         let planet_color = world::current_planet_color(&self.machine.mem);
@@ -185,6 +211,7 @@ impl App<'_> {
         self.shop.close();
         self.close_status();
         self.close_sysinfo();
+        self.close_market();
         self.pending_sysinfo = false;
         self.menu = false;
         self.pending_key = None;

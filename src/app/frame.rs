@@ -8,10 +8,12 @@ use winit::window::Window;
 use super::App;
 use crate::cockpit;
 use crate::display;
+use crate::flight;
 use crate::font::ZX_FONT;
 use crate::storage;
 use crate::ui::menu::draw_pause_menu;
 use crate::ui::present::{blit_zx_frame, draw_debug_panel};
+use crate::{native, world};
 
 impl App<'_> {
     /// Сколько кадров Z80 прогнать за один кадр показа. `F12` включает
@@ -87,6 +89,14 @@ impl App<'_> {
         }
     }
 
+    /// Показывать ли нативный экран цен вместо оригинального экрана рынка.
+    fn show_native_market(&self) -> bool {
+        self.market.native
+            && !self.machine.intro_seen
+            && flight::z80_is_docked(&self.machine.mem)
+            && self.machine.mem[flight::Z80_WHAT_ON_SCREEN] == flight::Z80_SCREEN_MARKET
+    }
+
     /// Полукруг индикатора опасности в правом верхнем углу вспомогательного
     /// экрана с рамкой (карта, экран капитана). В оригинале он есть только в
     /// полёте: на станции индикатор погашен.
@@ -109,11 +119,19 @@ impl App<'_> {
         // полёта (режимы View). На заставке, карте, станции и в меню он
         // выключен. Смена состояния сбрасывает буфер и очереди, чтобы на
         // новом экране не висело сообщение с прошлого.
+        if self.market.native
+            && (self.machine.intro_seen || !flight::z80_is_docked(&self.machine.mem))
+        {
+            self.market.disable();
+        }
+        let show_market = self.show_native_market();
+
         let capture = self.flight.active
             && !self.hdmap.active
             && !self.shop.active
             && !self.status.active
             && !self.sysinfo.active
+            && !show_market
             && !self.machine.intro_seen
             && !self.menu;
         self.machine.game_msg.set_capture(capture);
@@ -127,20 +145,15 @@ impl App<'_> {
         if self.hdmap.active
             || self.shop.active
             || self.status.active
+            || self.sysinfo.active
+            || show_market
             || self.machine.intro_seen
             || self.flight.active
         {
-            // Отдельный нативный экран (карта/закупка/статус/заставка/полёт):
-            // HD-слой во всё окно. Закупка и заставка ставят игру на паузу;
-            // под картой, экраном капитана и экраном полёта эмулятор
-            // продолжает работать. Слой непрозрачный и покрывает окно целиком,
-            // поэтому композитится в угол (0, 0).
+            // Отдельный нативный/альтернативный экран: HD-слой во всё окно.
             self.machine.hd.resize(game_w as usize, game_h as usize);
             self.machine.hd.clear(display::TRANSPARENT);
             if self.hdmap.active {
-                // Карта — только наложение: Z80 продолжает идти обычным ходом,
-                // как и в полёте. Клавиши принадлежат карте, поэтому в игру
-                // ввод не передаётся.
                 self.machine.release_all_keys();
                 self.machine.release_joystick();
                 if !self.menu {
@@ -151,24 +164,33 @@ impl App<'_> {
                     self.play_frame_audio();
                 }
             } else if self.shop.active {
-                // Закупка по-прежнему ставит игру на паузу.
                 self.machine.release_all_keys();
                 self.machine.release_joystick();
             } else if self.status.active {
-                // Альтернатива экрану капитана (`L`): эмулятор продолжает
-                // работать и получает нажатие `L`, а ввод принадлежит
-                // нативному интерфейсу.
                 self.status_tick();
                 self.open_pending_sysinfo();
             } else if self.sysinfo.active {
-                // Альтернатива экрану информации о планете (`P`): эмулятор
-                // продолжает работать и получает нажатие `P`, а ввод
-                // принадлежит нативному интерфейсу.
                 self.sysinfo_tick();
+            } else if show_market {
+                // Нативная отрисовка экрана рынка: эмулятор остаётся в режиме
+                // `K` и получает обычный ввод (экран без собственного интерактива).
+                if !self.menu {
+                    self.apply_input();
+                    let frames = self.emulation_frames();
+                    self.machine.run_frames(frames);
+                    self.open_pending_sysinfo();
+                    self.open_pending_shop();
+                    self.open_pending_flight();
+                    if self.machine.save_requested {
+                        self.machine.save_requested = false;
+                        storage::do_save(&mut self.machine, self.opts, &mut self.last_path);
+                    }
+                    self.play_frame_audio();
+                } else {
+                    self.machine.release_all_keys();
+                    self.machine.release_joystick();
+                }
             } else if self.flight.active {
-                // Экран полёта: рисует то, что посчитал Z80, поэтому эмулятор
-                // продолжает работать, а ввод идёт в игру. На паузе (меню)
-                // симуляция замирает.
                 if !self.menu {
                     let frames = self.emulation_frames();
                     self.forward_input();
@@ -180,9 +202,6 @@ impl App<'_> {
                     self.machine.release_joystick();
                 }
             } else if self.machine.intro_seen {
-                // Нативная заставка: вращающаяся тестовая фигура, ZX-кадр не
-                // показывается. Эмуляция продолжается, чтобы Z80 шёл по своему
-                // циклу (запуск игры делает `native::start_game`).
                 self.splash.tick();
                 self.machine.release_all_keys();
                 self.machine.release_joystick();
@@ -253,6 +272,10 @@ impl App<'_> {
             self.draw_danger_half();
         } else if self.sysinfo.active {
             self.sysinfo.draw(&mut self.machine.hd, ZX_FONT);
+        } else if show_market {
+            self.market
+                .refresh(&self.machine.mem, crate::market::KLADOV_MARKET);
+            self.market.draw(&mut self.machine.hd, ZX_FONT);
         } else if self.machine.intro_seen {
             // Нативная заставка; внизу — тот же кокпит, что в полёте.
             // Заголовок с фигурой занимают верхнюю область, поэтому не
@@ -284,6 +307,7 @@ impl App<'_> {
         if w == 0 || h == 0 {
             return;
         }
+        let show_market = self.show_native_market();
         let Some(surface) = self.surface.as_mut() else {
             return;
         };
@@ -300,11 +324,13 @@ impl App<'_> {
         let (ow, oh) = (w as usize, h as usize);
         // Фон окна — чёрные поля вокруг области 4:3.
         out.fill(0);
-        // Отдельный нативный экран (карта/закупка/заставка/полёт)
-        // показывается вместо ZX-кадра: слой непрозрачный и покрывает всё окно.
+        // Отдельный нативный/альтернативный экран показывается вместо
+        // ZX-кадра: слой непрозрачный и покрывает всё окно.
         if self.hdmap.active
             || self.shop.active
             || self.status.active
+            || self.sysinfo.active
+            || show_market
             || self.machine.intro_seen
             || self.flight.active
         {
@@ -318,9 +344,11 @@ impl App<'_> {
                 .hd
                 .composite_onto(&mut out, ow, oh, l.x as usize, l.y as usize);
         }
-        // Режим отладки: справа — кадр эмулятора 1:1 и чёрный фон ниже.
+        // Режим отладки: справа — кадр эмулятора 1:1 и дамп блока сохранения.
         if self.opts.debug {
-            draw_debug_panel(src, &mut out, ow, oh);
+            let layout = world::save_layout_kladov();
+            let save = native::commander_block(&self.machine, layout);
+            draw_debug_panel(src, &mut out, ow, oh, save);
         }
         window.pre_present_notify();
         let _ = out.present();
