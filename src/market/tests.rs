@@ -2,20 +2,20 @@ use super::*;
 
 #[test]
 fn read_info_reads_prices_quantity_and_unit() {
-    let mut mem = vec![0u8; 0x8000];
+    let mut mem = vec![0u8; 0x10000];
     // item 0 (Food, t): price 0x0018 -> 2.4, quantity 3
     mem[ADDR_PRODUCT_PRICE] = 0x18;
     mem[ADDR_PRODUCT_PRICE + 1] = 0x00;
-    mem[ADDR_TABLE_BASE_PRICE + 4] = 3;
+    mem[ADDR_QUANTITY] = 3;
     // item 13 (Gold, kg): quantity 5
-    mem[ADDR_TABLE_BASE_PRICE + 13 * 5 + 4] = 5;
+    mem[ADDR_QUANTITY + 13] = 5;
     // item 15 (Gem-Stones, g): quantity 0
-    mem[ADDR_TABLE_BASE_PRICE + 15 * 5 + 4] = 0;
+    mem[ADDR_QUANTITY + 15] = 0;
     // item 16 (Alien Items, t): price 0x0200 -> 51.2, quantity 1
     let last = GOODS_COUNT - 1;
     mem[ADDR_PRODUCT_PRICE + last * 2] = 0x00;
     mem[ADDR_PRODUCT_PRICE + last * 2 + 1] = 0x02;
-    mem[ADDR_TABLE_BASE_PRICE + last * 5 + 4] = 1;
+    mem[ADDR_QUANTITY + last] = 1;
 
     let info = read_info(&mem, KLADOV_MARKET);
     assert_eq!(info.items.len(), GOODS_COUNT);

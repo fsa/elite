@@ -1,7 +1,13 @@
-//! Нативный экран цен на станции — клавиша `K` (рынок).
+//! Нативный экран цен на станции — `F8` (альтернатива оригинальной `K`).
 //!
 //! Показывает текущие цены на товары станции, прочитанные из памяти Z80.
 //! Оформление в стиле экранов информации о планете и командира.
+//!
+//! Цены пересчитываются самим Z80 в `InitGame`/`GenerateAnotherPrice` при
+//! пристыковке: параметры из `TableBasePrice` (17 x 5 байт) комбинируются с
+//! `PlanetEconomy` и `PilotRnd`, результат пишется в `ProductPrice`. Остатки
+//! лежат отдельно, сразу за `PilotPlanetGov`. Нативный экран не считает цены
+//! сам, а читает готовые таблицы — поэтому он всегда совпадает с эмулятором.
 
 use crate::display::Frame;
 
@@ -9,13 +15,18 @@ mod draw;
 #[cfg(test)]
 mod tests;
 
-/// Адрес таблицы базовых параметров/остатков товаров в памяти Z80 (версия Кладова).
-/// 17 записей по 5 байт: параметры цены/экономики и количество на продажу;
-/// сразу за таблицей следует `ProductPrice`.
-const ADDR_TABLE_BASE_PRICE: usize = 0x70B9;
-/// Адрес таблицы цен товаров в памяти Z80 (версия Кладова).
-/// 17 записей по 2 байта (LE), цена в десятых кредита.
-const ADDR_PRODUCT_PRICE: usize = 0x710E;
+/// Адрес таблицы параметров генерации цен `TableBasePrice` (версия Кладова).
+/// 17 записей по 5 байт: базовая цена, экономика, разброс и количество.
+/// Используется Z80 в `GenerateAnotherPrice`; нативный экран читает уже
+/// готовые [`ADDR_PRODUCT_PRICE`] и [`ADDR_QUANTITY`].
+const ADDR_TABLE_BASE_PRICE: usize = 0x701B;
+/// Адрес таблицы цен `ProductPrice` (версия Кладова).
+/// 17 записей по 2 байта (LE), цена в десятых кредита. Оттуда же читает
+/// оригинальный экран рынка (`Cmd_2_BuyProducts`).
+const ADDR_PRODUCT_PRICE: usize = 0xE1BD;
+/// Адрес таблицы остатков товаров — `PilotPlanetGov + 1` (версия Кладова).
+/// 17 байт, по одному на товар; именно оттуда оригинал берёт «QUANTITY FOR SALE».
+const ADDR_QUANTITY: usize = 0xD09E;
 /// Число товаров на рынке.
 const GOODS_COUNT: usize = 17;
 
@@ -52,16 +63,19 @@ fn unit(index: usize) -> &'static str {
 /// Раскладка экрана рынка (версия Кладова).
 #[derive(Clone, Copy)]
 pub struct MarketLayout {
-    /// Адрес таблицы базовых параметров/остатков (17 x 5 байт).
-    pub table_base: usize,
+    /// Адрес таблицы параметров генерации цен (17 x 5 байт).
+    pub params: usize,
     /// Адрес таблицы цен (17 x u16 LE).
     pub prices: usize,
+    /// Адрес таблицы остатков (17 x u8).
+    pub quantities: usize,
 }
 
 /// Раскладка версии Кладова.
 pub const KLADOV_MARKET: MarketLayout = MarketLayout {
-    table_base: ADDR_TABLE_BASE_PRICE,
+    params: ADDR_TABLE_BASE_PRICE,
     prices: ADDR_PRODUCT_PRICE,
+    quantities: ADDR_QUANTITY,
 };
 
 /// Строка товара для отрисовки.
@@ -135,10 +149,7 @@ pub(crate) fn read_info(mem: &[u8], layout: MarketLayout) -> Info {
     let mut items = Vec::with_capacity(GOODS_COUNT);
     for i in 0..GOODS_COUNT {
         let price_tenths = read_u16(mem, layout.prices + i * 2);
-        let quantity = mem
-            .get(layout.table_base + i * 5 + 4)
-            .copied()
-            .unwrap_or(0);
+        let quantity = mem.get(layout.quantities + i).copied().unwrap_or(0);
         items.push(Item {
             name: GOODS[i],
             unit: unit(i),

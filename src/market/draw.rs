@@ -76,12 +76,13 @@ pub(super) fn draw(hd: &mut Frame, font: &[u8; crate::font::ZX_FONT_LEN], info: 
     let x_name = left + pad;
     let x_unit = left + inner_w * 45 / 100;
     let x_price = left + inner_w * 55 / 100;
+    let x_price_header = x_price + 3 * ch;
     let x_qty = left + inner_w * 72 / 100;
 
     hd.draw_text(font, x_name, l.header_bottom_y, "PRODUCT", LABEL, ts);
     hd.draw_text(font, x_unit, l.header_bottom_y, "UNIT", LABEL, ts);
-    hd.draw_text(font, x_price, l.header_top_y, "UNIT", LABEL, ts);
-    hd.draw_text(font, x_price, l.header_bottom_y, "PRICE", LABEL, ts);
+    hd.draw_text(font, x_price_header, l.header_top_y, "UNIT", LABEL, ts);
+    hd.draw_text(font, x_price_header, l.header_bottom_y, "PRICE", LABEL, ts);
     hd.draw_text(font, x_qty, l.header_top_y, "QUANTITY", LABEL, ts);
     hd.draw_text(font, x_qty, l.header_bottom_y, "FOR SALE", LABEL, ts);
 
@@ -98,10 +99,12 @@ pub(super) fn draw(hd: &mut Frame, font: &[u8; crate::font::ZX_FONT_LEN], info: 
         let price = format!("{:>7.1}", item.price_tenths as f32 / 10.0);
         hd.draw_text(font, x_price, y, &price, VALUE, ts);
 
+        // Число выравнивается по правому краю, единица идёт сразу после него.
+        // Прочерк занимает позицию младшего разряда и единицы не получает.
         let qty = if item.quantity == 0 {
-            "-".to_string()
+            format!("{:>3}", "-")
         } else {
-            format!("{:>3}", item.quantity)
+            format!("{:>3}{}", item.quantity, item.unit)
         };
         hd.draw_text(font, x_qty, y, &qty, VALUE, ts);
     }
