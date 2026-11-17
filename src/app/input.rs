@@ -10,6 +10,7 @@ use crate::keys::{
 };
 use crate::native;
 use crate::storage;
+use crate::sysinfo;
 use crate::world;
 
 impl App<'_> {
@@ -114,53 +115,55 @@ impl App<'_> {
             return;
         }
         // F7 — нативная альтернатива экрану информации о планете (`P`).
-        // Эмулятору отдаём `P`, а нативный экран открываем после кадра,
-        // когда оригинал обработает команду и заполнит поля планеты.
+        // Эмулятору отдаём `P`, а нативный экран включаем после кадра, когда
+        // оригинал обработает команду и заполнит поля планеты. Если оригинал
+        // уже на этом экране, достаточно включить нативную отрисовку.
         if code == KeyCode::F7 && !repeat {
-            if !self.sysinfo.active
-                && !self.pending_sysinfo
-                && !self.menu
-                && !self.machine.intro_seen
-            {
+            if !self.sysinfo.active && !self.menu && !self.machine.intro_seen {
                 self.close_hdmap();
                 self.shop.close();
                 self.close_status();
                 self.flight.close();
                 self.close_market();
-                self.sysinfo_screen = Some(self.machine.mem[flight::Z80_WHAT_ON_SCREEN]);
-                self.pending_sysinfo = true;
-                self.pending_key = matrix_pos(KeyCode::KeyP);
-                self.menu = false;
                 self.pending_shop = false;
                 self.pending_flight = None;
                 self.pending_launch = false;
+                self.pending_sysinfo = false;
+                if self.machine.mem[flight::Z80_WHAT_ON_SCREEN] == flight::Z80_SCREEN_INFO_PLANET {
+                    self.sysinfo.open(&self.machine.mem, sysinfo::KLADOV_SYSINFO);
+                } else {
+                    self.pending_sysinfo = true;
+                    self.pending_key = matrix_pos(KeyCode::KeyP);
+                }
+                self.menu = false;
             }
             return;
         }
-        // F9 — нативная альтернатива экрану капитана (`L`): показываем свой
-        // интерфейс, а эмулятору отдаём нажатие `L`, чтобы игра перешла в
-        // режим показа капитана. Родная команда `L` работает и на станции,
-        // и в полёте, поэтому F9 доступна там же. Повторный F9 экран не
-        // закрывает: он остаётся открытым (закрывает `Esc` или игровая
-        // клавиша).
+        // F9 — нативная альтернатива экрану капитана (`L`): включаем свою
+        // отрисовку, а эмулятору при необходимости отдаём нажатие `L`, чтобы
+        // игра перешла в режим показа капитана. Родная команда `L` работает
+        // и на станции, и в полёте, поэтому F9 доступна там же.
         if code == KeyCode::F9 && !repeat {
             if !self.status.active && !self.menu && !self.machine.intro_seen {
+                let need_l = self.machine.mem[flight::Z80_WHAT_ON_SCREEN]
+                    != flight::Z80_SCREEN_PILOT_INFO;
                 self.close_sysinfo();
                 self.close_market();
                 self.open_status();
-                self.pending_key = matrix_pos(KeyCode::KeyL);
+                if need_l {
+                    self.pending_key = matrix_pos(KeyCode::KeyL);
+                }
             }
             return;
         }
-        // F8 — нативный показ экрана цен на станции (альтернатива `K`).
-        // Включаем нативную отрисовку и при необходимости переводим эмулятор
-        // в режим рынка клавишей `K`. Повторное нажатие не выключает показ.
-        // Работает и при открытых нативных экранах.
+        // F8 — нативный показ экрана цен (альтернатива `K`). Смотреть цены
+        // можно и в полёте, поэтому стойку не требуем. Включаем нативную
+        // отрисовку и при необходимости переводим эмулятор в режим рынка
+        // клавишей `K`. Повторное нажатие не выключает показ. Работает и при
+        // открытых нативных экранах. Торговля отдельно разрешена только на
+        // станции (см. блок стрелок ниже и `Market::trade`).
         if code == KeyCode::F8 && !repeat {
-            if !self.menu
-                && !self.machine.intro_seen
-                && flight::z80_is_docked(&self.machine.mem)
-            {
+            if !self.menu && !self.machine.intro_seen {
                 self.close_hdmap();
                 self.shop.close();
                 self.close_status();
@@ -182,6 +185,37 @@ impl App<'_> {
         // экран рынка. Нативная альтернатива выключается, ввод уходит в игру.
         if code == KeyCode::KeyK && !repeat {
             self.market.disable();
+        }
+        // Стрелки перехватываем только на станции: там они выбирают товар и
+        // торгуют им. В полёте экран остаётся только для просмотра цен, поэтому
+        // стрелки уходят эмулятору, как и все остальные клавиши.
+        if self.market.native
+            && !self.menu
+            && !self.machine.intro_seen
+            && flight::z80_is_docked(&self.machine.mem)
+        {
+            let trade = match code {
+                KeyCode::ArrowUp => Some((-1, false)),
+                KeyCode::ArrowDown => Some((1, false)),
+                KeyCode::ArrowLeft => Some((0, false)),
+                KeyCode::ArrowRight => Some((0, true)),
+                _ => None,
+            };
+            if let Some((delta, buy)) = trade {
+                if delta != 0 {
+                    self.market.move_selection(delta);
+                } else if buy {
+                    self.market.buy(&mut self.machine.mem);
+                } else {
+                    self.market.sell(&mut self.machine.mem);
+                }
+                // Стрелки не должны попадать в Kempston: для этого экрана они
+                // означают выбор/сделку, а не движение корабля.
+                if let Some(bit) = kempston_bit(code) {
+                    self.kempston[bit as usize] = false;
+                }
+                return;
+            }
         }
         // При открытой карте всё управление принадлежит ей; Z80 при этом
         // продолжает работать, но ввод в игру не передаётся.
@@ -294,49 +328,9 @@ impl App<'_> {
             }
             return;
         }
-        // При открытом альтернативном экране капитана всё управление
-        // принадлежит ему: Esc закрывает и возвращает прежний экран игры,
-        // игровые клавиши уходят в эмулятор (как на карте и в закупке).
-        // `L` — родная команда: убирает нативную надстройку и оставляет
-        // классический экран капитана.
-        if self.status.active {
-            match code {
-                KeyCode::Escape if !repeat => self.close_status(),
-                KeyCode::KeyL if !repeat => self.close_status_to_classic(),
-                KeyCode::F1 | KeyCode::F2 | KeyCode::F3 | KeyCode::F4 if !repeat => {
-                    self.close_status();
-                    self.function_key(code);
-                }
-                _ => {
-                    if is_game_key(code) {
-                        self.close_status();
-                        self.pending_key = matrix_pos(code);
-                    }
-                }
-            }
-            return;
-        }
-        // При открытом экране информации о планете всё управление принадлежит
-        // ему: Esc закрывает и возвращает прежний экран игры, игровые клавиши
-        // уходят в эмулятор.
-        if self.sysinfo.active {
-            match code {
-                KeyCode::Escape if !repeat => self.close_sysinfo(),
-                KeyCode::F1 | KeyCode::F2 | KeyCode::F3 | KeyCode::F4 if !repeat => {
-                    self.close_sysinfo();
-                    self.function_key(code);
-                }
-                _ => {
-                    if is_game_key(code) {
-                        self.close_sysinfo();
-                        self.pending_key = matrix_pos(code);
-                    }
-                }
-            }
-            return;
-        }
-        // Нативный показ рынка не перехватывает ввод: это альтернативная
-        // отрисовка экрана `K`, управление остаётся за эмулятором.
+        // Нативные экраны капитана (F9) и информации о планете (F7) не
+        // перехватывают ввод: это альтернативная отрисовка экранов `L`/`P`,
+        // управление остаётся за эмулятором.
         if repeat {
             return;
         }
@@ -455,10 +449,18 @@ impl App<'_> {
 
     /// Перенести состояние клавиатуры и джойстика в эмулятор.
     pub(super) fn apply_input(&mut self) {
-        if self.menu || self.hdmap.active || self.shop.active || self.status.active || self.sysinfo.active {
+        if self.menu || self.hdmap.active || self.shop.active {
             self.machine.release_all_keys();
             self.machine.release_joystick();
             return;
+        }
+        // Под нативным рынком стрелки обрабатывает сам экран. Не даём им
+        // уйти в эмулятор через Kempston даже если клавиша была нажата до
+        // открытия экрана.
+        if self.market.native && flight::z80_is_docked(&self.machine.mem) {
+            for bit in &mut self.kempston[..4] {
+                *bit = false;
+            }
         }
         self.forward_input();
     }

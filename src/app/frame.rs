@@ -56,44 +56,30 @@ impl App<'_> {
         self.flight.tick(frames as f32 / 50.0);
     }
 
-    /// Кадр альтернативного экрана капитана (`F9`). Эмулятор продолжает
-    /// работать: нажатие `L`, отложенное при открытии, уходит игре один раз,
-    /// а дальше клавиатура и джойстик не передаются — ими владеет нативный
-    /// интерфейс.
-    pub(super) fn status_tick(&mut self) {
-        self.machine.release_all_keys();
-        self.machine.release_joystick();
-        if let Some((row, bit)) = self.pending_key.take() {
-            self.machine.set_key(row, bit, true);
-        }
-        if !self.menu {
-            let frames = self.emulation_frames();
-            self.machine.run_frames(frames);
-            self.play_frame_audio();
-        }
+    /// Показывать ли нативный экран капитана вместо оригинального экрана
+    /// `L`: отрисовка включается, пока Z80 находится в режиме показа
+    /// капитана (`Z80_SCREEN_PILOT_INFO`).
+    fn show_native_status(&self) -> bool {
+        self.status.active
+            && !self.machine.intro_seen
+            && self.machine.mem[flight::Z80_WHAT_ON_SCREEN] == flight::Z80_SCREEN_PILOT_INFO
     }
 
-    /// Кадр альтернативного экрана информации о планете (`F7`). Эмулятор
-    /// продолжает работать: нажатие `P`, отложенное при открытии, уходит игре
-    /// один раз, а дальше ввод принадлежит нативному интерфейсу.
-    pub(super) fn sysinfo_tick(&mut self) {
-        self.machine.release_all_keys();
-        self.machine.release_joystick();
-        if let Some((row, bit)) = self.pending_key.take() {
-            self.machine.set_key(row, bit, true);
-        }
-        if !self.menu {
-            let frames = self.emulation_frames();
-            self.machine.run_frames(frames);
-            self.play_frame_audio();
-        }
+    /// Показывать ли нативный экран информации о планете вместо оригинального
+    /// экрана `P` (`Z80_SCREEN_INFO_PLANET`).
+    fn show_native_sysinfo(&self) -> bool {
+        self.sysinfo.active
+            && !self.machine.intro_seen
+            && self.machine.mem[flight::Z80_WHAT_ON_SCREEN] == flight::Z80_SCREEN_INFO_PLANET
     }
 
     /// Показывать ли нативный экран цен вместо оригинального экрана рынка.
+    /// Экран доступен и в полёте (оригинальная команда `K` тоже работает не
+    /// только на станции); торговать можно только на станции — это проверяет
+    /// сам [`crate::market::Market`].
     fn show_native_market(&self) -> bool {
         self.market.native
             && !self.machine.intro_seen
-            && flight::z80_is_docked(&self.machine.mem)
             && self.machine.mem[flight::Z80_WHAT_ON_SCREEN] == flight::Z80_SCREEN_MARKET
     }
 
@@ -119,18 +105,24 @@ impl App<'_> {
         // полёта (режимы View). На заставке, карте, станции и в меню он
         // выключен. Смена состояния сбрасывает буфер и очереди, чтобы на
         // новом экране не висело сообщение с прошлого.
-        if self.market.native
-            && (self.machine.intro_seen || !flight::z80_is_docked(&self.machine.mem))
-        {
+        if self.market.native && self.machine.intro_seen {
             self.market.disable();
         }
+        // На заставке нативные экраны капитана и планеты не показываются;
+        // сбрасываем и их состояние, чтобы новый старт не открылся поверх.
+        if self.machine.intro_seen {
+            self.close_status();
+            self.close_sysinfo();
+        }
         let show_market = self.show_native_market();
+        let show_status = self.show_native_status();
+        let show_sysinfo = self.show_native_sysinfo();
 
         let capture = self.flight.active
             && !self.hdmap.active
             && !self.shop.active
-            && !self.status.active
-            && !self.sysinfo.active
+            && !show_status
+            && !show_sysinfo
             && !show_market
             && !self.machine.intro_seen
             && !self.menu;
@@ -144,8 +136,8 @@ impl App<'_> {
         let (game_w, game_h) = self.game_size(size.width, size.height);
         if self.hdmap.active
             || self.shop.active
-            || self.status.active
-            || self.sysinfo.active
+            || show_status
+            || show_sysinfo
             || show_market
             || self.machine.intro_seen
             || self.flight.active
@@ -166,11 +158,26 @@ impl App<'_> {
             } else if self.shop.active {
                 self.machine.release_all_keys();
                 self.machine.release_joystick();
-            } else if self.status.active {
-                self.status_tick();
-                self.open_pending_sysinfo();
-            } else if self.sysinfo.active {
-                self.sysinfo_tick();
+            } else if show_status || show_sysinfo {
+                // Нативные экраны капитана и информации о планете: только
+                // альтернативная отрисовка, ввод получает эмулятор.
+                if !self.menu {
+                    self.apply_input();
+                    let frames = self.emulation_frames();
+                    self.machine.run_frames(frames);
+                    self.open_pending_sysinfo();
+                    self.open_pending_shop();
+                    self.open_pending_flight();
+                    self.follow_native_screens();
+                    if self.machine.save_requested {
+                        self.machine.save_requested = false;
+                        storage::do_save(&mut self.machine, self.opts, &mut self.last_path);
+                    }
+                    self.play_frame_audio();
+                } else {
+                    self.machine.release_all_keys();
+                    self.machine.release_joystick();
+                }
             } else if show_market {
                 // Нативная отрисовка экрана рынка: эмулятор остаётся в режиме
                 // `K` и получает обычный ввод (экран без собственного интерактива).
@@ -181,6 +188,7 @@ impl App<'_> {
                     self.open_pending_sysinfo();
                     self.open_pending_shop();
                     self.open_pending_flight();
+                    self.follow_native_screens();
                     if self.machine.save_requested {
                         self.machine.save_requested = false;
                         storage::do_save(&mut self.machine, self.opts, &mut self.last_path);
@@ -227,6 +235,7 @@ impl App<'_> {
                 self.open_pending_shop();
                 self.open_pending_sysinfo();
                 self.open_pending_flight();
+                self.follow_native_screens();
                 if self.machine.save_requested {
                     self.machine.save_requested = false;
                     storage::do_save(&mut self.machine, self.opts, &mut self.last_path);
@@ -267,11 +276,17 @@ impl App<'_> {
         } else if self.shop.active {
             self.shop
                 .draw(&mut self.machine.hd, ZX_FONT, &self.machine.mem);
-        } else if self.status.active {
+        } else if show_status {
             self.status.draw(&mut self.machine.hd, ZX_FONT);
             self.draw_danger_half();
-        } else if self.sysinfo.active {
+            if self.menu {
+                draw_pause_menu(&mut self.machine.hd, ZX_FONT, self.menu_sel, true);
+            }
+        } else if show_sysinfo {
             self.sysinfo.draw(&mut self.machine.hd, ZX_FONT);
+            if self.menu {
+                draw_pause_menu(&mut self.machine.hd, ZX_FONT, self.menu_sel, true);
+            }
         } else if show_market {
             self.market
                 .refresh(&self.machine.mem, crate::market::KLADOV_MARKET);
@@ -308,6 +323,8 @@ impl App<'_> {
             return;
         }
         let show_market = self.show_native_market();
+        let show_status = self.show_native_status();
+        let show_sysinfo = self.show_native_sysinfo();
         let Some(surface) = self.surface.as_mut() else {
             return;
         };
@@ -328,8 +345,8 @@ impl App<'_> {
         // ZX-кадра: слой непрозрачный и покрывает всё окно.
         if self.hdmap.active
             || self.shop.active
-            || self.status.active
-            || self.sysinfo.active
+            || show_status
+            || show_sysinfo
             || show_market
             || self.machine.intro_seen
             || self.flight.active

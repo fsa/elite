@@ -100,9 +100,9 @@ impl App<'_> {
         }
     }
 
-    /// Открыть нативный экран статуса пилота (F9) — альтернативу экрану `L`.
-    /// Пока он открыт, Z80 продолжает работать: в эмулятор уходит нажатие
-    /// `L`, и оригинал переходит в режим показа капитана.
+    /// Включить нативную отрисовку экрана капитана (F9). Экран показывается,
+    /// только пока Z80 находится в режиме `Z80_SCREEN_PILOT_INFO`; ввод при
+    /// этом остаётся за эмулятором.
     pub(super) fn open_status(&mut self) {
         self.close_hdmap();
         self.shop.close();
@@ -110,7 +110,6 @@ impl App<'_> {
         self.close_sysinfo();
         self.close_market();
         self.pending_sysinfo = false;
-        self.status_screen = Some(self.machine.mem[flight::Z80_WHAT_ON_SCREEN]);
         self.status.open(&self.machine.mem, status::KLADOV_STATUS);
         self.menu = false;
         self.pending_key = None;
@@ -119,39 +118,25 @@ impl App<'_> {
         self.pending_launch = false;
     }
 
-    /// Закрыть нативный экран статуса и вернуть прежний экран игры, если
-    /// оригинал всё ещё показывает экран капитана (`L`).
+    /// Выключить нативную отрисовку экрана капитана. Экранная переменная
+    /// Z80 не трогается: оригинал сам решает, когда уйти с этого экрана.
     pub(super) fn close_status(&mut self) {
-        if !self.status.active {
-            return;
-        }
         self.status.close();
         self.pending_key = None;
-        if let Some(prev) = self.status_screen.take() {
-            if self.machine.mem[flight::Z80_WHAT_ON_SCREEN] == flight::Z80_SCREEN_PILOT_INFO {
-                self.machine.mem[flight::Z80_WHAT_ON_SCREEN] = prev;
-            }
-        }
-    }
-
-    /// Убрать нативную надстройку и оставить классический экран капитана:
-    /// по `L` игра показывает свой родной экран, а не прежний вид.
-    pub(super) fn close_status_to_classic(&mut self) {
-        self.status.close();
-        self.pending_key = None;
-        self.status_screen = None;
-        self.machine.mem[flight::Z80_WHAT_ON_SCREEN] = flight::Z80_SCREEN_PILOT_INFO;
     }
 
     /// Открыть нативный экран информации о планете (F7), отложенный до
-    /// обработки клавиши `P` оригиналом.
+    /// обработки клавиши `P` оригиналом. Открываем только если оригинал
+    /// действительно перешёл на экран `Z80_SCREEN_INFO_PLANET`.
     pub(super) fn open_pending_sysinfo(&mut self) {
         if !self.pending_sysinfo {
             return;
         }
         self.pending_sysinfo = false;
         if self.machine.intro_seen || self.menu {
-            self.sysinfo_screen = None;
+            return;
+        }
+        if self.machine.mem[flight::Z80_WHAT_ON_SCREEN] != flight::Z80_SCREEN_INFO_PLANET {
             return;
         }
         self.close_hdmap();
@@ -164,20 +149,24 @@ impl App<'_> {
         self.sysinfo.open(&self.machine.mem, sysinfo::KLADOV_SYSINFO);
     }
 
-    /// Закрыть нативный экран информации о планете и вернуть прежний экран
-    /// игры, если оригинал всё ещё показывает экран `P`.
+    /// Выключить нативную отрисовку экрана информации о планете. Экранная
+    /// переменная Z80 не трогается.
     pub(super) fn close_sysinfo(&mut self) {
-        if !self.sysinfo.active && self.sysinfo_screen.is_none() {
-            self.pending_sysinfo = false;
-            return;
-        }
         self.sysinfo.close();
         self.pending_sysinfo = false;
         self.pending_key = None;
-        if let Some(prev) = self.sysinfo_screen.take() {
-            if self.machine.mem[flight::Z80_WHAT_ON_SCREEN] == flight::Z80_SCREEN_INFO_PLANET {
-                self.machine.mem[flight::Z80_WHAT_ON_SCREEN] = prev;
-            }
+    }
+
+    /// Следить за экранными режимами Z80 под нативными экранами без
+    /// собственного интерактива (F7/F9). Когда оригинал уходит с экрана,
+    /// нативная надстройка закрывается; пока режим тот же — остаётся.
+    pub(super) fn follow_native_screens(&mut self) {
+        let screen = self.machine.mem[flight::Z80_WHAT_ON_SCREEN];
+        if self.status.active && screen != flight::Z80_SCREEN_PILOT_INFO {
+            self.close_status();
+        }
+        if self.sysinfo.active && screen != flight::Z80_SCREEN_INFO_PLANET {
+            self.close_sysinfo();
         }
     }
 

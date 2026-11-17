@@ -282,6 +282,85 @@ use crate::world::{current_planet_color, save_layout_kladov, scene_markers};
         assert_eq!(app.machine.mem[flight::Z80_WHAT_ON_SCREEN], prev_screen);
     }
 
+    /// F8 включает нативный экран цен; на станции стрелки выбирают товар,
+    /// `→` покупает, `←` продаёт, а сами стрелки в игру не уходят.
+    #[test]
+    fn f8_market_trades_with_arrows() {
+        let opts = test_options();
+        let mut app = App::new(boot(), &opts);
+        app.machine.intro_seen = false;
+        app.machine.mem[flight::Z80_IND_DANGER] = 0;
+        app.machine.mem[flight::Z80_WHAT_ON_SCREEN] = flight::Z80_SCREEN_MARKET;
+
+        let market_layout = market::KLADOV_MARKET;
+        let p = market_layout.pilot as usize;
+        let price_addr = market_layout.prices;
+        app.machine.mem[price_addr] = 40;
+        app.machine.mem[price_addr + 1] = 0;
+        app.machine.mem[market_layout.quantities] = 2;
+        app.machine.mem[p + 40] = 10; // PilotFreeCargo
+        app.machine.mem[p + 20..p + 22].copy_from_slice(&1000u16.to_le_bytes()); // cash1
+        app.machine.mem[p + 18..p + 20].copy_from_slice(&0u16.to_le_bytes()); // cash2
+
+        app.key_event(KeyCode::F8, true, false);
+        assert!(app.market.native, "F8 не открыл рынок");
+        app.key_event(KeyCode::ArrowRight, true, false);
+        assert_eq!(app.machine.mem[market_layout.quantities], 1);
+        assert_eq!(app.machine.mem[p + 23], 1); // Food в трюме
+        assert_eq!(app.machine.mem[p + 40], 9);
+        assert_eq!(
+            u16::from_le_bytes([app.machine.mem[p + 20], app.machine.mem[p + 21]]),
+            960
+        );
+        app.key_event(KeyCode::ArrowLeft, true, false);
+        assert_eq!(app.machine.mem[market_layout.quantities], 2);
+        assert_eq!(app.machine.mem[p + 23], 0);
+        assert_eq!(app.machine.mem[p + 40], 10);
+        assert_eq!(
+            u16::from_le_bytes([app.machine.mem[p + 20], app.machine.mem[p + 21]]),
+            1000
+        );
+
+        // Стрелки остаются на экране рынка и не попадают в Kempston.
+        app.key_event(KeyCode::ArrowDown, true, false);
+        app.apply_input();
+        assert_eq!(app.machine.kempston, 0);
+    }
+
+    /// В полёте F8 показывает цены, но стрелки не торгуют: экран остаётся
+    /// только для просмотра, а ввод уходит эмулятору.
+    #[test]
+    fn f8_market_in_flight_is_read_only() {
+        let opts = test_options();
+        let mut app = App::new(boot(), &opts);
+        app.machine.intro_seen = false;
+        app.machine.mem[flight::Z80_IND_DANGER] = 1;
+        app.machine.mem[flight::Z80_WHAT_ON_SCREEN] = 0; // вид из кабины
+
+        let market_layout = market::KLADOV_MARKET;
+        let p = market_layout.pilot as usize;
+        app.machine.mem[market_layout.prices] = 40;
+        app.machine.mem[market_layout.quantities] = 2;
+        app.machine.mem[p + 40] = 10;
+        app.machine.mem[p + 20..p + 22].copy_from_slice(&1000u16.to_le_bytes());
+
+        app.key_event(KeyCode::F8, true, false);
+        assert!(app.market.native, "F8 не открыл рынок в полёте");
+
+        app.key_event(KeyCode::ArrowRight, true, false);
+        assert_eq!(app.machine.mem[market_layout.quantities], 2);
+        assert_eq!(app.machine.mem[p + 23], 0);
+        assert_eq!(app.machine.mem[p + 40], 10);
+        assert_eq!(
+            u16::from_le_bytes([app.machine.mem[p + 20], app.machine.mem[p + 21]]),
+            1000
+        );
+
+        // Стрелка в полёте остаётся обычным вводом для игры.
+        app.apply_input();
+        assert_eq!(app.machine.kempston, 1, "стрелка не дошла до эмулятора");
+    }
+
     /// F12 переключает ускорение эмуляции Z80 вдвое. Автоповтор не должен
     /// мигать режимом, а за кадр показа при ускорении идёт два кадра Z80.
     #[test]
@@ -353,8 +432,9 @@ use crate::world::{current_planet_color, save_layout_kladov, scene_markers};
 
     /// F7 — нативная альтернатива экрану информации о планете (`P`).
     /// Эмулятору уходит нажатие `P`, нативный экран открывается после кадра,
-    /// когда оригинал обработал команду. Esc закрывает экран и возвращает
-    /// прежний экран игры.
+    /// когда оригинал обработал команду. Управление остаётся за эмулятором,
+    /// Esc открывает меню паузы, а нативный слой закрывается сам, когда Z80
+    /// уходит с экрана планеты.
     #[test]
     fn f7_opens_planet_info() {
         let opts = test_options();
@@ -393,22 +473,30 @@ use crate::world::{current_planet_color, save_layout_kladov, scene_markers};
         );
         assert!(!app.sysinfo.info.name.is_empty(), "данные планеты не прочитаны");
 
+        // Esc открывает меню паузы, нативный экран под ним остаётся.
         app.key_event(KeyCode::Escape, true, false);
-        assert!(!app.sysinfo.active, "Esc не закрыл экран информации");
+        assert!(app.menu, "Esc не открыл меню паузы");
+        assert!(app.sysinfo.active, "Esc закрыл нативный экран");
+        app.key_event(KeyCode::Escape, true, false);
+        assert!(!app.menu, "повторный Esc не закрыл меню");
 
-        // Повторное открытие работает.
+        // Z80 ушёл с экрана планеты — нативная надстройка закрывается.
+        app.machine.mem[flight::Z80_WHAT_ON_SCREEN] = 0;
+        app.follow_native_screens();
+        assert!(!app.sysinfo.active, "нативный экран не закрылся вслед за Z80");
+
+        // Если оригинал уже на экране планеты, F7 включает отрисовку без
+        // повторной отправки `P`.
+        app.machine.mem[flight::Z80_WHAT_ON_SCREEN] = flight::Z80_SCREEN_INFO_PLANET;
         app.key_event(KeyCode::F7, true, false);
-        app.apply_input();
-        app.machine.run_frame();
-        app.open_pending_sysinfo();
         assert!(app.sysinfo.active, "повторный F7 не открыл экран");
+        assert_eq!(app.pending_key, None, "F7 зря отправил P в эмулятор");
     }
 
     /// F9 — нативная альтернатива экрану капитана (`L`). Работает так же,
-    /// как родная команда `L`: и на станции, и в полёте. Экран показывает свой
-    /// интерфейс, а эмулятору уходит нажатие `L`, и оригинал переходит в режим
-    /// показа капитана. Повторный F9 оставляет экран открытым, Esc закрывает,
-    /// а `L` переключает на классический экран капитана.
+    /// как родная команда `L`: и на станции, и в полёте. Нативный слой —
+    /// альтернативная отрисовка: ввод получает эмулятор, Esc открывает меню
+    /// паузы, а слой закрывается сам, когда Z80 уходит с экрана капитана.
     #[test]
     fn f9_opens_captain_alternative() {
         let opts = test_options();
@@ -440,10 +528,13 @@ use crate::world::{current_planet_color, save_layout_kladov, scene_markers};
         app.key_event(KeyCode::F9, true, false);
         assert!(app.status.active, "F9 не открыл альтернативный экран");
 
-        // Эмулятору подготовлено нажатие `L`, и кадр статуса отдаёт его игре.
+        // Эмулятору подготовлено нажатие `L`; первый кадр отдаёт его игре
+        // через обычный ввод.
         let (lrow, lbit) = matrix_pos(KeyCode::KeyL).expect("L в матрице");
         assert_eq!(app.pending_key, Some((lrow, lbit)), "F9 не отдал игре L");
-        app.status_tick();
+        app.apply_input();
+        app.machine.run_frame();
+        app.follow_native_screens();
         assert_eq!(
             app.machine.keyboard[lrow] & (1 << lbit),
             0,
@@ -454,47 +545,35 @@ use crate::world::{current_planet_color, save_layout_kladov, scene_markers};
             flight::Z80_SCREEN_PILOT_INFO,
             "эмулятор не перешёл в режим показа капитана"
         );
+        assert!(app.status.active, "нативный экран закрылся в режиме капитана");
 
-        // Пока экран открыт, ввод не попадает в эмулятор.
+        // Ввод больше не перехватывается и уходит в эмулятор.
+        app.key_event(KeyCode::ArrowUp, true, false);
         app.apply_input();
-        assert_eq!(app.machine.kempston, 0, "ввод не должен уходить в игру");
+        assert_ne!(app.machine.kempston & 0b1000, 0, "ввод не ушёл в игру");
 
-        // Esc закрывает экран и возвращает прежний экран игры.
+        // Esc открывает меню паузы, нативный экран под ним остаётся.
         app.key_event(KeyCode::Escape, true, false);
-        assert!(!app.status.active, "Esc не закрыл экран");
-        assert_eq!(
-            app.machine.mem[flight::Z80_WHAT_ON_SCREEN], 0,
-            "прежний экран игры не восстановлен"
-        );
+        assert!(app.menu, "Esc не открыл меню паузы");
+        assert!(app.status.active, "Esc закрыл экран капитана");
+        app.key_event(KeyCode::Escape, true, false);
+        assert!(!app.menu, "повторный Esc не закрыл меню");
 
         // Повторный F9 не закрывает экран.
         app.key_event(KeyCode::F9, true, false);
-        assert!(app.status.active, "F9 не открыл экран повторно");
-        app.key_event(KeyCode::F9, true, false);
         assert!(app.status.active, "повторный F9 закрыл экран");
 
-        // L убирает нативную надстройку и оставляет классический экран.
-        app.key_event(KeyCode::KeyL, true, false);
-        assert!(!app.status.active, "L не переключил на классический экран");
-        assert_eq!(
-            app.machine.mem[flight::Z80_WHAT_ON_SCREEN],
-            flight::Z80_SCREEN_PILOT_INFO,
-            "игра не осталась на классическом экране капитана"
-        );
-        assert_eq!(app.pending_key, None, "L не должен уходить в эмулятор");
+        // Z80 ушёл с экрана капитана — нативная надстройка закрывается.
+        app.machine.mem[flight::Z80_WHAT_ON_SCREEN] = 0;
+        app.follow_native_screens();
+        assert!(!app.status.active, "нативный экран не закрылся вслед за Z80");
 
-        // Игровая клавиша закрывает экран и передаётся игре.
+        // Если оригинал уже на экране капитана, F9 включает отрисовку без
+        // повторной отправки `L`.
+        app.machine.mem[flight::Z80_WHAT_ON_SCREEN] = flight::Z80_SCREEN_PILOT_INFO;
         app.key_event(KeyCode::F9, true, false);
-        assert!(app.status.active);
-        app.key_event(KeyCode::Digit1, true, false);
-        assert!(!app.status.active, "игровая клавиша не закрыла экран");
-        app.apply_input();
-        let (row, bit) = matrix_pos(KeyCode::Digit1).expect("1 в матрице");
-        assert_eq!(
-            app.machine.keyboard[row] & (1 << bit),
-            0,
-            "клавиша не ушла в эмулятор"
-        );
+        assert!(app.status.active, "F9 не включил экран поверх режима капитана");
+        assert_eq!(app.pending_key, None, "F9 зря отправил L в эмулятор");
 
         // В полёте F9 тоже открывает альтернативу и отдаёт игре L.
         let mut app = App::new(boot(), &opts);

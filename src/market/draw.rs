@@ -1,4 +1,5 @@
-//! Отрисовка экрана цен на станции.
+//! Отрисовка экрана цен. На станции это полноценный рынок с выбором строки и
+//! подсказками торговли; в полёте — только таблица цен без подсветки и кнопок.
 //!
 //! Оформление в стиле экранов информации о планете и командира: чёрный фон,
 //! белая рамка, голубые подписи/заголовки колонок и белые значения. Заголовок
@@ -14,6 +15,8 @@ const FRAME: u32 = crate::cockpit::FRAME_COLOR;
 const LABEL: u32 = 0xFF00_D7D7;
 /// Значения — белые.
 const VALUE: u32 = crate::cockpit::FRAME_COLOR;
+/// Подсветка выбранной строки списка.
+const SELECT_BG: u32 = 0xFF00_5458;
 
 /// Геометрия экрана.
 struct Layout {
@@ -48,8 +51,9 @@ fn layout(w: usize, h: usize) -> Layout {
     }
 }
 
-/// Нарисовать экран цен на станции.
-pub(super) fn draw(hd: &mut Frame, font: &[u8; crate::font::ZX_FONT_LEN], info: &Info) {
+/// Нарисовать экран цен: на станции — с выбором строки и подсказками торговли,
+/// в полёте — только таблицу цен.
+pub(super) fn draw(hd: &mut Frame, font: &[u8; crate::font::ZX_FONT_LEN], market: &Market) {
     let w = hd.width;
     let h = hd.height;
     if w == 0 || h == 0 {
@@ -58,6 +62,7 @@ pub(super) fn draw(hd: &mut Frame, font: &[u8; crate::font::ZX_FONT_LEN], info: 
     hd.clear(BG);
     let l = layout(w, h);
     let ts = l.text;
+    let info = &market.info;
 
     let inner_x = l.margin + l.frame;
     let inner_w = (w as i32 - 2 * inner_x).max(0);
@@ -70,7 +75,8 @@ pub(super) fn draw(hd: &mut Frame, font: &[u8; crate::font::ZX_FONT_LEN], info: 
     draw_two_tone_text(hd, font, tx, l.title_y, title, VALUE, LABEL, ts);
 
     // Колонки на всю ширину экрана. UNIT PRICE и QUANTITY FOR SALE — в две
-    // строки; PRODUCT и UNIT опущены на вторую строку заголовка.
+    // строки; PRODUCT и UNIT опущены на вторую строку заголовка. IN HOLD —
+    // новое поле с количеством товара в трюме корабля.
     let left = inner_x;
     let pad = ch / 2;
     let x_name = left + pad;
@@ -78,6 +84,7 @@ pub(super) fn draw(hd: &mut Frame, font: &[u8; crate::font::ZX_FONT_LEN], info: 
     let x_price = left + inner_w * 55 / 100;
     let x_price_header = x_price + 3 * ch;
     let x_qty = left + inner_w * 72 / 100;
+    let x_hold = left + inner_w * 90 / 100;
 
     hd.draw_text(font, x_name, l.header_bottom_y, "PRODUCT", LABEL, ts);
     hd.draw_text(font, x_unit, l.header_bottom_y, "UNIT", LABEL, ts);
@@ -85,6 +92,8 @@ pub(super) fn draw(hd: &mut Frame, font: &[u8; crate::font::ZX_FONT_LEN], info: 
     hd.draw_text(font, x_price_header, l.header_bottom_y, "PRICE", LABEL, ts);
     hd.draw_text(font, x_qty, l.header_top_y, "QUANTITY", LABEL, ts);
     hd.draw_text(font, x_qty, l.header_bottom_y, "FOR SALE", LABEL, ts);
+    hd.draw_text(font, x_hold, l.header_top_y, "IN", LABEL, ts);
+    hd.draw_text(font, x_hold, l.header_bottom_y, "HOLD", LABEL, ts);
 
     let row_h = l.line + l.line / 4;
     let table_bottom = h as i32 - l.margin - l.frame;
@@ -92,6 +101,16 @@ pub(super) fn draw(hd: &mut Frame, font: &[u8; crate::font::ZX_FONT_LEN], info: 
         let y = l.first_row_y + i as i32 * row_h;
         if y + l.line > table_bottom {
             break;
+        }
+        // В полёте нет выбора строки — экран только для чтения цен.
+        if market.docked && i == market.cursor {
+            hd.fill_rect(
+                left,
+                y - ts as i32,
+                inner_w.max(0) as usize,
+                (l.line + 2 * ts as i32).max(1) as usize,
+                SELECT_BG,
+            );
         }
         hd.draw_text(font, x_name, y, item.name, VALUE, ts);
         hd.draw_text(font, x_unit, y, item.unit, VALUE, ts);
@@ -107,6 +126,32 @@ pub(super) fn draw(hd: &mut Frame, font: &[u8; crate::font::ZX_FONT_LEN], info: 
             format!("{:>3}{}", item.quantity, item.unit)
         };
         hd.draw_text(font, x_qty, y, &qty, VALUE, ts);
+
+        let hold = if item.in_hold == 0 {
+            "-".to_string()
+        } else {
+            format!("{}{}", item.in_hold, item.unit)
+        };
+        hd.draw_text(font, x_hold, y, &hold, VALUE, ts);
+    }
+
+    // Деньги показываются всегда. Подсказки выбора и торговли, а также
+    // результат сделки — только на станции: в полёте их нет.
+    let status_y = table_bottom - 3 * l.line;
+    let cash = format!("CASH {:>7.1}", info.cash_tenths as f32 / 10.0);
+    hd.draw_text(font, left, status_y, &cash, LABEL, ts);
+    if market.docked {
+        hd.draw_text(
+            font,
+            x_unit,
+            status_y,
+            "UP/DN SELECT  <-SELL  ->BUY",
+            LABEL,
+            ts,
+        );
+        if let Some(msg) = &market.notice {
+            hd.draw_text(font, left, status_y + l.line, msg, VALUE, ts);
+        }
     }
 
     draw_screen_frame(hd, &l);

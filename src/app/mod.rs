@@ -80,13 +80,8 @@ struct App<'a> {
     shop: equip::Shop,
     /// Нативный экран статуса пилота (F9) — альтернатива экрану `L`.
     status: status::Status,
-    /// Значение `WhatOnScreen` до открытия статуса: по нему экран игры
-    /// возвращается при закрытии нативного интерфейса.
-    status_screen: Option<u8>,
     /// Нативный экран информации о планете (F7) — альтернатива экрану `P`.
     sysinfo: sysinfo::SysInfo,
-    /// Значение `WhatOnScreen` до открытия экрана информации о планете.
-    sysinfo_screen: Option<u8>,
     /// После кадра эмулятора открыть нативный экран информации о планете:
     /// сначала игра должна обработать `P` и заполнить поля планеты.
     pending_sysinfo: bool,
@@ -162,9 +157,7 @@ impl<'a> App<'a> {
             hdmap_screen: None,
             shop: equip::Shop::new(),
             status: status::Status::new(),
-            status_screen: None,
             sysinfo: sysinfo::SysInfo::new(),
-            sysinfo_screen: None,
             pending_sysinfo: false,
             market: market::Market::new(),
             flight: flight::Flight::new(),
