@@ -1,5 +1,7 @@
 //! Геометрия окна: раскладка списка, панели и модального окна.
 
+use crate::cockpit;
+
 use super::Shop;
 use super::items::{LIST_CHARS, NAME_CHARS, PANEL_MIN_CHARS, PRICE_CHARS};
 
@@ -13,6 +15,12 @@ pub(super) struct Geo {
     pub(super) ch: i32,
     /// Высота строки текста (= `ch`).
     pub(super) line: i32,
+    /// Отступ и толщина общей рамки экрана (как у других нативных экранов).
+    pub(super) margin: i32,
+    pub(super) frame: i32,
+    /// Строка заголовка и строка данных под ним.
+    pub(super) title_y: i32,
+    pub(super) info_y: i32,
     /// Левое поле содержимого.
     pub(super) x0: i32,
     /// Низ верхней полосы (шапка).
@@ -82,11 +90,18 @@ impl Shop {
         let ts = ts_h.min(ts_w) as usize;
         let ch = 8 * ts as i32;
         let line = ch;
-        let x0 = 2 * ch;
-        // Шапка: заголовок + строка SYSTEM/TECH/CASH.
+        // Рамка и отступ берутся из кокпита — при переключении экранов
+        // внешняя рамка не смещается и не меняет толщину.
+        let margin = cockpit::panel_geometry(self.win_w, self.win_h).margin;
+        let frame = cockpit::LINE.max(1);
+        let x0 = margin + frame + ch;
+        // Шапка: заголовок + строка SYSTEM/TECH/CASH — внутри рамки.
         let title_ts = ts + 1;
-        let top = 4 * ts as i32 + 8 * title_ts as i32 + line + 8 * ts as i32;
-        let help_y = self.win_h as i32 - line - 6 * ts as i32;
+        let title_y = margin + frame + 4 * ts as i32;
+        let info_y = title_y + 8 * title_ts as i32 + 4 * ts as i32;
+        let top = info_y + line + 8 * ts as i32;
+        // Строка помощи прижимается к нижней линии рамки.
+        let help_y = self.win_h as i32 - margin - frame - line - 2 * ts as i32;
         let content_bottom = help_y - 4 * ts as i32;
         // Слева — только колонки списка, остальная ширина уходит панели.
         let list_w = (LIST_CHARS * ch).max(0) as usize;
@@ -98,6 +113,10 @@ impl Shop {
             ts,
             ch,
             line,
+            margin,
+            frame,
+            title_y,
+            info_y,
             x0,
             top,
             list_y,

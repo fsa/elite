@@ -6,7 +6,7 @@ use super::layout::{
     KLADOV_SHOP, OFF_CASH1, OFF_CASH2, OFF_FREE_CARGO, OFF_FUEL, OFF_LASERS,
     OFF_MISSILES, OFF_TECH,
 };
-use super::render::{FITTED_FG, WARN_BG, fmt_fuel, wrap};
+use super::render::{BG, CURSOR_BG, FITTED_FG, FRAME, LABEL, WARN_BG, fmt_fuel, wrap};
 use crate::display::Frame;
 
 /// Блок командира и данные системы версии Кладова — как в снапшоте
@@ -292,10 +292,15 @@ fn draw_fills_layer() {
     assert!(f.pixels().iter().all(|&p| p != 0), "слой не непрозрачный");
     let distinct: std::collections::HashSet<u32> =
         f.pixels().iter().copied().collect();
-    // Палитра экрана: фон, панели, рамки, три оттенка текста, цена,
-    // курсор, «установлено» — шрифт в тесте сплошной, поэтому цветов
-    // ровно столько, сколько кистей (новых от глифов не появляется).
-    assert!(distinct.len() >= 8, "слишком мало цветов: {}", distinct.len());
+    // Общая палитра намеренно узкая: фон, рамка/значения, подписи и
+    // подсветка выбранной строки. Остальные оттенки появляются вместе с
+    // тостом и модальным окном.
+    assert!(
+        [BG, FRAME, LABEL, CURSOR_BG]
+            .iter()
+            .all(|c| distinct.contains(c)),
+        "в палитре не хватает общих цветов: {distinct:X?}"
+    );
     // Крепление лазера FRONT = PULSE на панели корабля.
     assert!(f.pixels().iter().any(|&p| p == FITTED_FG));
     // Тост рисуется и гаснет через несколько кадров (ракеты уже полны —
@@ -308,6 +313,48 @@ fn draw_fills_layer() {
         shop.draw(&mut f, &font, &mem);
     }
     assert_eq!(shop.toast_text(), None, "тост не погас");
+}
+
+/// Экран закупки оформлен как остальные нативные экраны: чёрный фон, белая
+/// рамка с общим отступом и двухцветный заголовок.
+#[test]
+fn draw_uses_common_screen_frame() {
+    let (mut shop, mem) = opened();
+    let g = shop.geo();
+    let font = vec![0xFFu8; 0x300];
+    let mut f = Frame::new(1280, 720);
+    shop.draw(&mut f, &font, &mem);
+
+    let px = |x: usize, y: usize| f.pixels()[y * f.width + x];
+    let m = crate::cockpit::panel_geometry(1280, 720).margin as usize;
+    let t = crate::cockpit::LINE as usize;
+    assert_eq!(px(0, 0), BG, "фон должен быть чёрным");
+    for x in m..(1280 - m) {
+        assert_eq!(px(x, m), FRAME, "нет верхней линии рамки");
+        assert_eq!(px(x, 720 - m - 1), FRAME, "нет нижней линии рамки");
+    }
+    for y in m..(720 - m) {
+        assert_eq!(px(m, y), FRAME, "нет левой линии рамки");
+        assert_eq!(px(1280 - m - 1, y), FRAME, "нет правой линии рамки");
+    }
+    // Толщина рамки — та же, что у кокпита; сразу за ней идёт фон.
+    assert_eq!(px(m + t - 1, m + t - 1), FRAME);
+    assert_eq!(px(m + t, m + t), BG);
+
+    // Выделение первой строки не задевает верхнюю и боковые линии списка.
+    assert_eq!(px((g.x0 + g.ch / 2) as usize, g.list_y as usize), FRAME);
+    assert_eq!(px(g.x0 as usize, (g.list_y + g.row_h / 2) as usize), FRAME);
+    assert_eq!(
+        px((g.x0 + g.frame) as usize, (g.list_y + g.frame) as usize),
+        CURSOR_BG,
+        "выделение должно начинаться внутри ячейки"
+    );
+
+    // Заголовок: верх глифов белый, низ — голубой, как на экране цен.
+    let title_ts = g.ts + 1;
+    let tx = ((1280 - "EQUIP SHIP".len() * 8 * title_ts) / 2) as usize;
+    assert_eq!(px(tx, g.title_y as usize + 1), FRAME);
+    assert_eq!(px(tx, (g.title_y + 4 * title_ts as i32) as usize), LABEL);
 }
 
 /// Раскладка: колонка цен не налезает на имена, панель корабля получает

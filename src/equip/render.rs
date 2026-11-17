@@ -1,22 +1,29 @@
 //! Отрисовка экрана закупки, панели корабля и окна крепления.
 
+use crate::cockpit::FRAME_COLOR;
 use crate::display::Frame;
 
 use super::Shop;
+use super::geometry::Geo;
 use super::items::{FUEL_MAX, ITEMS, Kind, LASER_NAMES, MISSILES_MAX, MOUNTS, laser_name};
 
 // ————— Цвета HD-слоя (непрозрачные, `0xFFRRGGBB`) —————
-pub(super) const BG: u32 = 0xFF00_0008;
-pub(super) const LIST_BG: u32 = 0xFF0A_1218;
-pub(super) const PANEL_BG: u32 = 0xFF08_0E14;
-pub(super) const BORDER: u32 = 0xFF30_6070;
-pub(super) const TEXT: u32 = 0xFFE0_E8F0;
-pub(super) const TEXT_DIM: u32 = 0xFF80_9098;
-pub(super) const HOVER_BG: u32 = 0xFF14_2838;
-pub(super) const CURSOR_BG: u32 = 0xFF1E_4660;
-pub(super) const FITTED_FG: u32 = 0xFF50_C080;
-pub(super) const PRICE_FG: u32 = 0xFFD0_C060;
-pub(super) const WARN_BG: u32 = 0xFF50_1810;
+// Палитра общая с экранами статуса, планеты и цен: чёрный фон, белая рамка,
+// голубые подписи, белые значения. Выделение строк остаётся только как
+// подсветка, а не как отдельная цветовая схема экрана.
+pub(super) const BG: u32 = 0xFF00_0000;
+pub(super) const FRAME: u32 = FRAME_COLOR;
+pub(super) const TEXT: u32 = FRAME_COLOR;
+pub(super) const LABEL: u32 = 0xFF00_D7D7;
+pub(super) const LIST_BG: u32 = BG;
+pub(super) const PANEL_BG: u32 = BG;
+pub(super) const BORDER: u32 = FRAME;
+pub(super) const TEXT_DIM: u32 = LABEL;
+pub(super) const HOVER_BG: u32 = 0xFF00_1A20;
+pub(super) const CURSOR_BG: u32 = 0xFF00_2E3C;
+pub(super) const FITTED_FG: u32 = LABEL;
+pub(super) const PRICE_FG: u32 = FRAME_COLOR;
+pub(super) const WARN_BG: u32 = 0xFF30_0C08;
 pub(super) const WARN_FG: u32 = 0xFFFF_C0A0;
 
 /// «327986.8» — десятые без десятичной мусорины.
@@ -72,26 +79,20 @@ impl Shop {
         f.clear(BG);
 
         // ——— Шапка: заголовок и строки данных командира ———
+        // Как на экране цен: верх глифов белый, низ — голубой.
         let title_ts = ts + 1;
         let title = "EQUIP SHIP";
         let tw = title.len() as i32 * 8 * title_ts as i32;
-        f.draw_text(
-            font,
-            ((f.width as i32 - tw) / 2).max(0),
-            4 * ts as i32,
-            title,
-            TEXT,
-            title_ts,
-        );
+        let tx = ((f.width as i32 - tw) / 2).max(0);
+        draw_two_tone_text(f, font, tx, g.title_y, title, TEXT, LABEL, title_ts);
         let info = format!(
             "SYSTEM {:<10} TECH LEVEL {:>2}",
             self.system, self.tech
         );
-        let iy = 4 * ts as i32 + 8 * title_ts as i32 + 4 * ts as i32;
-        f.draw_text(font, x0, iy, &info, TEXT_DIM, ts);
+        f.draw_text(font, x0, g.info_y, &info, LABEL, ts);
         let cash_s = format!("CASH {} CR", fmt_tenths(self.cash));
         let cx = (f.width as i32 - x0 - cash_s.len() as i32 * ch).max(0);
-        f.draw_text(font, cx, iy, &cash_s, PRICE_FG, ts);
+        f.draw_text(font, cx, g.info_y, &cash_s, PRICE_FG, ts);
 
         // ——— Список товаров ———
         let content_h = (g.content_bottom - g.list_y).max(1) as usize;
@@ -101,14 +102,21 @@ impl Shop {
         f.vline(x0, g.list_y, content_h, BORDER);
         f.vline(x0 + g.list_w as i32 - 1, g.list_y, content_h, BORDER);
         f.set_clip(x0, g.list_y, g.list_w, content_h);
+        // Подсветка вставляется внутрь ячейки: иначе заливка верхней строки
+        // перекрывала бы её верхнюю линию. Отступ берём равным толщине
+        // рамки, чтобы выделение не задевало ни одну из сторон ячейки.
+        let hi_pad = g.frame.max(1);
+        let hi_x = x0 + hi_pad;
+        let hi_w = g.list_w.saturating_sub((2 * hi_pad) as usize);
+        let hi_h = (g.row_h - 2 * hi_pad).max(0) as usize;
         for (i, &number) in self.rows.iter().enumerate() {
             let ry = g.list_y + i as i32 * g.row_h;
             let sel = i == self.cursor;
             let hov = self.hover == Some(i);
             if sel {
-                f.fill_rect(x0 + 1, ry, g.list_w - 2, g.row_h as usize, CURSOR_BG);
+                f.fill_rect(hi_x, ry + hi_pad, hi_w, hi_h, CURSOR_BG);
             } else if hov {
-                f.fill_rect(x0 + 1, ry, g.list_w - 2, g.row_h as usize, HOVER_BG);
+                f.fill_rect(hi_x, ry + hi_pad, hi_w, hi_h, HOVER_BG);
             }
             let ty = ry + (g.row_h - line) / 2;
             let item = &ITEMS[(number - 1) as usize];
@@ -238,6 +246,10 @@ impl Shop {
             "ENTER/CLICK BUY   UP/DOWN SELECT   1-9 ITEM NO.   F4/ESC CLOSE".to_string()
         };
         f.draw_text(font, x0, g.help_y, &help, TEXT_DIM, ts);
+
+        // Рамка рисуется последней, как на остальных нативных экранах,
+        // чтобы содержимое не перекрывало её линии.
+        draw_screen_frame(f, &g);
     }
 
     /// Окно выбора крепления (как в оригинале: `0 FRONT .. 3 RIGHT`).
@@ -287,5 +299,51 @@ impl Shop {
             TEXT_DIM,
             ts,
         );
+    }
+}
+
+/// Заголовок из двух цветов: верхняя половина глифов `top`, нижняя — `bottom`
+/// (как на экране цен и в оригинальной игре).
+fn draw_two_tone_text(
+    f: &mut Frame,
+    font: &[u8],
+    x: i32,
+    y: i32,
+    s: &str,
+    top: u32,
+    bottom: u32,
+    scale: usize,
+) {
+    let h = 8 * scale as i32;
+    let mid = h / 2;
+    let w = s.chars().count() as i32 * 8 * scale as i32;
+
+    f.set_clip(x, y + mid, w.max(0) as usize, (h - mid).max(0) as usize);
+    f.draw_text(font, x, y, s, bottom, scale);
+    f.clear_clip();
+
+    f.set_clip(x, y, w.max(0) as usize, mid.max(0) as usize);
+    f.draw_text(font, x, y, s, top, scale);
+    f.clear_clip();
+}
+
+/// Обвести экран белой рамкой. Отступ и толщина — как у других нативных
+/// экранов, поэтому при переключении F4 рамка не «прыгает».
+fn draw_screen_frame(f: &mut Frame, g: &Geo) {
+    let w = f.width as i32;
+    let h = f.height as i32;
+    let m = g.margin.max(0);
+    let fw = (w - 2 * m).max(0);
+    let fh = (h - 2 * m).max(0);
+    let t = g.frame.clamp(1, fw.min(fh).max(1)) as usize;
+    if fw <= 0 || fh <= 0 {
+        return;
+    }
+    f.fill_rect(m, m, fw as usize, t, FRAME);
+    f.fill_rect(m, m + fh - t as i32, fw as usize, t, FRAME);
+    let side_h = (fh - 2 * t as i32).max(0) as usize;
+    if side_h > 0 {
+        f.fill_rect(m, m + t as i32, t, side_h, FRAME);
+        f.fill_rect(m + fw - t as i32, m + t as i32, t, side_h, FRAME);
     }
 }
