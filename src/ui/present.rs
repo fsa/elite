@@ -204,7 +204,7 @@ fn draw_save_summary(
     let rating = u32::from_le_bytes([b(0x0C), b(0x0D), b(0x0E), 0]);
     let cash = u32_at(0x14);
 
-    let rows: [(usize, &str, String); 25] = [
+    let rows: [(usize, &str, String); 26] = [
         (0x00, "NAME", name),
         (0x0B, "LEGAL", format!("{legal} {}", legal_text(legal))),
         (0x0C, "RATING", format!("{rating} {}", rating_text(rating))),
@@ -214,8 +214,9 @@ fn draw_save_summary(
             "CASH",
             format!("{}.{} Cr", cash / 10, cash % 10),
         ),
-        (0x18, "CARGO", hex_at(save_data, 0x18, 8)),
-        (0x20, "CARGO", hex_at(save_data, 0x20, 8)),
+        (0x18, "CARGO", hex_at(save_data, 0x18, 6)),
+        (0x1E, "CARGO", hex_at(save_data, 0x1E, 6)),
+        (0x24, "CARGO", hex_at(save_data, 0x24, 5)),
         (0x28, "BAY", format!("{} t", b(0x28))),
         (0x29, "FRONT", format!("{}", b(0x29))),
         (0x2A, "SLOTS", hex_at(save_data, 0x2A, 4)),
