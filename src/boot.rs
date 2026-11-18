@@ -1,17 +1,18 @@
 //! Загрузка образа игры и начальное состояние эмулятора.
 //!
 //! Версия Кладова (с дискеты `ELITE3HL.TRD`) грузится как полный 48K-образ
-//! памяти (0x4000-0xFFFF), который готовит `tools/make_kladov_image.py` из
-//! снапшота `zx_src/kladov.snapshot` (в `zx_bin/kladov.bin`).  Файл
-//! `ELITE3  C` на дискете — это слепок уже работающей игры, без согласованной
-//! точки холодного старта, поэтому мы не проходим загрузчик, а возобновляем
-//! исполнение ровно там, где был прерван обработчик прерывания в снапшоте:
+//! памяти (0x4000-0xFFFF). Образ и ROM 48K встроены в исполняемый файл
+//! (`src/assets.rs`), поэтому запуск не зависит от внешних файлов. Образ
+//! получен `tools/make_kladov_image.py` из снапшота `zx_src/kladov.snapshot` и
+//! хранится в репозитории как `zx_bin/kladov.bin`. Файл `ELITE3  C` на дискете
+//! — это слепок уже работающей игры, без согласованной точки холодного старта,
+//! поэтому мы не проходим загрузчик, а возобновляем исполнение ровно там, где
+//! был прерван обработчик прерывания в снапшоте:
 //! IM2, `I=0xFD`, обработчик 0xFEFE (таблица векторов уже в образе).
 
 use std::env;
-use std::fs;
-use std::process::exit;
 
+use crate::assets;
 use crate::cli::Options;
 use crate::machine::Spectrum;
 use crate::native;
@@ -34,25 +35,9 @@ pub const KLADOV_STATE_F: u8 = (KLADOV_STATE_AF & 0xFF) as u8;
 
 /// Настроить машину с загруженной игрой под версию Кладова.
 pub fn machine(opts: &Options) -> Spectrum {
-    let game = match fs::read(&opts.game) {
-        Ok(d) => d,
-        Err(e) => {
-            eprintln!("cannot read game image {:?}: {}", opts.game, e);
-            eprintln!("hint: run python3 tools/make_kladov_image.py to build the Kladov RAM image");
-            exit(1);
-        }
-    };
-    let rom = opts.rom.as_ref().map(|p| match fs::read(p) {
-        Ok(d) => d,
-        Err(e) => {
-            eprintln!("cannot read ROM {:?}: {}", p, e);
-            exit(1);
-        }
-    });
-
-    let mut machine = Spectrum::new(rom.as_deref());
+    let mut machine = Spectrum::new(Some(assets::ROM_48));
     // Версия Кладова: полный 48K-образ (0x4000..0xFFFF) загружается как есть.
-    machine.load(KLADOV_LOAD_ADDR, &game);
+    machine.load(KLADOV_LOAD_ADDR, assets::KLADOV_IMAGE);
     machine.cpu.a = KLADOV_STATE_A;
     machine.cpu.f = KLADOV_STATE_F;
     machine.cpu.b = (KLADOV_STATE_BC >> 8) as u8;

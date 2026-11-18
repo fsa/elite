@@ -1,12 +1,9 @@
 //! Разбор аргументов командной строки.
 
 use std::env;
-use std::fs;
 use std::process::exit;
 
 pub struct Options {
-    pub game: String,
-    pub rom: Option<String>,
     pub headless: bool,
     pub frames: u64,
     pub dump: Option<String>,
@@ -32,8 +29,6 @@ pub struct Options {
 
 pub fn parse_args() -> Options {
     let mut opts = Options {
-        game: String::new(),
-        rom: None,
         headless: false,
         frames: 600,
         dump: None,
@@ -48,7 +43,6 @@ pub fn parse_args() -> Options {
     let mut args = env::args().skip(1);
     while let Some(a) = args.next() {
         match a.as_str() {
-            "--rom" => opts.rom = args.next(),
             "--frames" => opts.frames = args.next().and_then(|s| s.parse().ok()).unwrap_or(600),
             "--dump" => {
                 opts.dump = args.next();
@@ -64,9 +58,8 @@ pub fn parse_args() -> Options {
             "--debug" => opts.debug = true,
             "-h" | "--help" => {
                 println!(
-                    "usage: elite [game.bin] [--rom rom.bin] [--headless] [--frames N] [--dump out.ppm] [--mute] [--audio] [--wav out.wav] [--native] [--save FILE] [--fullscreen] [--debug]"
+                    "usage: elite [--headless] [--frames N] [--dump out.ppm] [--mute] [--audio] [--wav out.wav] [--native] [--save FILE] [--fullscreen] [--debug]"
                 );
-                println!("  загружается версия Кладова (zx_bin/kladov.bin)");
                 println!("  --mute     отключить вывод звука через PipeWire");
                 println!("  --audio    выводить звук и в headless-режиме (реальное время)");
                 println!("  --wav FILE сохранить звук в WAV-файл");
@@ -122,21 +115,10 @@ pub fn parse_args() -> Options {
                 println!("  0-3 — крепление лазера, Esc — отмена крепления.");
                 exit(0);
             }
-            other => opts.game = other.to_string(),
-        }
-    }
-    if opts.game.is_empty() {
-        opts.game = "zx_bin/kladov.bin".to_string();
-    }
-    if opts.rom.is_none() {
-        for cand in [
-            "zx_bin/48.rom",
-            "/usr/share/fuse/48.rom",
-            "/usr/share/fuse/48.ZX.rom",
-        ] {
-            if fs::metadata(cand).is_ok() {
-                opts.rom = Some(cand.to_string());
-                break;
+            other => {
+                eprintln!("elite: неизвестный аргумент '{other}'");
+                eprintln!("запустите elite --help для списка аргументов");
+                exit(2);
             }
         }
     }

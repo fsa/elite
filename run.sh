@@ -1,5 +1,6 @@
 #!/bin/sh
 # Build (if needed) and run the Elite emulator.
+# Образы игры и ROM встроены в исполняемый файл, внешние файлы не нужны.
 #
 # Аудиобэкенд выбирается автоматически: PipeWire, если найден libpipewire-0.3,
 # иначе cpal. Принудительно:
@@ -13,7 +14,6 @@
 #   ./run.sh --frames 600 --dump out.ppm
 #   ./run.sh --headless --frames 300
 #   ./run.sh --fullscreen        — полный экран (или F11 / Alt+Enter в игре)
-#   ./run.sh --rom /path/to/48.rom
 set -e
 cd "$(dirname "$0")"
 
@@ -26,5 +26,4 @@ case "$1" in
 esac
 features=$(tools/audio_features.sh "$audio")
 
-[ -f zx_bin/kladov.bin ] || python3 tools/make_kladov_image.py
 exec cargo run --release $features -- "$@"

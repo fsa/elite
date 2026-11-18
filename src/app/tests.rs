@@ -158,8 +158,6 @@ use crate::world::{current_planet_color, save_layout_kladov, scene_markers};
 
     fn test_options() -> Options {
         Options {
-            game: String::new(),
-            rom: None,
             headless: true,
             frames: 0,
             dump: None,
