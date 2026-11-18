@@ -138,7 +138,7 @@ impl Shop {
     /// Открыть экран: снять состояние командира из памяти запущенной игры.
     pub fn open(&mut self, mem: &[u8], layout: ShopLayout) {
         self.layout = layout;
-        // Имя текущей системы — та же модель галактики, что у карты F10.
+        // Имя текущей системы — та же модель галактики, что у карты F6.
         let gl = layout.galaxy;
         let seed: [u8; 6] = mem[gl.seed..gl.seed + 6].try_into().unwrap();
         let planets = galaxy::planets(seed);

@@ -27,7 +27,7 @@ impl App<'_> {
             0.0
         };
         let attrs = Window::default_attributes()
-            .with_title("Elite — F1: полёт, Esc: меню, F10: карта, F4: закупка, F11: полный экран, F12: ускорение x2, Ctrl+Q: выход")
+            .with_title("Elite — F1: полёт, Esc: меню, F6: карта, F4: закупка, F11: полный экран, F12: ускорение x2, Ctrl+Q: выход")
             .with_inner_size(LogicalSize::new(
                 4.0 * SRC_W as f64 + debug_w,
                 4.0 * SRC_H as f64,

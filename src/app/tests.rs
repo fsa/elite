@@ -231,17 +231,17 @@ use crate::world::{current_planet_color, save_layout_kladov, scene_markers};
         assert_eq!(out[x0 - 1], 0xFFFF_FFFF, "полоса задела игру");
     }
 
-    /// F10 открывает отдельную нативную карту галактики: игра не встаёт, но
+    /// F6 открывает отдельную нативную карту галактики: игра не встаёт, но
     /// переходит в режим `SHORT RANGE CHART`, ввод уходит карте, повторный
-    /// F10/Esc возвращает экран игры.
+    /// F6/Esc возвращает экран игры.
     #[test]
-    fn f10_opens_and_closes_galaxy_map() {
+    fn f6_opens_and_closes_galaxy_map() {
         let opts = test_options();
         let mut app = App::new(boot(), &opts);
         let prev_screen = app.machine.mem[flight::Z80_WHAT_ON_SCREEN];
         assert!(!app.hdmap.active);
-        app.key_event(KeyCode::F10, true, false);
-        assert!(app.hdmap.active, "F10 не открыл карту");
+        app.key_event(KeyCode::F6, true, false);
+        assert!(app.hdmap.active, "F6 не открыл карту");
         assert_eq!(app.hdmap.planet_count(), galaxy::COUNT);
         // Пока карта открыта, игра считает, что на экране локальная карта.
         assert_eq!(
@@ -270,12 +270,12 @@ use crate::world::{current_planet_color, save_layout_kladov, scene_markers};
         // Пока карта открыта, ввод не попадает в эмулятор.
         app.apply_input();
         assert_eq!(app.machine.kempston, 0, "ввод не должен уходить в игру");
-        // Повторное F10 закрывает карту и возвращает прежний экран.
-        app.key_event(KeyCode::F10, true, false);
-        assert!(!app.hdmap.active, "F10 не закрыл карту");
+        // Повторное F6 закрывает карту и возвращает прежний экран.
+        app.key_event(KeyCode::F6, true, false);
+        assert!(!app.hdmap.active, "F6 не закрыл карту");
         assert_eq!(app.machine.mem[flight::Z80_WHAT_ON_SCREEN], prev_screen);
         // Открыть заново и закрыть по Esc.
-        app.key_event(KeyCode::F10, true, false);
+        app.key_event(KeyCode::F6, true, false);
         assert!(app.hdmap.active);
         app.key_event(KeyCode::Escape, true, false);
         assert!(!app.hdmap.active, "Esc не закрыл карту");
@@ -621,7 +621,9 @@ use crate::world::{current_planet_color, save_layout_kladov, scene_markers};
         );
         app.key_event(KeyCode::KeyS, false, false);
 
-        // F2-F4 — виды назад/влево/вправо и клавиши 2-4 оригинала.
+        // F2-F4 — виды назад/влево/вправо и клавиши 2-4 оригинала. Это
+        // работает только в полёте: на станции цифры 2/3 подавлены.
+        app.machine.mem[flight::Z80_IND_DANGER] = 1;
         app.key_event(KeyCode::F2, true, false);
         assert_eq!(app.flight.view_dir, flight::ViewDir::Back);
         app.apply_input();
@@ -633,10 +635,10 @@ use crate::world::{current_planet_color, save_layout_kladov, scene_markers};
         );
         // Поверх полёта карта тоже открывается: полёт остаётся под ней и
         // продолжается после закрытия карты.
-        app.key_event(KeyCode::F10, true, false);
-        assert!(app.hdmap.active, "F10 не открыл карту поверх полёта");
-        app.key_event(KeyCode::F10, true, false);
-        assert!(!app.hdmap.active, "F10 не закрыл карту");
+        app.key_event(KeyCode::F6, true, false);
+        assert!(app.hdmap.active, "F6 не открыл карту поверх полёта");
+        app.key_event(KeyCode::F6, true, false);
+        assert!(!app.hdmap.active, "F6 не закрыл карту");
         assert!(app.flight.active, "закрытие карты выключило полёт");
 
         // Esc — пауза, но экран остаётся выбранным; Esc снова — продолжить.
@@ -659,18 +661,16 @@ use crate::world::{current_planet_color, save_layout_kladov, scene_markers};
         );
     }
 
-    /// F1-F4 на станции повторяют оригинальные клавиши 1-4: игра получает
-    /// ту же матричную клавишу (1 — вылет, 2 — покупка, 3 — продажа,
-    /// 4 — оборудование).
+    /// На станции F1 и F4 повторяют оригинальные клавиши 1 и 4 (вылет и
+    /// оборудование). F2/F3 не реализованы: их цифры не уходят в эмулятор,
+    /// иначе он сбивается в режим покупки/продажи.
     #[test]
     fn function_keys_send_original_number_keys() {
+        let opts = test_options();
         for (fkey, digit) in [
             (KeyCode::F1, KeyCode::Digit1),
-            (KeyCode::F2, KeyCode::Digit2),
-            (KeyCode::F3, KeyCode::Digit3),
             (KeyCode::F4, KeyCode::Digit4),
         ] {
-            let opts = test_options();
             let mut app = App::new(boot(), &opts);
             app.key_event(fkey, true, false);
             app.apply_input();
@@ -681,15 +681,32 @@ use crate::world::{current_planet_color, save_layout_kladov, scene_markers};
                 "{fkey:?} не передал игре {digit:?}"
             );
         }
+        for fkey in [KeyCode::F2, KeyCode::F3] {
+            let mut app = App::new(boot(), &opts);
+            app.key_event(fkey, true, false);
+            app.apply_input();
+            let digit = if fkey == KeyCode::F2 {
+                KeyCode::Digit2
+            } else {
+                KeyCode::Digit3
+            };
+            let (row, bit) = matrix_pos(digit).expect("цифра в матрице");
+            assert_ne!(
+                app.machine.keyboard[row] & (1 << bit),
+                0,
+                "{fkey:?} не должен передавать игре {digit:?}"
+            );
+            assert_eq!(app.pending_key, None, "{fkey:?} оставил отложенную клавишу");
+        }
     }
 
-    /// F1-F4 на нативной карте тоже работают как клавиши 1-4: карта
-    /// закрывается, нажатие уходит игре; F1 включает нативный вид полёта.
+    /// На нативной карте F1 закрывает её и уходит игре, F4 — тоже. F2/F3 на
+    /// станции остаются пустыми: карта не закрывается и цифры в игру не идут.
     #[test]
     fn map_function_keys_forward_original_keys() {
         let opts = test_options();
         let mut app = App::new(boot(), &opts);
-        app.key_event(KeyCode::F10, true, false);
+        app.key_event(KeyCode::F6, true, false);
         assert!(app.hdmap.active);
         app.key_event(KeyCode::F1, true, false);
         assert!(!app.hdmap.active, "F1 не закрыл карту");
@@ -702,24 +719,40 @@ use crate::world::{current_planet_color, save_layout_kladov, scene_markers};
             "F1 на карте не передал игре клавишу 1"
         );
 
-        // F2-F4 закрывают карту и передают свои цифры.
-        for (fkey, digit) in [
-            (KeyCode::F2, KeyCode::Digit2),
-            (KeyCode::F3, KeyCode::Digit3),
-            (KeyCode::F4, KeyCode::Digit4),
-        ] {
+        // F4 закрывает карту и передаёт свою цифру.
+        let mut app = App::new(boot(), &opts);
+        app.key_event(KeyCode::F6, true, false);
+        assert!(app.hdmap.active);
+        app.key_event(KeyCode::F4, true, false);
+        assert!(!app.hdmap.active, "F4 не закрыл карту");
+        assert!(!app.flight.active, "F4 не должен включать полёт");
+        app.apply_input();
+        let (row, bit) = matrix_pos(KeyCode::Digit4).expect("4 в матрице");
+        assert_eq!(
+            app.machine.keyboard[row] & (1 << bit),
+            0,
+            "F4 на карте не передал игре клавишу 4"
+        );
+
+        // F2/F3 на станции не передают цифры; открытая карта при этом
+        // остаётся — эти клавиши здесь просто не реализованы.
+        for fkey in [KeyCode::F2, KeyCode::F3] {
             let mut app = App::new(boot(), &opts);
-            app.key_event(KeyCode::F10, true, false);
+            app.key_event(KeyCode::F6, true, false);
             assert!(app.hdmap.active);
             app.key_event(fkey, true, false);
-            assert!(!app.hdmap.active, "{fkey:?} не закрыл карту");
-            assert!(!app.flight.active, "{fkey:?} не должен включать полёт");
+            assert!(app.hdmap.active, "{fkey:?} закрыл карту");
             app.apply_input();
+            let digit = if fkey == KeyCode::F2 {
+                KeyCode::Digit2
+            } else {
+                KeyCode::Digit3
+            };
             let (row, bit) = matrix_pos(digit).expect("цифра в матрице");
-            assert_eq!(
+            assert_ne!(
                 app.machine.keyboard[row] & (1 << bit),
                 0,
-                "{fkey:?} на карте не передал игре {digit:?}"
+                "{fkey:?} на карте не должен передавать игре {digit:?}"
             );
         }
     }
@@ -1170,8 +1203,8 @@ use crate::world::{current_planet_color, save_layout_kladov, scene_markers};
         test_options()
     }
 
-    /// На заставке нативные экраны не открываются: F10/F4 игнорируются, пока
-    /// игра проигрывает интро.
+    /// На заставке нативные экраны не открываются: F6/F4 игнорируются, пока
+    /// игра проигрывает интро. F10 пуста и в эмулятор не передаётся.
     #[test]
     fn native_screens_blocked_on_intro() {
         let opts = kladov_options();
@@ -1184,10 +1217,15 @@ use crate::world::{current_planet_color, save_layout_kladov, scene_markers};
         }
         assert!(m.intro_seen, "заставка Кладова не распознана");
         let mut app = App::new(m, &opts);
+        app.key_event(KeyCode::F6, true, false);
+        assert!(
+            !app.hdmap.active,
+            "F6 не должен открываться на заставке Кладова"
+        );
         app.key_event(KeyCode::F10, true, false);
         assert!(
             !app.hdmap.active,
-            "F10 не должен открываться на заставке Кладова"
+            "F10 не должен открывать карту"
         );
         app.key_event(KeyCode::F4, true, false);
         assert!(
@@ -1218,11 +1256,17 @@ use crate::world::{current_planet_color, save_layout_kladov, scene_markers};
         m.note_pc(game.unwrap());
         assert!(!m.intro_seen, "вход в GameMain не снял флаг заставки");
         let mut app = App::new(m, &opts);
-        app.key_event(KeyCode::F10, true, false);
+        app.key_event(KeyCode::F6, true, false);
         assert!(
             app.hdmap.active,
-            "после старта игры F10 должен открывать карту"
+            "после старта игры F6 должен открывать карту"
         );
+        app.key_event(KeyCode::F6, true, false);
+        assert!(!app.hdmap.active, "повторный F6 должен закрывать карту");
+        // F10 пуста: ни открывать карту, ни уходить в эмулятор.
+        app.key_event(KeyCode::F10, true, false);
+        assert!(!app.hdmap.active, "F10 не должен открывать карту");
+        assert_eq!(app.pending_key, None, "F10 должен быть пустой клавишей");
     }
 
     /// Проверка на живом образе Кладова: пока не нажат SPACE, флаг заставки
@@ -1272,7 +1316,7 @@ use crate::world::{current_planet_color, save_layout_kladov, scene_markers};
         assert!(m.intro_seen, "за верхней границей флаг держится");
     }
 
-    /// На заставке работает только SPACE: остальные клавиши (в т.ч. F10/F4)
+    /// На заставке работает только SPACE: остальные клавиши (в т.ч. F6/F4)
     /// игнорируются и в эмулятор не уходят. SPACE запускает игру родным путём.
     #[test]
     fn intro_accepts_only_space() {
@@ -1289,7 +1333,7 @@ use crate::world::{current_planet_color, save_layout_kladov, scene_markers};
         // Лишние клавиши на заставке ничего не делают.
         app.key_event(KeyCode::F5, true, false);
         app.key_event(KeyCode::F9, true, false);
-        app.key_event(KeyCode::F10, true, false);
+        app.key_event(KeyCode::F6, true, false);
         app.key_event(KeyCode::F4, true, false);
         app.key_event(KeyCode::Digit1, true, false);
         app.key_event(KeyCode::KeyO, true, false);
@@ -1633,7 +1677,7 @@ use crate::world::{current_planet_color, save_layout_kladov, scene_markers};
     fn game_key_closes_native_screen_and_forwards() {
         let opts = test_options();
         let mut app = App::new(boot(), &opts);
-        app.key_event(KeyCode::F10, true, false);
+        app.key_event(KeyCode::F6, true, false);
         assert!(app.hdmap.active);
         // `L` (матрица 6,1) — игровая клавиша: карта закрывается.
         app.key_event(KeyCode::KeyL, true, false);
@@ -1645,7 +1689,7 @@ use crate::world::{current_planet_color, save_layout_kladov, scene_markers};
             "нажатие L не передано игре"
         );
         // Управляющая клавиша карты (стрелка) карту не закрывает.
-        app.key_event(KeyCode::F10, true, false);
+        app.key_event(KeyCode::F6, true, false);
         assert!(app.hdmap.active);
         app.key_event(KeyCode::ArrowRight, true, false);
         assert!(app.hdmap.active, "стрелка не должна закрывать карту");
