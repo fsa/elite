@@ -37,8 +37,10 @@ impl App<'_> {
         let in_transition = flight::z80_in_transition(mem);
 
         self.shop.close();
+        self.close_status();
         self.close_sysinfo();
         self.close_market();
+        self.pending_status = false;
         self.pending_sysinfo = false;
         self.menu = false;
         self.pending_shop = false;
@@ -158,6 +160,7 @@ impl App<'_> {
                 self.pending_shop = false;
                 self.pending_flight = None;
                 self.pending_launch = false;
+                self.pending_status = false;
                 self.pending_sysinfo = false;
                 if self.machine.mem[flight::Z80_WHAT_ON_SCREEN] == flight::Z80_SCREEN_INFO_PLANET {
                     self.sysinfo.open(&self.machine.mem, sysinfo::KLADOV_SYSINFO);
@@ -169,20 +172,29 @@ impl App<'_> {
             }
             return;
         }
-        // F9 — нативная альтернатива экрану капитана (`L`): включаем свою
-        // отрисовку, а эмулятору при необходимости отдаём нажатие `L`, чтобы
-        // игра перешла в режим показа капитана. Родная команда `L` работает
-        // и на станции, и в полёте, поэтому F9 доступна там же.
+        // F9 — нативная альтернатива экрану капитана (`L`). Эмулятору при
+        // необходимости отдаём `L`, а нативный экран включаем после кадра,
+        // когда оригинал перейдёт в режим показа капитана. Если оригинал уже
+        // на этом экране, достаточно включить нативную отрисовку.
         if code == KeyCode::F9 && !repeat {
             if !self.status.active && !self.menu && !self.machine.intro_seen {
-                let need_l = self.machine.mem[flight::Z80_WHAT_ON_SCREEN]
-                    != flight::Z80_SCREEN_PILOT_INFO;
+                self.close_hdmap();
+                self.shop.close();
                 self.close_sysinfo();
+                self.flight.close();
                 self.close_market();
-                self.open_status();
-                if need_l {
+                self.pending_shop = false;
+                self.pending_flight = None;
+                self.pending_launch = false;
+                self.pending_status = false;
+                self.pending_sysinfo = false;
+                if self.machine.mem[flight::Z80_WHAT_ON_SCREEN] == flight::Z80_SCREEN_PILOT_INFO {
+                    self.open_status();
+                } else {
+                    self.pending_status = true;
                     self.pending_key = matrix_pos(KeyCode::KeyL);
                 }
+                self.menu = false;
             }
             return;
         }
@@ -199,6 +211,7 @@ impl App<'_> {
                 self.close_status();
                 self.close_sysinfo();
                 self.flight.close();
+                self.pending_status = false;
                 self.pending_sysinfo = false;
                 self.pending_flight = None;
                 self.pending_launch = false;

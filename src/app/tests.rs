@@ -526,7 +526,8 @@ use crate::world::{current_planet_color, save_layout_kladov, scene_markers};
         app.machine.mem[flight::Z80_WHAT_ON_SCREEN] = 0;
         assert!(!app.status.active);
         app.key_event(KeyCode::F9, true, false);
-        assert!(app.status.active, "F9 не открыл альтернативный экран");
+        assert!(!app.status.active, "экран не должен открыться до кадра");
+        assert!(app.pending_status, "F9 не запросил экран капитана");
 
         // Эмулятору подготовлено нажатие `L`; первый кадр отдаёт его игре
         // через обычный ввод.
@@ -534,6 +535,7 @@ use crate::world::{current_planet_color, save_layout_kladov, scene_markers};
         assert_eq!(app.pending_key, Some((lrow, lbit)), "F9 не отдал игре L");
         app.apply_input();
         app.machine.run_frame();
+        app.open_pending_status();
         app.follow_native_screens();
         assert_eq!(
             app.machine.keyboard[lrow] & (1 << lbit),
@@ -582,7 +584,8 @@ use crate::world::{current_planet_color, save_layout_kladov, scene_markers};
         app.key_event(KeyCode::F1, true, false);
         assert!(app.flight.active);
         app.key_event(KeyCode::F9, true, false);
-        assert!(app.status.active, "F9 не открыл экран в полёте");
+        assert!(!app.status.active, "экран не должен открыться до кадра");
+        assert!(app.pending_status, "F9 не запросил экран капитана в полёте");
         assert!(!app.flight.active, "нативный вид остался под экраном");
         let (lrow, lbit) = matrix_pos(KeyCode::KeyL).expect("L в матрице");
         assert_eq!(app.pending_key, Some((lrow, lbit)), "F9 не отдал игре L");

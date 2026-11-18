@@ -118,6 +118,7 @@ impl App<'_> {
                 if !self.state.menu {
                     let frames = self.emulation_frames();
                     self.machine.run_frames(frames);
+                    self.open_pending_status();
                     self.open_pending_sysinfo();
                     self.sync_flight_after_frames(frames);
                     self.play_frame_audio();
@@ -132,6 +133,7 @@ impl App<'_> {
                     self.apply_input();
                     let frames = self.emulation_frames();
                     self.machine.run_frames(frames);
+                    self.open_pending_status();
                     self.open_pending_sysinfo();
                     self.open_pending_shop();
                     self.open_pending_flight();
@@ -173,8 +175,9 @@ impl App<'_> {
                 } else {
                     self.apply_input();
                     self.machine.run_frames(self.emulation_frames());
-                    self.open_pending_shop();
+                    self.open_pending_status();
                     self.open_pending_sysinfo();
+                    self.open_pending_shop();
                     self.open_pending_flight();
                     self.follow_native_screens();
                     if self.machine.save_requested {

@@ -29,6 +29,7 @@ impl App<'_> {
         self.close_status();
         self.close_sysinfo();
         self.close_market();
+        self.pending_status = false;
         self.pending_sysinfo = false;
         self.menu = false;
         self.pending_key = None;
@@ -78,6 +79,7 @@ impl App<'_> {
         self.close_status();
         self.close_sysinfo();
         self.close_market();
+        self.pending_status = false;
         self.pending_sysinfo = false;
         self.menu = false;
         self.pending_key = None;
@@ -109,6 +111,7 @@ impl App<'_> {
         self.flight.close();
         self.close_sysinfo();
         self.close_market();
+        self.pending_status = false;
         self.pending_sysinfo = false;
         self.status.open(&self.machine.mem, status::KLADOV_STATUS);
         self.menu = false;
@@ -122,7 +125,35 @@ impl App<'_> {
     /// Z80 не трогается: оригинал сам решает, когда уйти с этого экрана.
     pub(super) fn close_status(&mut self) {
         self.status.close();
+        self.pending_status = false;
         self.pending_key = None;
+    }
+
+    /// Открыть нативный экран капитана (F9), отложенный до обработки клавиши
+    /// `L` оригиналом. Открываем только если оригинал действительно перешёл в
+    /// режим `Z80_SCREEN_PILOT_INFO`.
+    pub(super) fn open_pending_status(&mut self) {
+        if !self.pending_status {
+            return;
+        }
+        if self.machine.intro_seen || self.menu {
+            self.pending_status = false;
+            return;
+        }
+        if self.machine.mem[flight::Z80_WHAT_ON_SCREEN] != flight::Z80_SCREEN_PILOT_INFO {
+            return;
+        }
+        self.pending_status = false;
+        self.close_hdmap();
+        self.shop.close();
+        self.flight.close();
+        self.close_sysinfo();
+        self.close_market();
+        self.pending_sysinfo = false;
+        self.pending_shop = false;
+        self.pending_flight = None;
+        self.pending_launch = false;
+        self.status.open(&self.machine.mem, status::KLADOV_STATUS);
     }
 
     /// Открыть нативный экран информации о планете (F7), отложенный до
@@ -132,18 +163,20 @@ impl App<'_> {
         if !self.pending_sysinfo {
             return;
         }
-        self.pending_sysinfo = false;
         if self.machine.intro_seen || self.menu {
+            self.pending_sysinfo = false;
             return;
         }
         if self.machine.mem[flight::Z80_WHAT_ON_SCREEN] != flight::Z80_SCREEN_INFO_PLANET {
             return;
         }
+        self.pending_sysinfo = false;
         self.close_hdmap();
         self.shop.close();
         self.flight.close();
         self.close_status();
         self.close_market();
+        self.pending_status = false;
         self.pending_flight = None;
         self.pending_launch = false;
         self.sysinfo.open(&self.machine.mem, sysinfo::KLADOV_SYSINFO);
@@ -178,6 +211,7 @@ impl App<'_> {
         self.flight.close();
         self.close_status();
         self.close_sysinfo();
+        self.pending_status = false;
         self.pending_sysinfo = false;
         let docked = flight::z80_is_docked(&self.machine.mem);
         self.market
@@ -203,6 +237,7 @@ impl App<'_> {
         self.close_status();
         self.close_sysinfo();
         self.close_market();
+        self.pending_status = false;
         self.pending_sysinfo = false;
         self.menu = false;
         self.pending_key = None;

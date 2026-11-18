@@ -28,7 +28,7 @@ use crate::hdmap;
 use crate::machine::Spectrum;
 use crate::market;
 use crate::splash;
-use crate::state::{Animation, GameState, Location, Screen};
+use crate::state::{Animation, GameState, Location, OriginalScreen, Screen};
 use crate::status;
 use crate::sysinfo;
 use crate::ui::present::{SRC_H, SRC_W};
@@ -84,6 +84,9 @@ struct App<'a> {
     shop: equip::Shop,
     /// Нативный экран статуса пилота (F9) — альтернатива экрану `L`.
     status: status::Status,
+    /// После кадра эмулятора открыть нативный экран статуса: сначала игра
+    /// должна обработать `L` и перейти в режим показа капитана.
+    pending_status: bool,
     /// Нативный экран информации о планете (F7) — альтернатива экрану `P`.
     sysinfo: sysinfo::SysInfo,
     /// После кадра эмулятора открыть нативный экран информации о планете:
@@ -162,6 +165,7 @@ impl<'a> App<'a> {
             hdmap_screen: None,
             shop: equip::Shop::new(),
             status: status::Status::new(),
+            pending_status: false,
             sysinfo: sysinfo::SysInfo::new(),
             pending_sysinfo: false,
             market: market::Market::new(),
@@ -275,7 +279,7 @@ impl<'a> App<'a> {
                 None => Screen::Flight,
             }
         } else {
-            Screen::Emulator(emu_screen)
+            Screen::Emulator(OriginalScreen::from_what_on_screen(emu_screen))
         };
 
         self.state = GameState {

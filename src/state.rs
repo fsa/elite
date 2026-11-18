@@ -29,17 +29,107 @@ pub enum Animation {
     Docking,
 }
 
+/// Экран оригинальной игры, соответствующий значению `WhatOnScreen`.
+///
+/// Перечисляет все известные экраны оригинала; неизвестные/ещё не названные
+/// коды сохраняются как [`Other`](Self::Other). В каждый момент активен ровно
+/// один экран.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum OriginalScreen {
+    /// Вид из кабины: вперёд (`0`).
+    FrontView,
+    /// Вид из кабины: назад (`1`).
+    RearView,
+    /// Вид из кабины: влево (`2`).
+    LeftView,
+    /// Вид из кабины: вправо (`3`).
+    RightView,
+    /// Покупка товаров на станции (клавиша `2`), экран `4`.
+    BuyCargo,
+    /// Продажа товаров на станции (клавиша `3`), экран `5`.
+    SellCargo,
+    /// Закупка оборудования на станции (клавиша `4`), экран `6`.
+    EquipShip,
+    /// Карта галактики (клавиша `I`), экран `7`.
+    GalacticChart,
+    /// Локальная карта (клавиша `O`), экран `8`.
+    LocalChart,
+    /// Данные о планете (клавиша `P`), экран `9`.
+    PlanetInfo,
+    /// Рыночные цены (клавиша `K`), экран `0x0A`.
+    MarketPrices,
+    /// Статус командира (клавиша `L`), экран `0x0B`.
+    CommanderStatus,
+    /// Инвентарь (Enter), экран `0x0C`.
+    Inventory,
+    /// Экран оригинала с иным/ещё не описанным кодом `WhatOnScreen`.
+    Other(u8),
+}
+
+impl OriginalScreen {
+    /// Разобрать экран по значению `WhatOnScreen`.
+    pub fn from_what_on_screen(value: u8) -> Self {
+        match value {
+            0 => Self::FrontView,
+            1 => Self::RearView,
+            2 => Self::LeftView,
+            3 => Self::RightView,
+            4 => Self::BuyCargo,
+            5 => Self::SellCargo,
+            6 => Self::EquipShip,
+            7 => Self::GalacticChart,
+            8 => Self::LocalChart,
+            9 => Self::PlanetInfo,
+            0x0A => Self::MarketPrices,
+            0x0B => Self::CommanderStatus,
+            0x0C => Self::Inventory,
+            other => Self::Other(other),
+        }
+    }
+
+    /// Значение `WhatOnScreen`, соответствующее экрану.
+    #[allow(dead_code)]
+    pub fn what_on_screen(self) -> u8 {
+        match self {
+            Self::FrontView => 0,
+            Self::RearView => 1,
+            Self::LeftView => 2,
+            Self::RightView => 3,
+            Self::BuyCargo => 4,
+            Self::SellCargo => 5,
+            Self::EquipShip => 6,
+            Self::GalacticChart => 7,
+            Self::LocalChart => 8,
+            Self::PlanetInfo => 9,
+            Self::MarketPrices => 0x0A,
+            Self::CommanderStatus => 0x0B,
+            Self::Inventory => 0x0C,
+            Self::Other(value) => value,
+        }
+    }
+
+    /// Вид из кабины (`0..=3`).
+    #[allow(dead_code)]
+    pub fn is_cockpit_view(self) -> bool {
+        matches!(
+            self,
+            Self::FrontView | Self::RearView | Self::LeftView | Self::RightView
+        )
+    }
+}
+
 /// Логический экран, который сейчас отображается.
 ///
-/// Варианты покрывают как нативные экраны, так и ещё не перенесённые
-/// экраны эмулятора, чтобы переход от эмуляторных экранов к нативным не
-/// менял способа выбора отображения.
+/// В каждый момент активен ровно один экран. Варианты покрывают заставку,
+/// переходы, нативные экраны (в том числе нативные альтернативы экранов
+/// оригинала) и все экраны оригинальной игры, которые ещё рисует эмулятор.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Screen {
     /// Заставка (интро) — нативный титульный экран.
     Intro,
-    /// Режим анимации: вылет со станции или гиперпереход. Показывается
-    /// только передний вид (`Front View`) с соответствующей анимацией.
+    /// Режим анимации: вылет со станции, гиперпереход или стыковка.
+    /// Показывается только передний вид (`Front View`) с соответствующей
+    /// анимацией.
     Animation(Animation),
     /// Нативный вид из кабины (полёт).
     Flight,
@@ -47,23 +137,47 @@ pub enum Screen {
     GalacticMap,
     /// Нативный экран закупки оборудования (F4).
     EquipShop,
-    /// Нативный экран статуса пилота (F9), альтернатива экрану `L`.
+    /// Нативный экран статуса командира (F9), альтернатива экрану `L`.
     PilotStatus,
     /// Нативный экран информации о планете (F7), альтернатива экрану `P`.
     PlanetInfo,
     /// Нативный экран цен (альтернатива экрану `K`).
     Market,
-    /// Экран, который ещё рисует эмулятор (значение `WhatOnScreen`).
-    Emulator(u8),
+    /// Экран оригинальной игры, который рисует эмулятор.
+    Emulator(OriginalScreen),
 }
 
 impl Screen {
-    /// Экран эмулятора (`WhatOnScreen`), если сейчас показывается он.
+    /// Экран оригинала, отрисованный эмулятором, если активен именно он.
     #[allow(dead_code)]
-    pub fn emulator(self) -> Option<u8> {
+    pub fn emulator(self) -> Option<OriginalScreen> {
         match self {
-            Self::Emulator(what) => Some(what),
+            Self::Emulator(screen) => Some(screen),
             _ => None,
+        }
+    }
+
+    /// Значение `WhatOnScreen` экрана оригинала, отрисованного эмулятором.
+    #[allow(dead_code)]
+    pub fn emulator_what_on_screen(self) -> Option<u8> {
+        self.emulator().map(OriginalScreen::what_on_screen)
+    }
+
+    /// Логический экран оригинала, которому соответствует активный экран.
+    ///
+    /// Для нативных альтернатив возвращается экран оригинала с тем же
+    /// назначением; для заставки и анимаций оригинального экрана нет.
+    #[allow(dead_code)]
+    pub fn original(self) -> Option<OriginalScreen> {
+        match self {
+            Self::Intro | Self::Animation(_) => None,
+            Self::Flight => Some(OriginalScreen::FrontView),
+            Self::GalacticMap => Some(OriginalScreen::LocalChart),
+            Self::EquipShop => Some(OriginalScreen::EquipShip),
+            Self::PilotStatus => Some(OriginalScreen::CommanderStatus),
+            Self::PlanetInfo => Some(OriginalScreen::PlanetInfo),
+            Self::Market => Some(OriginalScreen::MarketPrices),
+            Self::Emulator(screen) => Some(screen),
         }
     }
 
@@ -73,7 +187,7 @@ impl Screen {
         matches!(self, Self::Flight)
     }
 
-    /// Показывается ли режим анимации (вылет или гиперпереход).
+    /// Показывается ли режим анимации (вылет, гиперпереход или стыковка).
     #[allow(dead_code)]
     pub fn is_animation(self) -> bool {
         matches!(self, Self::Animation(_))
@@ -100,7 +214,7 @@ impl Screen {
 pub struct GameState {
     /// Где находится игрок — на станции или в космосе.
     pub location: Location,
-    /// Какой экран отображается сейчас.
+    /// Текущий активный экран. В каждый момент отображается ровно один экран.
     pub screen: Screen,
     /// Открыто ли меню паузы (поверх текущего экрана).
     pub menu: bool,
@@ -138,7 +252,7 @@ impl GameState {
         let screen = if intro {
             Screen::Intro
         } else {
-            Screen::Emulator(emu_screen)
+            Screen::Emulator(OriginalScreen::from_what_on_screen(emu_screen))
         };
         Self {
             location,
