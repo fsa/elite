@@ -26,26 +26,26 @@ pub(super) enum Kind {
 
 /// Список товаров в порядке оригинала (как в `Cmd_4_EquipShip`).
 pub(super) const ITEMS: [Item; 14] = [
-    Item { name: "FUEL", desc: "refill the fuel tank", kind: Kind::Fuel },
-    Item { name: "MISSILE", desc: "one more missile (max 4)", kind: Kind::Missile },
-    Item { name: "LARGE CARGO BAY", desc: "+15 tons of cargo space", kind: Kind::Bay },
-    Item { name: "E.C.M.SYSTEM", desc: "defends against missiles", kind: Kind::Flag },
-    Item { name: "EXTRA PULSE LASERS", desc: "cheap lasers", kind: Kind::Laser(1) },
-    Item { name: "EXTRA BEAM LASERS", desc: "fast lasers", kind: Kind::Laser(2) },
-    Item { name: "FUEL SCOOPS", desc: "collect floating cargo", kind: Kind::Flag },
-    Item { name: "ESCAPE POD", desc: "survive ship destruction", kind: Kind::Flag },
-    Item { name: "ENERGY BOMB", desc: "dump all energy at once", kind: Kind::Flag },
-    Item { name: "ENERGY UNIT", desc: "recharge energy faster", kind: Kind::Flag },
-    Item { name: "DOCKING COMPUTER", desc: "automatic docking", kind: Kind::Flag },
-    Item { name: "GALACTIC HYPERSPACE", desc: "jump to another galaxy", kind: Kind::Flag },
-    Item { name: "MILITARY LASER", desc: "powerful lasers", kind: Kind::Laser(3) },
-    Item { name: "MINING LASER", desc: "lasers for asteroid mining", kind: Kind::Laser(4) },
+    Item { name: "Fuel", desc: "refill the fuel tank", kind: Kind::Fuel },
+    Item { name: "Missile", desc: "one more missile (max 4)", kind: Kind::Missile },
+    Item { name: "Large Cargo Bay", desc: "+15 tons of cargo space", kind: Kind::Bay },
+    Item { name: "E.C.M. System", desc: "defends against missiles", kind: Kind::Flag },
+    Item { name: "Extra Pulse Lasers", desc: "cheap lasers", kind: Kind::Laser(1) },
+    Item { name: "Extra Beam Lasers", desc: "fast lasers", kind: Kind::Laser(2) },
+    Item { name: "Fuel Scoops", desc: "collect floating cargo", kind: Kind::Flag },
+    Item { name: "Escape Pod", desc: "survive ship destruction", kind: Kind::Flag },
+    Item { name: "Energy Bomb", desc: "dump all energy at once", kind: Kind::Flag },
+    Item { name: "Energy Unit", desc: "recharge energy faster", kind: Kind::Flag },
+    Item { name: "Docking Computer", desc: "automatic docking", kind: Kind::Flag },
+    Item { name: "Galactic Hyperspace", desc: "jump to another galaxy", kind: Kind::Flag },
+    Item { name: "Military Laser", desc: "powerful lasers", kind: Kind::Laser(3) },
+    Item { name: "Mining Laser", desc: "lasers for asteroid mining", kind: Kind::Laser(4) },
 ];
 
 /// Крепления лазера: `pilot+41+индекс` (PilotFrontLaser и далее).
-pub(super) const MOUNTS: [&str; 4] = ["FRONT", "REAR", "LEFT", "RIGHT"];
+pub(super) const MOUNTS: [&str; 4] = ["Front", "Rear", "Left", "Right"];
 /// Названия типов лазеров (0 — нет лазера).
-pub(super) const LASER_NAMES: [&str; 5] = ["-", "PULSE", "BEAM", "MILITARY", "MINING"];
+pub(super) const LASER_NAMES: [&str; 5] = ["-", "Pulse", "Beam", "Military", "Mining"];
 
 /// Название типа лазера из байта памяти (в повреждённом сейве может быть
 /// что угодно — не паникуем).
@@ -64,7 +64,7 @@ pub(super) const FUEL_MAX: u8 = 70;
 pub(super) const MISSILES_MAX: u8 = 4;
 /// Тонн добавляет большой грузовой отсек (`add a,0Fh`).
 pub(super) const BAY_TONS: u8 = 15;
-/// Ширина колонки названий: самое длинное — «GALACTIC HYPERSPACE» (19).
+/// Ширина колонки названий: самое длинное — «Galactic Hyperspace» (19).
 pub(super) const NAME_CHARS: i32 = 19;
 /// Ширина колонки цены: влезает и «6000.0», и «FITTED».
 pub(super) const PRICE_CHARS: i32 = 7;

@@ -31,6 +31,18 @@ fn fmt_tenths(t: u32) -> String {
     format!("{}.{}", t / 10, t % 10)
 }
 
+/// Имя системы в виде, как его печатает оригинал: первая буква заглавная,
+/// остальные — строчные (`LAVE` -> `Lave`).
+fn title_case(name: &str) -> String {
+    let mut chars = name.chars();
+    match chars.next() {
+        Some(first) => {
+            first.to_ascii_uppercase().to_string() + &chars.as_str().to_ascii_lowercase()
+        }
+        None => String::new(),
+    }
+}
+
 /// Топливо в десятых долях светового года: `70` → «7.0» (как в игре,
 /// где `Pilot_Fuel` хранит `0x46` = 7.0 св. года).
 pub(super) fn fmt_fuel(tenths: u8) -> String {
@@ -85,11 +97,26 @@ impl Shop {
         let tw = title.len() as i32 * 8 * title_ts as i32;
         let tx = ((f.width as i32 - tw) / 2).max(0);
         draw_two_tone_text(f, font, tx, g.title_y, title, TEXT, LABEL, title_ts);
-        let info = format!(
-            "SYSTEM {:<10} TECH LEVEL {:>2}",
-            self.system, self.tech
+
+        // Система и тех. уровень: название параметра голубым, двоеточие и
+        // значение — белым (как на экране информации о системе). После имени
+        // планеты всегда остаётся не меньше двух пробелов (макс. длина имени
+        // планеты — 8 символов, см. galaxy::name).
+        let mut x = x0;
+        let mut draw = |f: &mut Frame, x: &mut i32, s: &str, color: u32| {
+            f.draw_text(font, *x, g.info_y, s, color, ts);
+            *x += s.chars().count() as i32 * ch;
+        };
+        draw(f, &mut x, "System", LABEL);
+        draw(
+            f,
+            &mut x,
+            &format!(": {:<8}  ", title_case(&self.system)),
+            TEXT,
         );
-        f.draw_text(font, x0, g.info_y, &info, LABEL, ts);
+        draw(f, &mut x, "Tech. level", LABEL);
+        draw(f, &mut x, &format!(": {}", self.tech), TEXT);
+
         let cash_s = format!("CASH {} CR", fmt_tenths(self.cash));
         let cx = (f.width as i32 - x0 - cash_s.len() as i32 * ch).max(0);
         f.draw_text(font, cx, g.info_y, &cash_s, PRICE_FG, ts);
@@ -241,9 +268,9 @@ impl Shop {
 
         // ——— Строка помощи ———
         let help = if let Some(d) = self.pending {
-            format!("ITEM? {d}_    UP/DOWN SELECT  ENTER BUY  F4/ESC CLOSE")
+            format!("ITEM? {d}_    UP/DOWN SELECT  ENTER BUY")
         } else {
-            "ENTER/CLICK BUY   UP/DOWN SELECT   1-9 ITEM NO.   F4/ESC CLOSE".to_string()
+            "ENTER/CLICK BUY   UP/DOWN SELECT   1-9 ITEM NO.".to_string()
         };
         f.draw_text(font, x0, g.help_y, &help, TEXT_DIM, ts);
 

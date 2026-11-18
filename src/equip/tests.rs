@@ -113,7 +113,7 @@ fn buy_docking_computer_writes_flag_and_cash() {
     shop.buy_number(&mut mem, 11);
     assert_eq!(
         shop.toast_text(),
-        Some("DOCKING COMPUTER ALREADY FITTED")
+        Some("Docking Computer ALREADY FITTED")
     );
     assert_eq!(cash_of(&mem), before - 15000);
 }
@@ -191,7 +191,7 @@ fn laser_mount_replaces_and_refunds_old() {
     assert_eq!(cash_of(&mem), before - 10000 + 4000);
     assert_eq!(
         shop.toast_text(),
-        Some("BEAM LASER MOUNTED FRONT")
+        Some("Beam laser mounted front")
     );
     // Пустое крепление: деньги списаны, возврата нет.
     let before = cash_of(&mem);
@@ -270,7 +270,7 @@ fn digits_and_enter_buy_items() {
     assert_eq!(cash_of(&mem), before);
     assert_eq!(
         shop.toast_text(),
-        Some("LARGE CARGO BAY ALREADY FITTED")
+        Some("Large Cargo Bay ALREADY FITTED")
     );
     // Выбранная строка + Enter: строка 0 = FUEL (цена 0x10 = 1.6).
     shop.move_selection(0);

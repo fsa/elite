@@ -119,7 +119,7 @@ pub fn parse_args() -> Options {
                 println!();
                 println!("Закупка оборудования (F4): клик/Enter — купить,");
                 println!("  1-9 (+вторая цифра) — номер товара, стрелки — выбор,");
-                println!("  0-3 — крепление лазера, Esc — закрыть.");
+                println!("  0-3 — крепление лазера, Esc — отмена крепления.");
                 exit(0);
             }
             other => opts.game = other.to_string(),

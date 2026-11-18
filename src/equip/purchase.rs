@@ -192,7 +192,11 @@ impl Shop {
             let back = self.price(mem, LASER_ITEMS[old as usize]);
             self.refund(mem, back);
         }
-        self.set_toast(format!("{} LASER MOUNTED {}", LASER_NAMES[laser as usize], MOUNTS[m as usize]));
+        self.set_toast(format!(
+            "{} laser mounted {}",
+            LASER_NAMES[laser as usize],
+            MOUNTS[m as usize].to_ascii_lowercase()
+        ));
         self.refresh(mem);
     }
 }

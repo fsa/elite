@@ -88,7 +88,14 @@ impl App<'_> {
             self.pending_flight = Some(dir);
             self.pending_launch = false;
         }
-        self.pending_key = matrix_pos(key);
+        // Для закупки на станции эмулятору передаём `L` (режим информации о
+        // пилоте), а не `4`: экран 4 в оригинале ждёт номер товара и мешает
+        // нативному экрану, а экран `L` пассивен.
+        self.pending_key = if docked && code == KeyCode::F4 {
+            matrix_pos(KeyCode::KeyL)
+        } else {
+            matrix_pos(key)
+        };
     }
 
     /// Обработать событие клавиши (по физической позиции, раскладка не важна).
@@ -154,10 +161,10 @@ impl App<'_> {
             }
             return;
         }
-        // F4 при открытой закупке закрывает её. В остальных режимах это
-        // обычная функция `F4` (вид вправо или команда станции).
+        // Экран закупки (F4): выход обратно по F4 и Esc запрещён. Закрыть
+        // его можно переключением на другой экран по Fn или игровой
+        // (буквенной) клавише.
         if code == KeyCode::F4 && !repeat && self.shop.active {
-            self.shop.close();
             return;
         }
         // F7 — нативная альтернатива экрану информации о планете (`P`).
@@ -354,25 +361,24 @@ impl App<'_> {
             return;
         }
         // При открытом экране закупки всё управление принадлежит ему.
+        // Выход с экрана по F4/Esc запрещён; закрыть можно переключением на
+        // другой экран по Fn или игровой (буквенной) клавише.
         if self.shop.active {
             match code {
+                KeyCode::F4 => {}
                 KeyCode::Escape if !repeat => {
                     if self.shop.mount_open() {
                         self.shop.cancel_mount();
-                    } else {
-                        self.shop.close();
                     }
                 }
                 KeyCode::ArrowUp => self.shop.move_selection(-1),
                 KeyCode::ArrowDown => self.shop.move_selection(1),
-                // F1/F4 — клавиши 1/4 оригинала: закупка закрывается и
-                // нажатие уходит игре. F2/F3 на станции пустые (см.
-                // `function_key`), F4 выше уже закрывает экран.
-                KeyCode::F1 | KeyCode::F4 if !repeat => {
+                // F1 — клавиша 1 оригинала: закупка закрывается и нажатие
+                // уходит игре (смена экрана по Fn).
+                KeyCode::F1 if !repeat => {
                     self.function_key(code);
                 }
                 KeyCode::Enter | KeyCode::Space => {
-                    // На автоповторе не подтверждаем выбор повторно.
                     if !repeat {
                         self.shop.confirm(&mut self.machine.mem);
                     }
@@ -381,7 +387,8 @@ impl App<'_> {
                     if let Some(d) = digit_of(code) {
                         self.shop.input_digit(&mut self.machine.mem, d);
                     } else if is_game_key(code) {
-                        // Игровая клавиша: закрываем закупку и отдаём нажатие игре.
+                        // Игровая (буквенная) клавиша: закрываем закупку и
+                        // отдаём нажатие игре (переход на экран эмулятора).
                         self.shop.close();
                         self.pending_key = matrix_pos(code);
                     }
