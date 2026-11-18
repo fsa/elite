@@ -1,4 +1,5 @@
 use super::*;
+use crate::flight;
 
 fn set_cash(mem: &mut [u8], tenths: u32) {
     write_cash(mem, PILOT as usize, tenths);
@@ -67,8 +68,8 @@ fn buy_reduces_stock_cash_and_free_cargo_and_fills_hold() {
     set_cash(&mut mem, 100);
 
     let mut market = Market::new();
-    market.enable(&mem, KLADOV_MARKET);
-    market.buy(&mut mem);
+    market.enable(&mem, KLADOV_MARKET, true);
+    market.buy(&mut mem, true);
 
     assert_eq!(mem[ADDR_QUANTITY], 4);
     assert_eq!(mem[PILOT as usize + OFF_CARGO], 1);
@@ -90,8 +91,8 @@ fn sell_returns_cargo_space_and_money() {
     set_cash(&mut mem, 100);
 
     let mut market = Market::new();
-    market.enable(&mem, KLADOV_MARKET);
-    market.sell(&mut mem);
+    market.enable(&mem, KLADOV_MARKET, true);
+    market.sell(&mut mem, true);
 
     assert_eq!(mem[ADDR_QUANTITY], 6);
     assert_eq!(mem[PILOT as usize + OFF_CARGO], 1);
@@ -109,16 +110,16 @@ fn trade_checks_stock_cash_and_hold_space() {
     set_cash(&mut mem, 100);
 
     let mut market = Market::new();
-    market.enable(&mem, KLADOV_MARKET);
+    market.enable(&mem, KLADOV_MARKET, true);
 
     // Первая покупка опустошает склад.
-    market.buy(&mut mem);
+    market.buy(&mut mem, true);
     assert_eq!(mem[ADDR_QUANTITY], 0);
     assert_eq!(mem[PILOT as usize + OFF_CARGO], 1);
     assert_eq!(cash(&mem), 50);
 
     // Повтор при пустом складе ничего не меняет.
-    market.buy(&mut mem);
+    market.buy(&mut mem, true);
     assert_eq!(mem[PILOT as usize + OFF_CARGO], 1);
     assert_eq!(cash(&mem), 50);
     assert!(market.notice.as_deref().unwrap().contains("NONE FOR SALE"));
@@ -126,7 +127,7 @@ fn trade_checks_stock_cash_and_hold_space() {
     // Не хватает денег.
     mem[ADDR_QUANTITY] = 1;
     set_cash(&mut mem, 10);
-    market.buy(&mut mem);
+    market.buy(&mut mem, true);
     assert_eq!(mem[ADDR_QUANTITY], 1);
     assert_eq!(cash(&mem), 10);
     assert!(market.notice.as_deref().unwrap().contains("NOT ENOUGH CASH"));
@@ -134,14 +135,14 @@ fn trade_checks_stock_cash_and_hold_space() {
     // Трюм полон.
     set_cash(&mut mem, 100);
     mem[PILOT as usize + OFF_FREE_CARGO] = 0;
-    market.buy(&mut mem);
+    market.buy(&mut mem, true);
     assert_eq!(mem[ADDR_QUANTITY], 1);
     assert_eq!(cash(&mem), 100);
     assert!(market.notice.as_deref().unwrap().contains("CARGO HOLD FULL"));
 
     // Нечего продавать.
     mem[PILOT as usize + OFF_CARGO] = 0;
-    market.sell(&mut mem);
+    market.sell(&mut mem, true);
     assert_eq!(cash(&mem), 100);
     assert!(market.notice.as_deref().unwrap().contains("IN HOLD"));
 }
@@ -155,9 +156,9 @@ fn precious_metals_do_not_use_cargo_space() {
     set_cash(&mut mem, 1000);
 
     let mut market = Market::new();
-    market.enable(&mem, KLADOV_MARKET);
+    market.enable(&mem, KLADOV_MARKET, true);
     market.move_selection(13);
-    market.buy(&mut mem);
+    market.buy(&mut mem, true);
 
     assert_eq!(mem[ADDR_QUANTITY + 13], 1);
     assert_eq!(mem[PILOT as usize + OFF_CARGO + 13], 1);
@@ -177,14 +178,14 @@ fn trade_is_refused_outside_a_station() {
     set_cash(&mut mem, 500);
 
     let mut market = Market::new();
-    market.enable(&mem, KLADOV_MARKET);
-    market.buy(&mut mem);
+    market.enable(&mem, KLADOV_MARKET, false);
+    market.buy(&mut mem, false);
     assert_eq!(mem[ADDR_QUANTITY], 2);
     assert_eq!(mem[PILOT as usize + OFF_CARGO], 1);
     assert_eq!(cash(&mem), 500);
     assert!(market.notice.as_deref().unwrap().contains("DOCK"));
 
-    market.sell(&mut mem);
+    market.sell(&mut mem, false);
     assert_eq!(mem[ADDR_QUANTITY], 2);
     assert_eq!(mem[PILOT as usize + OFF_CARGO], 1);
     assert_eq!(cash(&mem), 500);
@@ -200,9 +201,9 @@ fn illegal_goods_raise_legal_status_and_passengers_block_trade() {
     set_cash(&mut mem, 200);
 
     let mut market = Market::new();
-    market.enable(&mem, KLADOV_MARKET);
+    market.enable(&mem, KLADOV_MARKET, true);
     market.move_selection(3);
-    market.buy(&mut mem);
+    market.buy(&mut mem, true);
     assert_eq!(mem[PILOT as usize + OFF_LEGAL], 2);
     assert_eq!(mem[PILOT as usize + OFF_CARGO + 3], 1);
 
@@ -210,7 +211,7 @@ fn illegal_goods_raise_legal_status_and_passengers_block_trade() {
     mem[PILOT as usize + OFF_EXT_WEAPON] = 0x20;
     mem[ADDR_QUANTITY + 3] = 1;
     set_cash(&mut mem, 200);
-    market.sell(&mut mem);
+    market.sell(&mut mem, true);
     assert_eq!(mem[ADDR_QUANTITY + 3], 1);
     assert_eq!(cash(&mem), 200);
     assert!(market.notice.as_deref().unwrap().contains("NO TRADE"));
@@ -224,13 +225,13 @@ fn draw_in_flight_has_no_selection_or_trade_hints() {
     set_price(&mut mem, 0, 40);
 
     let mut docked = Market::new();
-    docked.enable(&mem, KLADOV_MARKET);
+    docked.enable(&mem, KLADOV_MARKET, true);
     assert!(docked.docked);
     docked.move_selection(1);
 
     mem[flight::Z80_IND_DANGER] = 1;
     let mut flying = Market::new();
-    flying.enable(&mem, KLADOV_MARKET);
+    flying.enable(&mem, KLADOV_MARKET, false);
     assert!(!flying.docked);
     flying.move_selection(1);
 

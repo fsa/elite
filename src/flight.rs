@@ -193,10 +193,25 @@ impl Flight {
         self.transition.kind()
     }
 
+    /// Идёт ли режим анимации: вылет со станции или гиперпереход. В этом
+    /// режиме отображается только передний вид.
+    pub fn in_animation_mode(&self) -> bool {
+        matches!(
+            self.transition.kind(),
+            Some(TransitionKind::Launch) | Some(TransitionKind::Hyperspace)
+        )
+    }
+
     /// Переключить вид по сторонам (F1-F4 в нативном полёте): те же клавиши
     /// 1-4, которыми оригинал меняет `WhatOnScreen`.
+    ///
+    /// В режиме анимации (вылет/гиперпереход) вид всегда передний.
     pub fn set_view_dir(&mut self, dir: ViewDir) {
         if !self.active {
+            return;
+        }
+        if self.in_animation_mode() {
+            self.view_dir = ViewDir::Forward;
             return;
         }
         // Поле сферическое и общее для всех видов: при смене направления его
@@ -302,14 +317,20 @@ impl Flight {
         }
         self.cobra_mk4 = mem.get(Z80_COBRA_MK4).is_some_and(|&b| b != 0);
         self.game_over = memory::z80_player_dead(mem);
-        if self.game_over {
-            // При взрыве корабля обломки разлетаются вперёд: вид обязательно
-            // переключаем на Front View, в каком бы направлении игрок ни был.
+        if self.game_over || self.in_animation_mode() {
+            // При взрыве корабля и в режиме анимации (вылет/гиперпереход)
+            // показывается только передний вид.
             self.view_dir = ViewDir::Forward;
         }
 
         // Отсчёт гиперпрыжка ведёт Z80; имя цели читается там же.
         self.transition.sync(mem);
+
+        // Переход в режим анимации гиперперехода мог произойти на этом шаге
+        // (например, отсчёт закончился и начался тоннель) — фиксируем вид.
+        if self.in_animation_mode() {
+            self.view_dir = ViewDir::Forward;
+        }
 
         // Угловые скорости известны, но оригинал пересчитывает звёзды и
         // координаты объектов не каждый кадр, а на игровом такте (~5.5 Гц):

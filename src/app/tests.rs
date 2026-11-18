@@ -903,7 +903,8 @@ use crate::world::{current_planet_color, save_layout_kladov, scene_markers};
     }
 
     /// Если прыжок начался при открытом нативном виде, рендер не прячется, а
-    /// сам показывает нативную анимацию — с тем же направлением вида.
+    /// показывает нативную анимацию гиперперехода. В режиме анимации
+    /// доступен только передний вид.
     #[test]
     fn flight_stays_active_during_jump_transition() {
         let opts = test_options();
@@ -917,7 +918,8 @@ use crate::world::{current_planet_color, save_layout_kladov, scene_markers};
         assert!(app.flight.active);
         assert_eq!(app.flight.view_dir, flight::ViewDir::Right);
 
-        // Начался прыжок: оригинал держит флаги перехода.
+        // Начался прыжок: оригинал держит флаги перехода. Гиперпереход —
+        // режим анимации, поэтому отображается только передний вид.
         app.machine.mem[flight::Z80_JUMP_DOCKING] = 1;
         app.machine.mem[flight::Z80_FLG_JUMP_DOCKING] = 1;
         app.machine.mem[flight::Z80_JUMP_COUNTDOWN] = 0x15;
@@ -928,25 +930,27 @@ use crate::world::{current_planet_color, save_layout_kladov, scene_markers};
             Some(flight::TransitionKind::Hyperspace),
             "прыжок показан не как гиперпереход"
         );
-        assert_eq!(app.flight.view_dir, flight::ViewDir::Right);
+        // Синхронизация с памятью Z80 фиксирует передний вид в анимации.
+        app.flight.sync_from_z80(&app.machine.mem);
+        assert_eq!(app.flight.view_dir, flight::ViewDir::Forward);
 
-        // Переключение вида во время перехода не сбрасывает анимацию.
+        // Переключение вида во время анимации не допускается и не сбрасывает её.
         app.key_event(KeyCode::F3, true, false);
-        assert_eq!(app.flight.view_dir, flight::ViewDir::Left);
+        assert_eq!(app.flight.view_dir, flight::ViewDir::Forward);
         assert_eq!(
             app.flight.transition_kind(),
             Some(flight::TransitionKind::Hyperspace),
             "смена вида сбросила переход"
         );
 
-        // Прыжок закончился — нативный вид остаётся с тем же направлением.
+        // Прыжок закончился — нативный вид остаётся активным (в переднем виде).
         app.machine.mem[flight::Z80_JUMP_DOCKING] = 0;
         app.machine.mem[flight::Z80_FLG_JUMP_DOCKING] = 0;
         app.machine.mem[flight::Z80_JUMP_COUNTDOWN] = 0;
         app.follow_flight_screen();
         assert!(app.flight.active, "вид закрылся после прыжка");
         assert!(!app.flight.in_transition(), "переход не закончился");
-        assert_eq!(app.flight.view_dir, flight::ViewDir::Left);
+        assert_eq!(app.flight.view_dir, flight::ViewDir::Forward);
     }
 
     /// Стыковка при открытом нативном виде: рендер показывает тоннель, а

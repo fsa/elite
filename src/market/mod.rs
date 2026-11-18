@@ -19,7 +19,6 @@
 //! результат сделки.
 
 use crate::display::Frame;
-use crate::flight;
 
 mod draw;
 #[cfg(test)]
@@ -166,18 +165,21 @@ impl Market {
     }
 
     /// Обновить данные рынка из памяти запущенной игры.
-    pub fn refresh(&mut self, mem: &[u8], layout: MarketLayout) {
+    ///
+    /// `docked` — находится ли корабль на станции (из централизованного
+    /// состояния игры), чтобы не обращаться к эмулятору напрямую.
+    pub fn refresh(&mut self, mem: &[u8], layout: MarketLayout, docked: bool) {
         self.layout = layout;
         self.info = read_info(mem, layout);
         self.cursor = self.cursor.min(self.info.items.len().saturating_sub(1));
-        self.docked = flight::z80_is_docked(mem);
+        self.docked = docked;
     }
 
     /// Включить нативный показ и прочитать текущие данные.
-    pub fn enable(&mut self, mem: &[u8], layout: MarketLayout) {
+    pub fn enable(&mut self, mem: &[u8], layout: MarketLayout, docked: bool) {
         self.cursor = 0;
         self.notice = None;
-        self.refresh(mem, layout);
+        self.refresh(mem, layout, docked);
         self.native = true;
     }
 
@@ -196,19 +198,20 @@ impl Market {
     }
 
     /// Купить одну единицу выбранного товара (`→`).
-    pub fn buy(&mut self, mem: &mut [u8]) {
-        self.trade(mem, true);
+    pub fn buy(&mut self, mem: &mut [u8], docked: bool) {
+        self.trade(mem, true, docked);
     }
 
     /// Продать одну единицу выбранного товара (`←`).
-    pub fn sell(&mut self, mem: &mut [u8]) {
-        self.trade(mem, false);
+    pub fn sell(&mut self, mem: &mut [u8], docked: bool) {
+        self.trade(mem, false, docked);
     }
 
     /// Совершить сделку с выбранной строкой. Изменения пишутся прямо в живой
     /// блок командира, чтобы эмулятор сразу увидел новые деньги, остатки и груз.
-    fn trade(&mut self, mem: &mut [u8], buy: bool) {
-        if !flight::z80_is_docked(mem) {
+    fn trade(&mut self, mem: &mut [u8], buy: bool, docked: bool) {
+        self.docked = docked;
+        if !docked {
             self.notice = Some("DOCK AT A STATION TO TRADE".into());
             return;
         }
@@ -275,7 +278,7 @@ impl Market {
             self.notice = Some(format!("SOLD 1 {}", name));
         }
         write_cash(mem, pilot, cash);
-        self.refresh(mem, self.layout);
+        self.refresh(mem, self.layout, docked);
     }
 
     /// Нарисовать экран во весь слой.

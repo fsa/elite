@@ -202,12 +202,14 @@ impl App<'_> {
                 _ => None,
             };
             if let Some((delta, buy)) = trade {
+                let docked = self.state.is_docked()
+                    || flight::z80_is_docked(&self.machine.mem);
                 if delta != 0 {
                     self.market.move_selection(delta);
                 } else if buy {
-                    self.market.buy(&mut self.machine.mem);
+                    self.market.buy(&mut self.machine.mem, docked);
                 } else {
-                    self.market.sell(&mut self.machine.mem);
+                    self.market.sell(&mut self.machine.mem, docked);
                 }
                 // Стрелки не должны попадать в Kempston: для этого экрана они
                 // означают выбор/сделку, а не движение корабля.
@@ -352,7 +354,14 @@ impl App<'_> {
         // Экран полёта: F1-4 — те же клавиши 1-4 оригинала (передний/задний/
         // левый/правый вид) плюс переключение нативного вида; 1 возвращает
         // Z80-кадр, Esc открывает меню паузы.
+        // В режиме анимации (вылет/гиперпереход) показывается только передний
+        // вид, переключение и закрытие недоступны.
         if self.flight.active {
+            let in_animation = matches!(
+                self.flight.transition_kind(),
+                Some(flight::TransitionKind::Launch)
+                    | Some(flight::TransitionKind::Hyperspace)
+            );
             let view = match code {
                 KeyCode::F1 => Some(flight::ViewDir::Forward),
                 KeyCode::F2 => Some(flight::ViewDir::Back),
@@ -361,9 +370,13 @@ impl App<'_> {
                 _ => None,
             };
             if let Some(view) = view {
-                self.flight.set_view_dir(view);
+                if !in_animation {
+                    self.flight.set_view_dir(view);
+                }
+                // Клавиша вида уходит игре (оригинал сам игнорирует её во время
+                // анимации/перехода), но нативный вид в анимации не переключаем.
                 self.pending_key = function_game_key(code).and_then(matrix_pos);
-            } else if code == KeyCode::Digit1 {
+            } else if code == KeyCode::Digit1 && !in_animation {
                 self.flight.close();
             } else if code == KeyCode::Escape {
                 self.menu = true;

@@ -179,7 +179,9 @@ impl App<'_> {
         self.close_status();
         self.close_sysinfo();
         self.pending_sysinfo = false;
-        self.market.enable(&self.machine.mem, market::KLADOV_MARKET);
+        let docked = flight::z80_is_docked(&self.machine.mem);
+        self.market
+            .enable(&self.machine.mem, market::KLADOV_MARKET, docked);
         self.menu = false;
         self.pending_shop = false;
         self.pending_flight = None;

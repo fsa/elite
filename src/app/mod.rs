@@ -28,6 +28,7 @@ use crate::hdmap;
 use crate::machine::Spectrum;
 use crate::market;
 use crate::splash;
+use crate::state::{Animation, GameState, Location, Screen};
 use crate::status;
 use crate::sysinfo;
 use crate::ui::present::{SRC_H, SRC_W};
@@ -69,6 +70,9 @@ struct App<'a> {
     audio_buf: Vec<i16>,
     wav_samples: Option<Vec<i16>>,
     last_path: String,
+    /// Централизованное состояние игры (место игрока, текущий экран, меню).
+    /// Нативные компоненты читают его вместо прямых обращений к эмулятору.
+    state: GameState,
     /// Открыто ли меню паузы (Esc) — игра не выполняется.
     menu: bool,
     /// Отдельная нативная карта галактики (F10) — заменяет экран игры.
@@ -145,7 +149,8 @@ struct App<'a> {
 
 impl<'a> App<'a> {
     pub(crate) fn new(machine: Spectrum, opts: &'a Options) -> Self {
-        Self {
+        let mut app = Self {
+            state: GameState::default(),
             machine,
             opts,
             audio: audio::start_output(opts.mute),
@@ -186,7 +191,9 @@ impl<'a> App<'a> {
             mouse_wheel_up: false,
             mouse_wheel_down: false,
             next_frame: Instant::now(),
-        }
+        };
+        app.sync_state();
+        app
     }
 
     /// Размер игровой области окна. В режиме `--debug` справа остаётся
@@ -207,4 +214,76 @@ impl<'a> App<'a> {
             audio::write_wav(path, samples, audio::SAMPLE_RATE);
         }
     }
+
+    /// Текущее централизованное состояние игры.
+    #[allow(dead_code)]
+    pub(super) fn game_state(&self) -> &GameState {
+        &self.state
+    }
+
+    /// Обновить централизованное состояние из эмулятора и активных нативных экранов.
+    ///
+    /// Вызов должен происходить после всех шагов кадра, меняющих состояние
+    /// (эмуляция, открытие/закрытие экранов), чтобы отрисовка опиралась на
+    /// актуальный снимок.
+    pub(super) fn sync_state(&mut self) {
+        let intro = self.machine.intro_seen;
+        let emu_screen = self
+            .machine
+            .mem
+            .get(flight::Z80_WHAT_ON_SCREEN)
+            .copied()
+            .unwrap_or(0);
+        let location = if flight::z80_is_docked(&self.machine.mem) {
+            Location::Station
+        } else {
+            Location::Space
+        };
+
+        // Показывается ли нативная альтернатива экранов эмулятора (те же
+        // режимы Z80, но отрисованные нативно). Это зеркалирует условия,
+        // по которым кадр выбирает, что рисовать.
+        let show_status = self.status.active
+            && !intro
+            && emu_screen == flight::Z80_SCREEN_PILOT_INFO;
+        let show_sysinfo = self.sysinfo.active
+            && !intro
+            && emu_screen == flight::Z80_SCREEN_INFO_PLANET;
+        let show_market = self.market.native
+            && !intro
+            && emu_screen == flight::Z80_SCREEN_MARKET;
+
+        let screen = if intro {
+            Screen::Intro
+        } else if self.hdmap.active {
+            Screen::GalacticMap
+        } else if self.shop.active {
+            Screen::EquipShop
+        } else if show_status {
+            Screen::PilotStatus
+        } else if show_sysinfo {
+            Screen::PlanetInfo
+        } else if show_market {
+            Screen::Market
+        } else if self.flight.active {
+            match self.flight.transition_kind() {
+                Some(flight::TransitionKind::Launch) => Screen::Animation(Animation::Launch),
+                Some(flight::TransitionKind::Hyperspace) => {
+                    Screen::Animation(Animation::Hyperspace)
+                }
+                _ => Screen::Flight,
+            }
+        } else {
+            Screen::Emulator(emu_screen)
+        };
+
+        self.state = GameState {
+            location,
+            screen,
+            menu: self.menu,
+            intro,
+            emu_screen,
+        };
+    }
 }
+
