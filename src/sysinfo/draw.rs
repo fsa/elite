@@ -2,7 +2,8 @@
 //!
 //! Оформление в стиле нативного экрана командира (`status`): белая рамка,
 //! заголовок по центру, параметры строками с голубыми именами и белыми
-//! значениями.
+//! значениями. Заголовок стилизован как на экране цен: верхняя часть букв
+//! белая, нижняя — голубая.
 
 use super::*;
 
@@ -31,7 +32,7 @@ fn layout(w: usize, h: usize) -> Layout {
     let frame = crate::cockpit::LINE.max(1);
     let text = (h as f32 / 300.0).floor().max(1.0) as usize;
     let line = 8 * text as i32;
-    let title_y = margin + frame + 2 * line;
+    let title_y = margin + frame + line;
     Layout {
         margin,
         frame,
@@ -56,11 +57,11 @@ pub(super) fn draw(hd: &mut Frame, font: &[u8; crate::font::ZX_FONT_LEN], info: 
     let inner_x = l.margin + l.frame;
     let inner_w = (w as i32 - 2 * inner_x).max(0);
 
-    // Заголовок — по центру, как на экране командира.
-    let title = format!("Data on {}", info.name);
+    // Заголовок — по центру, двухцветный: верх белый, низ голубой.
+    let title = format!("DATA ON {}", info.name.to_uppercase());
     let tw = title.chars().count() as i32 * 8 * ts as i32;
     let tx = inner_x + ((inner_w - tw) / 2).max(0);
-    hd.draw_text(font, tx, l.title_y, &title, LABEL, ts);
+    draw_two_tone_text(hd, font, tx, l.title_y, &title, VALUE, LABEL, ts);
 
     let x = inner_x + 8 * ts as i32;
     let row_h = l.line + l.line / 2;
@@ -114,6 +115,33 @@ pub(super) fn draw(hd: &mut Frame, font: &[u8; crate::font::ZX_FONT_LEN], info: 
     );
 
     draw_screen_frame(hd, &l);
+}
+
+/// Нарисовать строку двухцветным шрифтом: верхняя половина глифов `top`,
+/// нижняя — `bottom` (как в оригинальной игре).
+fn draw_two_tone_text(
+    hd: &mut Frame,
+    font: &[u8; crate::font::ZX_FONT_LEN],
+    x: i32,
+    y: i32,
+    s: &str,
+    top: u32,
+    bottom: u32,
+    scale: usize,
+) {
+    let h = 8 * scale as i32;
+    let mid = h / 2;
+    let w = s.chars().count() as i32 * 8 * scale as i32;
+
+    // Нижняя половина.
+    hd.set_clip(x, y + mid, w.max(0) as usize, (h - mid).max(0) as usize);
+    hd.draw_text(font, x, y, s, bottom, scale);
+    hd.clear_clip();
+
+    // Верхняя половина.
+    hd.set_clip(x, y, w.max(0) as usize, mid.max(0) as usize);
+    hd.draw_text(font, x, y, s, top, scale);
+    hd.clear_clip();
 }
 
 /// Обвести экран белой рамкой.
