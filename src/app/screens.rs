@@ -231,7 +231,7 @@ impl App<'_> {
     /// только когда оригинал уходит на другой экран (станция, карта,
     /// инвентарь).
     pub(super) fn follow_flight_screen(&mut self) {
-        if !self.flight.active {
+        if !self.flight.active && self.flight.transition_kind().is_none() {
             return;
         }
         // Заставка — это уже не полёт. После гибели корабля оригинал уходит

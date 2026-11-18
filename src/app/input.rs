@@ -98,6 +98,36 @@ impl App<'_> {
             self.accelerated = !self.accelerated;
             return;
         }
+
+        // В режиме анимации (вылет, гиперпереход, стыковка) переключение
+        // экранов недоступно: работает только переход между F1 и 1 (нативная
+        // отрисовка или эмулятор). Эмулятор в это время проигрывает анимацию
+        // и игра не реагирует на кнопки.
+        if !self.machine.intro_seen && !self.menu && flight::z80_in_transition(&self.machine.mem) {
+            if repeat {
+                return;
+            }
+            if code == KeyCode::F1 {
+                // Показать нативную отрисовку текущей анимации.
+                if self.flight.in_transition() {
+                    // Анимация уже идёт (в том числе скрытая клавишей `1`) —
+                    // просто снова показываем нативный вид без сброса состояния.
+                    self.flight.active = true;
+                    self.flight.set_view_dir(flight::ViewDir::Forward);
+                    self.pending_flight = None;
+                    self.pending_launch = false;
+                } else {
+                    self.show_flight(flight::ViewDir::Forward);
+                    self.flight.start_transition(false, &self.machine.mem);
+                }
+            } else if code == KeyCode::Digit1 {
+                // Показать анимацию, которую рисует эмулятор. Состояние
+                // перехода сохраняем, чтобы F1 мог вернуться к той же анимации.
+                self.flight.active = false;
+            }
+            return;
+        }
+
         // F10 — отдельная нативная карта галактики.
         if code == KeyCode::F10 && !repeat {
             if self.hdmap.active {
@@ -354,14 +384,22 @@ impl App<'_> {
         // Экран полёта: F1-4 — те же клавиши 1-4 оригинала (передний/задний/
         // левый/правый вид) плюс переключение нативного вида; 1 возвращает
         // Z80-кадр, Esc открывает меню паузы.
-        // В режиме анимации (вылет/гиперпереход) показывается только передний
-        // вид, переключение и закрытие недоступны.
+        // В режиме анимации (вылет/прыжок/стыковка) переключение экранов
+        // недоступно: работает только переход между F1 и 1 (нативная отрисовка
+        // или эмулятор). Игра в это время сама не реагирует на кнопки.
         if self.flight.active {
-            let in_animation = matches!(
-                self.flight.transition_kind(),
-                Some(flight::TransitionKind::Launch)
-                    | Some(flight::TransitionKind::Hyperspace)
-            );
+            let in_animation = self.flight.transition_kind().is_some();
+            if in_animation {
+                if code == KeyCode::F1 {
+                    // Оставляем нативный вид активным (уже открыт).
+                    self.flight.set_view_dir(flight::ViewDir::Forward);
+                } else if code == KeyCode::Digit1 {
+                    // Показать анимацию, которую рисует эмулятор. Состояние
+                    // перехода сохраняем, чтобы F1 мог вернуться к ней.
+                    self.flight.active = false;
+                }
+                return;
+            }
             let view = match code {
                 KeyCode::F1 => Some(flight::ViewDir::Forward),
                 KeyCode::F2 => Some(flight::ViewDir::Back),
@@ -370,13 +408,9 @@ impl App<'_> {
                 _ => None,
             };
             if let Some(view) = view {
-                if !in_animation {
-                    self.flight.set_view_dir(view);
-                }
-                // Клавиша вида уходит игре (оригинал сам игнорирует её во время
-                // анимации/перехода), но нативный вид в анимации не переключаем.
+                self.flight.set_view_dir(view);
                 self.pending_key = function_game_key(code).and_then(matrix_pos);
-            } else if code == KeyCode::Digit1 && !in_animation {
+            } else if code == KeyCode::Digit1 {
                 self.flight.close();
             } else if code == KeyCode::Escape {
                 self.menu = true;
@@ -467,6 +501,13 @@ impl App<'_> {
             self.machine.release_joystick();
             return;
         }
+        // В режиме анимации (вылет/прыжок/стыковка) эмулятор проигрывает
+        // анимацию и игра не реагирует на нажатие кнопок.
+        if flight::z80_in_transition(&self.machine.mem) {
+            self.machine.release_all_keys();
+            self.machine.release_joystick();
+            return;
+        }
         // Под нативным рынком стрелки обрабатывает сам экран. Не даём им
         // уйти в эмулятор через Kempston даже если клавиша была нажата до
         // открытия экрана.
@@ -484,6 +525,11 @@ impl App<'_> {
     pub(super) fn forward_input(&mut self) {
         self.machine.release_all_keys();
         self.machine.release_joystick();
+        // В режиме анимации игра не реагирует на нажатие кнопок.
+        if flight::z80_in_transition(&self.machine.mem) {
+            self.pending_key = None;
+            return;
+        }
         for (row, bits) in self.matrix.iter().enumerate() {
             for (bit, &down) in bits.iter().enumerate() {
                 if down {

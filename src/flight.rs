@@ -193,13 +193,10 @@ impl Flight {
         self.transition.kind()
     }
 
-    /// Идёт ли режим анимации: вылет со станции или гиперпереход. В этом
+    /// Идёт ли режим анимации: вылет, гиперпереход или стыковка. В этом
     /// режиме отображается только передний вид.
     pub fn in_animation_mode(&self) -> bool {
-        matches!(
-            self.transition.kind(),
-            Some(TransitionKind::Launch) | Some(TransitionKind::Hyperspace)
-        )
+        self.transition.kind().is_some()
     }
 
     /// Переключить вид по сторонам (F1-F4 в нативном полёте): те же клавиши
@@ -228,7 +225,7 @@ impl Flight {
     /// Постареть нижнее сообщение на `frames` кадров. Вызывается до
     /// [`Self::sync_game_msg`], чтобы свежее событие начинало новый отсчёт.
     pub fn advance_messages(&mut self, frames: u64) {
-        if !self.active {
+        if !self.active && !self.transition.in_transition() {
             return;
         }
         self.messages.advance(frames.min(u32::MAX as u64) as u32);
@@ -237,7 +234,7 @@ impl Flight {
     /// Забрать перехваченные строки игры (см. [`crate::machine::GameMsgTap`]).
     /// Для показа берётся только нижняя строка (`0x0D`).
     pub fn sync_game_msg(&mut self, tap: &mut GameMsgTap) {
-        if !self.active {
+        if !self.active && !self.transition.in_transition() {
             return;
         }
         self.messages.sync(tap);
@@ -255,7 +252,7 @@ impl Flight {
     /// держит кабину, а нативный рендер показывает «Game Over»; на заставку
     /// вид закрывает приложение (см. `App::follow_flight_screen`).
     pub fn follow_z80_screen(&mut self, mem: &[u8]) {
-        if !self.active {
+        if !self.active && !self.transition.in_transition() {
             return;
         }
         let Some(&screen) = mem.get(Z80_WHAT_ON_SCREEN) else {
@@ -268,6 +265,8 @@ impl Flight {
             // Ролик теперь рисуем сами: нативный вид остаётся открытым и
             // получает состояние перехода. Вылет/прыжок/стыковку по флагам
             // различает `start_transition` (для вылета признак передаёт App).
+            // Если вид временно скрыт (показ эмулятора), состояние перехода
+            // всё равно поддерживаем, чтобы F1 вернул ту же анимацию.
             if !self.transition.in_transition() {
                 self.transition.start(false, mem);
                 self.explosions.reset();
@@ -275,6 +274,9 @@ impl Flight {
             return;
         }
         self.transition.reset();
+        if !self.active {
+            return;
+        }
         if !memory::z80_in_cockpit(mem) {
             // `0x0B` — экран станции. После запуска со станции Z80 держит его
             // несколько кадров, пока идёт анимация вылета; уже открытый экран
@@ -295,7 +297,7 @@ impl Flight {
     /// поэтому координаты слотов, `SunCrd` и `PlanetCrd` — это готовые
     /// координаты вида. Камера стоит в начале координат.
     pub fn sync_from_z80(&mut self, mem: &[u8]) {
-        if !self.active || mem.len() < Z80_MEM_MIN {
+        if (!self.active && !self.transition.in_transition()) || mem.len() < Z80_MEM_MIN {
             return;
         }
 
@@ -395,7 +397,7 @@ impl Flight {
     ///
     /// Мир не двигается — его координаты приходят из [`Self::sync_from_z80`].
     pub fn tick(&mut self, dt: f32) {
-        if !self.active {
+        if !self.active && !self.transition.in_transition() {
             return;
         }
         let dt = dt.clamp(0.0, 0.1);

@@ -271,7 +271,8 @@ impl<'a> App<'a> {
                 Some(flight::TransitionKind::Hyperspace) => {
                     Screen::Animation(Animation::Hyperspace)
                 }
-                _ => Screen::Flight,
+                Some(flight::TransitionKind::Docking) => Screen::Animation(Animation::Docking),
+                None => Screen::Flight,
             }
         } else {
             Screen::Emulator(emu_screen)
