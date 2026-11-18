@@ -33,6 +33,7 @@ use crate::state::{Animation, GameState, Location, OriginalScreen, Screen};
 use crate::status;
 use crate::sysinfo;
 use crate::ui::present::{DebugView, SRC_H, SRC_W};
+use crate::world;
 
 mod frame;
 mod input;
@@ -302,6 +303,8 @@ impl<'a> App<'a> {
             menu: self.menu,
             intro,
             emu_screen,
+            system: world::current_system_name(&self.machine.mem),
+            planet: world::selected_planet_name(&self.machine.mem),
         };
     }
 }

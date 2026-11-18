@@ -8,6 +8,7 @@
 //! От этого состояния зависит выбор того, что показывается на экране.
 
 use crate::flight;
+use crate::world;
 
 /// Где находится игрок.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -222,6 +223,10 @@ pub struct GameState {
     pub intro: bool,
     /// Экран эмулятора (`WhatOnScreen`) на момент снимка.
     pub emu_screen: u8,
+    /// Текущая планетная система для заголовков нативных экранов.
+    pub system: String,
+    /// Планета, выбранная для показа на экране информации (F7).
+    pub planet: String,
 }
 
 impl Default for GameState {
@@ -232,6 +237,8 @@ impl Default for GameState {
             menu: false,
             intro: true,
             emu_screen: 0,
+            system: String::new(),
+            planet: String::new(),
         }
     }
 }
@@ -260,6 +267,8 @@ impl GameState {
             menu: false,
             intro,
             emu_screen,
+            system: world::current_system_name(mem),
+            planet: world::selected_planet_name(mem),
         }
     }
 

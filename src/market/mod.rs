@@ -144,6 +144,9 @@ pub struct Market {
     /// Корабль на станции: в полёте экран только для просмотра цен, поэтому
     /// подсветка строки и подсказки торговли не рисуются.
     docked: bool,
+    /// Имя текущей системы из централизованного состояния игры — слева в
+    /// заголовке (`LAVE MARKET PRICES`).
+    system: String,
 }
 
 impl Default for Market {
@@ -162,25 +165,33 @@ impl Market {
             cursor: 0,
             notice: None,
             docked: false,
+            system: String::new(),
         }
     }
 
     /// Обновить данные рынка из памяти запущенной игры.
     ///
-    /// `docked` — находится ли корабль на станции (из централизованного
-    /// состояния игры), чтобы не обращаться к эмулятору напрямую.
-    pub fn refresh(&mut self, mem: &[u8], layout: MarketLayout, docked: bool) {
+    /// `docked` и `system` приходят из централизованного состояния игры,
+    /// чтобы не обращаться к эмулятору напрямую.
+    pub fn refresh(
+        &mut self,
+        mem: &[u8],
+        layout: MarketLayout,
+        docked: bool,
+        system: &str,
+    ) {
         self.layout = layout;
         self.info = read_info(mem, layout);
         self.cursor = self.cursor.min(self.info.items.len().saturating_sub(1));
         self.docked = docked;
+        self.system = system.to_string();
     }
 
     /// Включить нативный показ и прочитать текущие данные.
-    pub fn enable(&mut self, mem: &[u8], layout: MarketLayout, docked: bool) {
+    pub fn enable(&mut self, mem: &[u8], layout: MarketLayout, docked: bool, system: &str) {
         self.cursor = 0;
         self.notice = None;
-        self.refresh(mem, layout, docked);
+        self.refresh(mem, layout, docked, system);
         self.native = true;
     }
 
@@ -279,7 +290,8 @@ impl Market {
             self.notice = Some(format!("SOLD 1 {}", name));
         }
         write_cash(mem, pilot, cash);
-        self.refresh(mem, self.layout, docked);
+        let system = self.system.clone();
+        self.refresh(mem, self.layout, docked, &system);
     }
 
     /// Нарисовать экран во весь слой.

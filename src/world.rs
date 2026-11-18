@@ -3,6 +3,14 @@
 use crate::galaxy;
 use crate::native;
 
+/// Поле `PlanetPresent` — имя текущей системы, подготовленное оригиналом
+/// (версия Кладова). Именно его оригинал печатает в заголовке рынка.
+const PLANET_PRESENT: usize = 0xDEE4;
+/// Поле `PlanetName` — имя планеты, выбранной для показа (версия Кладова).
+const PLANET_NAME: usize = 0xDEED;
+/// Длина обоих полей имени.
+const PLANET_NAME_LEN: usize = 8;
+
 /// Раскладка адресов сейва/лоада версии Кладова.
 pub fn save_layout_kladov() -> native::SaveLayout {
     native::KLADOV_SAVE
@@ -41,4 +49,51 @@ pub fn current_planet_color(mem: &[u8]) -> u32 {
         .find(|p| p.x == x && p.y_raw == y)
         .unwrap_or(&planets[0]);
     galaxy::color(planet.state)
+}
+
+/// Имя текущей планетной системы в виде, как печатает оригинал
+/// (`LAVE` -> `Lave`). Источник — поле `PlanetPresent`, которое игра сама
+/// заполняет при старте, гиперпрыжке и стыковке.
+pub fn current_system_name(mem: &[u8]) -> String {
+    read_name(mem, PLANET_PRESENT)
+}
+
+/// Имя планеты, выбранной для показа на экране `P`/F7 (`LAVE` -> `Lave`).
+/// Источник — поле `PlanetName`, которое оригинал заполняет при подготовке
+/// экрана информации о планете.
+pub fn selected_planet_name(mem: &[u8]) -> String {
+    read_name(mem, PLANET_NAME)
+}
+
+/// Прочитать имя из 8-байтного поля: первая буква заглавная, остальные
+/// строчные, как при печати `{01}`/`{03}` в оригинале.
+fn read_name(mem: &[u8], addr: usize) -> String {
+    let mut out = String::new();
+    for i in 0..PLANET_NAME_LEN {
+        let b = mem.get(addr + i).copied().unwrap_or(0);
+        if b == 0 || b == b' ' {
+            break;
+        }
+        let ch = b as char;
+        if out.is_empty() {
+            out.extend(ch.to_uppercase());
+        } else {
+            out.extend(ch.to_lowercase());
+        }
+    }
+    out
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn planet_names_are_read_from_the_right_fields() {
+        let mut mem = vec![0u8; 0x10000];
+        mem[PLANET_PRESENT..PLANET_PRESENT + 8].copy_from_slice(b"LAVE    ");
+        mem[PLANET_NAME..PLANET_NAME + 8].copy_from_slice(b"DISCO   ");
+        assert_eq!(current_system_name(&mem), "Lave");
+        assert_eq!(selected_planet_name(&mem), "Disco");
+    }
 }

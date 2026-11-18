@@ -282,6 +282,7 @@ impl App<'_> {
                         &self.machine.mem,
                         crate::market::KLADOV_MARKET,
                         self.state.is_docked(),
+                        &self.state.system,
                     );
                     self.market.draw(&mut self.machine.hd, ZX_FONT);
                     self.draw_danger_half();

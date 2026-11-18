@@ -203,7 +203,22 @@ impl App<'_> {
         self.pending_status = false;
         self.pending_flight = None;
         self.pending_launch = false;
-        self.sysinfo.open(&self.machine.mem, sysinfo::KLADOV_SYSINFO);
+        self.open_sysinfo();
+    }
+
+    /// Обновить в состоянии имя планеты, выбранной для показа. Оригинал
+    /// заполняет `PlanetName` при обработке `P`, до очередной синхронизации
+    /// состояния об этом нужно знать сразу.
+    fn refresh_selected_planet(&mut self) {
+        self.state.planet = world::selected_planet_name(&self.machine.mem);
+    }
+
+    /// Включить нативный экран информации о планете с текущим именем из состояния.
+    pub(super) fn open_sysinfo(&mut self) {
+        self.refresh_selected_planet();
+        let name = self.state.planet.clone();
+        self.sysinfo
+            .open(&self.machine.mem, sysinfo::KLADOV_SYSINFO, &name);
     }
 
     /// Выключить нативную отрисовку экрана информации о планете. Экранная
@@ -249,8 +264,12 @@ impl App<'_> {
         self.pending_status = false;
         self.pending_sysinfo = false;
         let docked = flight::z80_is_docked(&self.machine.mem);
-        self.market
-            .enable(&self.machine.mem, market::KLADOV_MARKET, docked);
+        self.market.enable(
+            &self.machine.mem,
+            market::KLADOV_MARKET,
+            docked,
+            &self.state.system,
+        );
         self.menu = false;
         self.pending_shop = false;
         self.pending_flight = None;

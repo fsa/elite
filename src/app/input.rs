@@ -10,7 +10,6 @@ use crate::keys::{
 };
 use crate::native;
 use crate::storage;
-use crate::sysinfo;
 use crate::world;
 
 impl App<'_> {
@@ -211,7 +210,7 @@ impl App<'_> {
                 self.pending_status = false;
                 self.pending_sysinfo = false;
                 if self.machine.mem[flight::Z80_WHAT_ON_SCREEN] == flight::Z80_SCREEN_INFO_PLANET {
-                    self.sysinfo.open(&self.machine.mem, sysinfo::KLADOV_SYSINFO);
+                    self.open_sysinfo();
                 } else {
                     self.pending_sysinfo = true;
                     self.pending_key = matrix_pos(KeyCode::KeyP);

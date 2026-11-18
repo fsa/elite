@@ -20,6 +20,63 @@ fn price(mem: &[u8], i: usize) -> u16 {
 }
 
 #[test]
+fn market_title_has_system_name_in_caps() {
+    assert_eq!(draw::title("Lave"), "LAVE MARKET PRICES");
+    assert_eq!(draw::title(""), "MARKET PRICES");
+}
+
+#[test]
+fn market_rows_are_spaced_like_f7_and_f9() {
+    let l = draw::layout(1024, 768);
+    assert_eq!(
+        l.header_bottom_y,
+        l.header_top_y + l.line,
+        "строки заголовка колонок остаются плотными"
+    );
+    assert_eq!(
+        l.first_row_y,
+        l.header_bottom_y + l.row_h,
+        "отступ от заголовка до первой строки равен шагу строк"
+    );
+    assert_eq!(
+        l.row_h,
+        l.line + l.line / 2,
+        "шаг строк таблицы такой же, как на F7/F9"
+    );
+}
+
+#[test]
+fn market_status_is_a_single_hint_line() {
+    assert_eq!(
+        draw::status_line(1000, true),
+        "Cash: 100.0 Cr  Select: Up/Down  Sell: Left  Buy: Right"
+    );
+    assert_eq!(draw::status_line(1000, false), "Cash: 100.0 Cr");
+    assert_eq!(
+        draw::status_line(655_359_999, true),
+        "Cash: 65535999.9 Cr  Select: Up/Down  Sell: Left  Buy: Right"
+    );
+}
+
+#[test]
+fn market_status_fields_split_name_and_value_for_colors() {
+    let fields = draw::status_fields(1000, true);
+    let parts: Vec<_> = fields
+        .iter()
+        .map(|f| (f.name, f.value.as_str()))
+        .collect();
+    assert_eq!(
+        parts,
+        vec![
+            ("Cash", "100.0 Cr"),
+            ("Select", "Up/Down"),
+            ("Sell", "Left"),
+            ("Buy", "Right"),
+        ]
+    );
+}
+
+#[test]
 fn read_info_reads_prices_quantity_and_unit() {
     let mut mem = vec![0u8; 0x10000];
     // item 0 (Food, t): price 0x0018 -> 2.4, quantity 3
@@ -68,7 +125,7 @@ fn buy_reduces_stock_cash_and_free_cargo_and_fills_hold() {
     set_cash(&mut mem, 100);
 
     let mut market = Market::new();
-    market.enable(&mem, KLADOV_MARKET, true);
+    market.enable(&mem, KLADOV_MARKET, true, "Lave");
     market.buy(&mut mem, true);
 
     assert_eq!(mem[ADDR_QUANTITY], 4);
@@ -91,7 +148,7 @@ fn sell_returns_cargo_space_and_money() {
     set_cash(&mut mem, 100);
 
     let mut market = Market::new();
-    market.enable(&mem, KLADOV_MARKET, true);
+    market.enable(&mem, KLADOV_MARKET, true, "Lave");
     market.sell(&mut mem, true);
 
     assert_eq!(mem[ADDR_QUANTITY], 6);
@@ -110,7 +167,7 @@ fn trade_checks_stock_cash_and_hold_space() {
     set_cash(&mut mem, 100);
 
     let mut market = Market::new();
-    market.enable(&mem, KLADOV_MARKET, true);
+    market.enable(&mem, KLADOV_MARKET, true, "Lave");
 
     // Первая покупка опустошает склад.
     market.buy(&mut mem, true);
@@ -156,7 +213,7 @@ fn precious_metals_do_not_use_cargo_space() {
     set_cash(&mut mem, 1000);
 
     let mut market = Market::new();
-    market.enable(&mem, KLADOV_MARKET, true);
+    market.enable(&mem, KLADOV_MARKET, true, "Lave");
     market.move_selection(13);
     market.buy(&mut mem, true);
 
@@ -178,7 +235,7 @@ fn trade_is_refused_outside_a_station() {
     set_cash(&mut mem, 500);
 
     let mut market = Market::new();
-    market.enable(&mem, KLADOV_MARKET, false);
+    market.enable(&mem, KLADOV_MARKET, false, "Lave");
     market.buy(&mut mem, false);
     assert_eq!(mem[ADDR_QUANTITY], 2);
     assert_eq!(mem[PILOT as usize + OFF_CARGO], 1);
@@ -201,7 +258,7 @@ fn illegal_goods_raise_legal_status_and_passengers_block_trade() {
     set_cash(&mut mem, 200);
 
     let mut market = Market::new();
-    market.enable(&mem, KLADOV_MARKET, true);
+    market.enable(&mem, KLADOV_MARKET, true, "Lave");
     market.move_selection(3);
     market.buy(&mut mem, true);
     assert_eq!(mem[PILOT as usize + OFF_LEGAL], 2);
@@ -225,13 +282,13 @@ fn draw_in_flight_has_no_selection_or_trade_hints() {
     set_price(&mut mem, 0, 40);
 
     let mut docked = Market::new();
-    docked.enable(&mem, KLADOV_MARKET, true);
+    docked.enable(&mem, KLADOV_MARKET, true, "Lave");
     assert!(docked.docked);
     docked.move_selection(1);
 
     mem[flight::Z80_IND_DANGER] = 1;
     let mut flying = Market::new();
-    flying.enable(&mem, KLADOV_MARKET, false);
+    flying.enable(&mem, KLADOV_MARKET, false, "Lave");
     assert!(!flying.docked);
     flying.move_selection(1);
 

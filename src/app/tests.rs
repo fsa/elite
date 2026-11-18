@@ -337,6 +337,7 @@ use crate::world::{current_planet_color, save_layout_kladov, scene_markers};
     fn f8_market_trades_with_arrows() {
         let opts = test_options();
         let mut app = App::new(boot(), &opts);
+        assert_eq!(app.game_state().system, "Lave");
         app.machine.intro_seen = false;
         app.machine.mem[flight::Z80_IND_DANGER] = 0;
         app.machine.mem[flight::Z80_WHAT_ON_SCREEN] = flight::Z80_SCREEN_MARKET;
@@ -521,6 +522,11 @@ use crate::world::{current_planet_color, save_layout_kladov, scene_markers};
             "эмулятор не перешёл в режим экрана планеты"
         );
         assert!(!app.sysinfo.info.name.is_empty(), "данные планеты не прочитаны");
+        assert_eq!(
+            app.game_state().planet,
+            app.sysinfo.info.name,
+            "имя планеты должно приходить из состояния игры"
+        );
 
         // Esc открывает меню паузы, нативный экран под ним остаётся.
         app.key_event(KeyCode::Escape, true, false);

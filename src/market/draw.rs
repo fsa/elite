@@ -19,26 +19,33 @@ const VALUE: u32 = crate::cockpit::FRAME_COLOR;
 const SELECT_BG: u32 = 0xFF00_5458;
 
 /// Геометрия экрана.
-struct Layout {
-    margin: i32,
-    frame: i32,
-    text: usize,
-    line: i32,
-    title_y: i32,
-    header_top_y: i32,
-    header_bottom_y: i32,
-    first_row_y: i32,
+pub(super) struct Layout {
+    pub(super) margin: i32,
+    pub(super) frame: i32,
+    pub(super) text: usize,
+    pub(super) line: i32,
+    pub(super) title_y: i32,
+    pub(super) header_top_y: i32,
+    pub(super) header_bottom_y: i32,
+    /// Первая строка таблицы: отступ от заголовка равен шагу строк.
+    pub(super) first_row_y: i32,
+    /// Шаг строк таблицы, как на F7/F9.
+    pub(super) row_h: i32,
 }
 
 /// Сосчитать геометрию окна `w` x `h`.
-fn layout(w: usize, h: usize) -> Layout {
+pub(super) fn layout(w: usize, h: usize) -> Layout {
     let margin = crate::cockpit::panel_geometry(w as u32, h as u32).margin;
     let frame = crate::cockpit::LINE.max(1);
     let text = (h as f32 / 300.0).floor().max(1.0) as usize;
     let line = 8 * text as i32;
     let title_y = margin + frame + line;
+    // Две строки заголовка колонок остаются плотными: между ними ровно одна
+    // строка текста. Первая строка таблицы отстоит от заголовка на тот же
+    // шаг, что и остальные строки, — разреженный, как на экранах F7/F9.
     let header_top_y = title_y + 2 * line;
     let header_bottom_y = header_top_y + line;
+    let row_h = line + line / 2;
     Layout {
         margin,
         frame,
@@ -47,7 +54,8 @@ fn layout(w: usize, h: usize) -> Layout {
         title_y,
         header_top_y,
         header_bottom_y,
-        first_row_y: header_bottom_y + line,
+        first_row_y: header_bottom_y + row_h,
+        row_h,
     }
 }
 
@@ -68,17 +76,19 @@ pub(super) fn draw(hd: &mut Frame, font: &[u8; crate::font::ZX_FONT_LEN], market
     let inner_w = (w as i32 - 2 * inner_x).max(0);
     let ch = 8 * ts as i32;
 
-    // Заголовок — по центру, двухцветный: верх белый, низ голубой.
-    let title = "MARKET PRICES";
+    // Заголовок — по центру, двухцветный: верх белый, низ голубой. Как на
+    // экране F7, имя системы стоит слева и печатается заглавными буквами.
+    let title = title(&market.system);
     let tw = title.chars().count() as i32 * ch;
     let tx = inner_x + ((inner_w - tw) / 2).max(0);
-    draw_two_tone_text(hd, font, tx, l.title_y, title, VALUE, LABEL, ts);
+    draw_two_tone_text(hd, font, tx, l.title_y, &title, VALUE, LABEL, ts);
 
     // Колонки на всю ширину экрана. UNIT PRICE и QUANTITY FOR SALE — в две
     // строки; PRODUCT и UNIT опущены на вторую строку заголовка. IN HOLD —
     // новое поле с количеством товара в трюме корабля.
     let left = inner_x;
-    let pad = ch / 2;
+    // Отступ содержимого от рамки — одно знакоместо, как на F7/F9.
+    let pad = ch;
     let x_name = left + pad;
     let x_unit = left + inner_w * 45 / 100;
     let x_price = left + inner_w * 55 / 100;
@@ -95,20 +105,22 @@ pub(super) fn draw(hd: &mut Frame, font: &[u8; crate::font::ZX_FONT_LEN], market
     hd.draw_text(font, x_hold, l.header_top_y, "IN", LABEL, ts);
     hd.draw_text(font, x_hold, l.header_bottom_y, "HOLD", LABEL, ts);
 
-    let row_h = l.line + l.line / 4;
     let table_bottom = h as i32 - l.margin - l.frame;
     for (i, item) in info.items.iter().enumerate() {
-        let y = l.first_row_y + i as i32 * row_h;
+        let y = l.first_row_y + i as i32 * l.row_h;
         if y + l.line > table_bottom {
             break;
         }
         // В полёте нет выбора строки — экран только для чтения цен.
         if market.docked && i == market.cursor {
+            // Подсветка выходит за пределы глифа на две строки пикселей с каждой
+            // стороны: по высоте она почти заполняет шаг между строками.
+            let pad = 2 * ts as i32;
             hd.fill_rect(
                 left,
-                y - ts as i32,
+                y - pad,
                 inner_w.max(0) as usize,
-                (l.line + 2 * ts as i32).max(1) as usize,
+                (l.line + 2 * pad).max(1) as usize,
                 SELECT_BG,
             );
         }
@@ -135,26 +147,91 @@ pub(super) fn draw(hd: &mut Frame, font: &[u8; crate::font::ZX_FONT_LEN], market
         hd.draw_text(font, x_hold, y, &hold, VALUE, ts);
     }
 
-    // Деньги показываются всегда. Подсказки выбора и торговли, а также
-    // результат сделки — только на станции: в полёте их нет.
+    // Одна нижняя строка: деньги и, на станции, подсказки управления.
+    // Ниже её больше ничего не выводится. Между параметрами — два пробела,
+    // независимо от длины суммы.
     let status_y = table_bottom - 3 * l.line;
-    let cash = format!("CASH {:>7.1}", info.cash_tenths as f32 / 10.0);
-    hd.draw_text(font, left, status_y, &cash, LABEL, ts);
-    if market.docked {
-        hd.draw_text(
-            font,
-            x_unit,
-            status_y,
-            "UP/DN SELECT  <-SELL  ->BUY",
-            LABEL,
-            ts,
-        );
-        if let Some(msg) = &market.notice {
-            hd.draw_text(font, left, status_y + l.line, msg, VALUE, ts);
+    let mut x = x_name;
+    for (i, field) in status_fields(info.cash_tenths, market.docked)
+        .iter()
+        .enumerate()
+    {
+        if i > 0 {
+            x += 2 * ch;
         }
+        x = draw_field(hd, font, x, status_y, field, ts);
     }
 
     draw_screen_frame(hd, &l);
+}
+
+/// Поле нижней строки: имя до двоеточия и двоеточие со значением рисуются
+/// разными цветами, как в F7/F9.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(super) struct Field {
+    pub(super) name: &'static str,
+    pub(super) value: String,
+}
+
+/// Параметры нижней строки. В полёте торговать нельзя, поэтому остаётся только
+/// сумма на счёте; на станции добавляются подсказки выбора и торговли.
+pub(super) fn status_fields(cash_tenths: u32, docked: bool) -> Vec<Field> {
+    let mut fields = vec![Field {
+        name: "Cash",
+        value: format!("{}.{} Cr", cash_tenths / 10, cash_tenths % 10),
+    }];
+    if docked {
+        fields.extend([
+            Field {
+                name: "Select",
+                value: "Up/Down".into(),
+            },
+            Field {
+                name: "Sell",
+                value: "Left".into(),
+            },
+            Field {
+                name: "Buy",
+                value: "Right".into(),
+            },
+        ]);
+    }
+    fields
+}
+
+/// Текст нижней строки — для тестов и отладки.
+pub(super) fn status_line(cash_tenths: u32, docked: bool) -> String {
+    status_fields(cash_tenths, docked)
+        .iter()
+        .map(|f| format!("{}: {}", f.name, f.value))
+        .collect::<Vec<_>>()
+        .join("  ")
+}
+
+/// Нарисовать одно поле: имя голубое, двоеточие и значение белые.
+fn draw_field(
+    hd: &mut Frame,
+    font: &[u8; crate::font::ZX_FONT_LEN],
+    x: i32,
+    y: i32,
+    field: &Field,
+    scale: usize,
+) -> i32 {
+    let cell = 8 * scale as i32;
+    hd.draw_text(font, x, y, field.name, LABEL, scale);
+    let vx = x + field.name.chars().count() as i32 * cell;
+    let tail = format!(": {}", field.value);
+    hd.draw_text(font, vx, y, &tail, VALUE, scale);
+    vx + tail.chars().count() as i32 * cell
+}
+
+/// Заголовок экрана: имя системы слева заглавными буквами, как в F7.
+pub(super) fn title(system: &str) -> String {
+    if system.is_empty() {
+        "MARKET PRICES".to_string()
+    } else {
+        format!("{} MARKET PRICES", system.to_uppercase())
+    }
 }
 
 /// Нарисовать строку двухцветным шрифтом: верхняя половина глифов `top`,

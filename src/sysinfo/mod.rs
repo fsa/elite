@@ -2,10 +2,10 @@
 //! альтернатива экрану `DATA ON <PLANET>` (клавиша `P` в версии Кладова).
 //!
 //! Данные читаются из живых полей планеты, подготовленных оригиналом при
-//! показе экрана (`PlanetName`, `FuelToPlanet`, `PlanetEconomy`,
-//! `PlanetGovernment`, `PlanetTechLevel`, `PlanetPopulation`,
-//! `PlanetGrossProduct`, `PlanetData1/2`). Экран ничего не меняет и служит
-//! только для просмотра.
+//! показе экрана (`FuelToPlanet`, `PlanetEconomy`, `PlanetGovernment`,
+//! `PlanetTechLevel`, `PlanetPopulation`, `PlanetGrossProduct`,
+//! `PlanetData1/2`). Имя планеты приходит из централизованного состояния
+//! игры. Экран ничего не меняет и служит только для просмотра.
 
 use crate::display::Frame;
 
@@ -16,16 +16,12 @@ mod tests;
 /// Адреса полей планеты в памяти Z80 (версия Кладова).
 const ADDR_PLANET_DATA1: usize = 0xDEBC;
 const ADDR_PLANET_DATA2: usize = 0xDEBE;
-const ADDR_PLANET_NAME: usize = 0xDEED;
 const ADDR_FUEL_TO_PLANET: usize = 0xDEF6;
 const ADDR_PLANET_ECONOMY: usize = 0xDEF8;
 const ADDR_PLANET_GOVERNMENT: usize = 0xDEF9;
 const ADDR_PLANET_TECH_LEVEL: usize = 0xDEFA;
 const ADDR_PLANET_POPULATION: usize = 0xDEFB;
 const ADDR_PLANET_GROSS_PRODUCT: usize = 0xDEFC;
-
-/// Длина имени планеты (`PlanetName`).
-const NAME_LEN: usize = 8;
 
 /// Раскладка экрана информации о планете (версия Кладова).
 #[derive(Clone, Copy)]
@@ -75,9 +71,10 @@ impl SysInfo {
         Self::default()
     }
 
-    /// Открыть экран и прочитать данные из памяти эмулятора.
-    pub fn open(&mut self, mem: &[u8], _layout: SysInfoLayout) {
-        self.info = read_info(mem);
+    /// Открыть экран и прочитать данные из памяти эмулятора. Имя планеты
+    /// приходит из централизованного состояния игры, а не из поля `PlanetName`.
+    pub fn open(&mut self, mem: &[u8], _layout: SysInfoLayout, name: &str) {
+        self.info = read_info(mem, name);
         self.active = true;
     }
 
@@ -96,8 +93,7 @@ impl SysInfo {
 }
 
 /// Прочитать и разобрать данные экрана из памяти.
-pub(crate) fn read_info(mem: &[u8]) -> Info {
-    let name = read_planet_name(mem);
+pub(crate) fn read_info(mem: &[u8], name: &str) -> Info {
     let distance_tenths = mem.get(ADDR_FUEL_TO_PLANET).copied().unwrap_or(0);
     let economy_code = mem.get(ADDR_PLANET_ECONOMY).copied().unwrap_or(0);
     let gov_code = mem.get(ADDR_PLANET_GOVERNMENT).copied().unwrap_or(0);
@@ -119,7 +115,7 @@ pub(crate) fn read_info(mem: &[u8]) -> Info {
     };
 
     Info {
-        name,
+        name: name.to_string(),
         distance_tenths,
         economy: economy_name(economy_code),
         government: government_name(gov_code),
@@ -135,29 +131,6 @@ fn read_u16(mem: &[u8], addr: usize) -> u16 {
     let lo = mem.get(addr).copied().unwrap_or(0) as u16;
     let hi = mem.get(addr + 1).copied().unwrap_or(0) as u16;
     lo | (hi << 8)
-}
-
-/// Прочитать имя планеты: первая буква заглавная, остальные строчные
-/// (как `byte_D0D3=1` при печати `{03}`).
-fn read_planet_name(mem: &[u8]) -> String {
-    let mut out = String::new();
-    for i in 0..NAME_LEN {
-        let b = mem.get(ADDR_PLANET_NAME + i).copied().unwrap_or(0);
-        if b == 0 || b == b' ' {
-            break;
-        }
-        let ch = b as char;
-        if out.is_empty() {
-            for c in ch.to_uppercase() {
-                out.push(c);
-            }
-        } else {
-            for c in ch.to_lowercase() {
-                out.push(c);
-            }
-        }
-    }
-    out
 }
 
 /// Название экономики по `PlanetEconomy` (см. `sub_EEA8`).

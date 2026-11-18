@@ -5,7 +5,6 @@ use super::*;
 /// Память с данными планеты (адреса версии Кладова).
 fn fake_mem() -> Vec<u8> {
     let mut m = vec![0u8; 0x10000];
-    m[ADDR_PLANET_NAME..ADDR_PLANET_NAME + 8].copy_from_slice(b"LAVE    ");
     m[ADDR_FUEL_TO_PLANET] = 5;
     m[ADDR_PLANET_ECONOMY] = 0;
     m[ADDR_PLANET_GOVERNMENT] = 6;
@@ -20,7 +19,7 @@ fn fake_mem() -> Vec<u8> {
 
 #[test]
 fn reads_planet_info() {
-    let info = read_info(&fake_mem());
+    let info = read_info(&fake_mem(), "Lave");
     assert_eq!(info.name, "Lave");
     assert_eq!(info.distance_tenths, 5);
     assert_eq!(info.economy, "Rich industrial");
@@ -57,7 +56,7 @@ fn economy_and_government_mapping() {
 fn humanoid_species_when_bit_set() {
     let mut m = fake_mem();
     m[ADDR_PLANET_DATA2] |= 0x80;
-    let info = read_info(&m);
+    let info = read_info(&m, "Lave");
     assert_eq!(info.species, "Humanoids");
 }
 
@@ -74,7 +73,7 @@ fn open_close_draw_smoke() {
     let mem = fake_mem();
     let mut s = SysInfo::new();
     assert!(!s.active);
-    s.open(&mem, KLADOV_SYSINFO);
+    s.open(&mem, KLADOV_SYSINFO, "Lave");
     assert!(s.active);
     assert_eq!(s.info.name, "Lave");
     let mut hd = Frame::new(640, 480);
