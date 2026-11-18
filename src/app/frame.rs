@@ -85,8 +85,7 @@ impl App<'_> {
             if self.market.native {
                 self.market.disable();
             }
-            self.close_status();
-            self.close_sysinfo();
+            self.close_intro_screens();
         }
 
         // Текущее состояние до шага кадра — от него зависит ввод, эмуляция
@@ -166,6 +165,11 @@ impl App<'_> {
                 self.machine.release_joystick();
                 if !self.state.menu {
                     self.machine.run_frames(self.emulation_frames());
+                    // `Space` запустил игру: эмулятор уже перешёл в режим
+                    // капитана своей веткой старта. Проверяем это по состоянию
+                    // Z80 и только после этого показываем нативный экран —
+                    // пока идёт заставка, он был бы сразу закрыт.
+                    self.open_pending_status();
                 }
             }
             Screen::Emulator(_) => {

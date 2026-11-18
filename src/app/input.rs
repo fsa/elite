@@ -435,8 +435,19 @@ impl App<'_> {
         // стрелки влево/вправо переключают корабль (как в оригинальном
         // интро), остальные клавиши (кроме меню) игнорируются.
         if self.machine.intro_seen {
-            if code == KeyCode::Space {
+            if code == KeyCode::Space && !repeat {
+                // SPACE запускает игру обычным родным путём. Ветка старта
+                // (`loc_73FD`) сама вызывает `Cmd_L_PilotInfo`, поэтому
+                // эмулятор выходит в режим капитана без всякой клавиши `L`.
+                // Нативную страницу капитана поднимаем после кадра, когда
+                // игра действительно перешла из заставки в игру. Сам `Space`
+                // игре не отдаём: он не должен сработать как выстрел.
                 native::start_game(&mut self.machine, world::save_layout_kladov());
+                if let Some((row, bit)) = matrix_pos(KeyCode::Space) {
+                    self.matrix[row][bit as usize] = false;
+                }
+                self.pending_key = None;
+                self.pending_status = true;
             } else if code == KeyCode::ArrowLeft {
                 self.splash.cycle_ship(-1);
             } else if code == KeyCode::ArrowRight {

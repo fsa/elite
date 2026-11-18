@@ -1509,9 +1509,12 @@ use crate::world::{current_planet_color, save_layout_kladov, scene_markers};
     }
 
     /// На заставке Кладова `SPACE` запускает игру: хук на точках цикла
-    /// заставки уводит Z80 на ветку переинициализации и снимает `intro_seen`.
+    /// заставки уводит Z80 на ветку старта. Она сама вызывает
+    /// `Cmd_L_PilotInfo`, поэтому эмулятор выходит в режим капитана без
+    /// клавиши `L`. Нативная страница капитана открывается только после того,
+    /// как эмулятор действительно перешёл в режим игры.
     #[test]
-    fn kladov_intro_accepts_space() {
+    fn kladov_intro_space_shows_captain_page() {
         let opts = test_options();
         let mut m = boot_kladov();
         let (intro, gs) = scene_markers();
@@ -1523,15 +1526,34 @@ use crate::world::{current_planet_color, save_layout_kladov, scene_markers};
         assert!(m.intro_seen, "заставка Кладова не распознана");
         let mut app = App::new(m, &opts);
         app.key_event(KeyCode::Space, true, false);
+        assert!(app.pending_status, "SPACE не запросил страницу капитана");
         let mut started = false;
         for _ in 0..300 {
+            // Так же, как кадр заставки делает до и после прогона эмулятора.
+            // Важно: закрытие экранов на заставке не должно сбрасывать
+            // отложенный запрос — иначе нативный экран не откроется.
+            if app.machine.intro_seen {
+                app.close_intro_screens();
+            }
             app.machine.run_frame();
+            app.open_pending_status();
             if !app.machine.intro_seen {
                 started = true;
                 break;
             }
         }
-        assert!(started, "SPACE не запустил игру Кладова");
+        assert!(started, "SPACE не перевёл эмулятор в режим игры");
+        assert_eq!(
+            app.machine.mem[flight::Z80_WHAT_ON_SCREEN],
+            flight::Z80_SCREEN_PILOT_INFO,
+            "эмулятор сам не вышел на экран капитана"
+        );
+        assert!(app.status.active, "нативная страница капитана не открылась");
+        app.sync_state();
+        assert_eq!(app.game_state().screen, Screen::PilotStatus);
+        // Сам `Space` не должен дойти до игры как её собственная клавиша.
+        app.apply_input();
+        assert_ne!(app.machine.keyboard[7] & 1, 0, "SPACE ушёл в игру");
     }
 
     /// Экран полёта: вид из кабины занимает окно до панели, ниже — нативный
