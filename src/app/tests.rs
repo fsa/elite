@@ -942,14 +942,13 @@ use crate::world::{current_planet_color, save_layout_kladov, scene_markers};
         app.machine.mem[flight::Z80_JUMP_COUNTDOWN] = 0x15;
 
         app.key_event(KeyCode::F1, true, false);
-        assert!(!app.flight.active, "F1 включил вид во время перехода");
-        app.open_pending_flight();
         assert!(app.flight.active, "F1 не открыл нативный гиперпереход");
         assert_eq!(
             app.flight.transition_kind(),
             Some(flight::TransitionKind::Hyperspace),
             "прыжок показан не как гиперпереход"
         );
+        assert_eq!(app.flight.view_dir, flight::ViewDir::Forward);
 
         app.machine.mem[flight::Z80_JUMP_DOCKING] = 0;
         app.machine.mem[flight::Z80_FLG_JUMP_DOCKING] = 0;
