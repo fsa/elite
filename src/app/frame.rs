@@ -59,8 +59,8 @@ impl App<'_> {
     }
 
     /// Полукруг индикатора опасности в правом верхнем углу вспомогательного
-    /// экрана с рамкой (карта, экран капитана). В оригинале он есть только в
-    /// полёте: на станции индикатор погашен.
+    /// экрана (не вид из кабины). В оригинале он есть только в полёте: на
+    /// станции индикатор погашен.
     fn draw_danger_half(&mut self) {
         if self.state.is_docked() {
             return;
@@ -235,6 +235,7 @@ impl App<'_> {
             Screen::EquipShop => {
                 self.shop
                     .draw(&mut self.machine.hd, ZX_FONT, &self.machine.mem);
+                self.draw_danger_half();
             }
             Screen::PilotStatus => {
                 self.status.draw(&mut self.machine.hd, ZX_FONT);
@@ -245,6 +246,7 @@ impl App<'_> {
             }
             Screen::PlanetInfo => {
                 self.sysinfo.draw(&mut self.machine.hd, ZX_FONT);
+                self.draw_danger_half();
                 if self.state.menu {
                     draw_pause_menu(&mut self.machine.hd, ZX_FONT, self.menu_sel, true);
                 }
@@ -256,6 +258,7 @@ impl App<'_> {
                     self.state.is_docked(),
                 );
                 self.market.draw(&mut self.machine.hd, ZX_FONT);
+                self.draw_danger_half();
             }
             Screen::Intro => {
                 let g = cockpit::panel_geometry(game_w, game_h);
@@ -271,7 +274,10 @@ impl App<'_> {
                     draw_pause_menu(&mut self.machine.hd, ZX_FONT, self.menu_sel, true);
                 }
             }
-            Screen::Emulator(_) => {
+            Screen::Emulator(orig) => {
+                if !orig.is_cockpit_view() {
+                    self.draw_danger_half();
+                }
                 if self.state.menu {
                     draw_pause_menu(&mut self.machine.hd, ZX_FONT, self.menu_sel, false);
                 }
