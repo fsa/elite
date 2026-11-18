@@ -325,6 +325,11 @@ impl Flight {
 
         // Отсчёт гиперпрыжка ведёт Z80; имя цели читается там же.
         self.transition.sync(mem);
+        if let Some(t) = &mut self.transition.current {
+            if t.kind == TransitionKind::Hyperspace && t.warp && t.warp_initial_speed.is_none() {
+                t.warp_initial_speed = Some(self.speed);
+            }
+        }
 
         // Переход в режим анимации гиперперехода мог произойти на этом шаге
         // (например, отсчёт закончился и начался тоннель) — фиксируем вид.
@@ -397,7 +402,19 @@ impl Flight {
         self.combat.tick(dt);
         self.explosions.tick(dt);
         self.transition.tick(dt);
-        self.stars.advance(dt, self.speed);
+        if let Some(t) = self.transition.current {
+            if t.kind == TransitionKind::Hyperspace && t.warp {
+                let initial_speed = t.warp_initial_speed.unwrap_or(self.speed);
+                // Длительность совпадает с тоннелем: звёзды возвращаются к
+                // исходной скорости к моменту, когда кольцо уходит за экран.
+                let progress = t.warp_elapsed / render::transition::HYPERSPACE_EXIT_TIME;
+                self.stars.advance_hyperspace(dt, initial_speed, progress);
+            } else {
+                self.stars.advance(dt, self.speed);
+            }
+        } else {
+            self.stars.advance(dt, self.speed);
+        }
     }
 
     /// Нарисовать вид из кабины в верхней части кадра.

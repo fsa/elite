@@ -29,6 +29,11 @@ pub(super) struct Transition {
     pub(super) warp: bool,
     /// Время с начала тоннеля (для гиперпрыжка — после отсчёта).
     pub(super) warp_elapsed: f32,
+    /// Скорость корабля в момент начала тоннеля гиперпрыжка.
+    ///
+    /// Нужна для наложенной анимации звёзд: они стартуют с этой скорости и
+    /// плавно возвращаются к ней к концу прыжка.
+    pub(super) warp_initial_speed: Option<f32>,
 }
 
 impl Transition {
@@ -43,6 +48,7 @@ impl Transition {
             countdown,
             warp,
             warp_elapsed: 0.0,
+            warp_initial_speed: None,
         }
     }
 }

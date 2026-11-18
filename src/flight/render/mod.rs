@@ -16,7 +16,7 @@ use super::Flight;
 
 pub(super) mod scene;
 mod text;
-mod transition;
+pub(super) mod transition;
 
 /// Нарисовать вид из кабины в верхней части кадра.
 ///
@@ -72,6 +72,15 @@ pub(super) fn draw(f: &mut Flight, frame: &mut Frame, geom: &CockpitGeom, font: 
                     vh,
                     s,
                     t.warp_elapsed,
+                );
+                // Звёзды прыжка поверх тоннеля: видны и поверх колец, и вне
+                // центрального кольца.
+                scene::draw_stars_view(
+                    frame,
+                    &screen,
+                    &f.stars.stars,
+                    &view_rot,
+                    f.stars.streak(),
                 );
             } else {
                 // Во время отсчёта верхнюю надпись рисуем сами (подпись вида):

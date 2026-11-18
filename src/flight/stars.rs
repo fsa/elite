@@ -180,13 +180,11 @@ impl StarField {
             self.boost = false;
             self.j_drive = J_DRIVE_TIME;
         }
-        let speed = speed.clamp(0.0, SPEED_MAX);
-        let b = ((speed * 0.5).floor() + 1.0).max(1.0) * (1.0 + speed * STAR_SPEED_RAMP);
         let boosted = self.j_drive > 0.0;
         let b = if boosted {
-            b * J_DRIVE_SPEED_MULTIPLIER
+            speed_b(speed.clamp(0.0, SPEED_MAX)) * J_DRIVE_SPEED_MULTIPLIER
         } else {
-            b * STAR_SPEED_MULTIPLIER
+            speed_b(speed.clamp(0.0, SPEED_MAX)) * STAR_SPEED_MULTIPLIER
         };
         self.j_drive = (self.j_drive - dt).max(0.0);
         self.streak = if boosted {
@@ -196,6 +194,34 @@ impl StarField {
         };
 
         let step = b * STAR_UNITS_PER_B * dt;
+        self.move_stars(step);
+    }
+
+    /// Движение звёзд во время тоннеля гиперпрыжка.
+    ///
+    /// `initial_speed` — скорость корабля в начале прыжка, `progress` — доля
+    /// анимации тоннеля в диапазоне [0, 1]. К середине скорость плавно растёт
+    /// до удвоенной максимальной, а звёзды вытягиваются в штрихи как при
+    /// J-драйве; к концу скорость и растяжение возвращаются к исходным.
+    pub(super) fn advance_hyperspace(&mut self, dt: f32, initial_speed: f32, progress: f32) {
+        if !(dt > 0.0) {
+            return;
+        }
+        let p = progress.clamp(0.0, 1.0);
+        let envelope = 1.0 - (2.0 * p - 1.0).abs();
+        let peak = SPEED_MAX * 2.0;
+        let speed = initial_speed + (peak - initial_speed) * envelope;
+        let b = speed_b(speed.max(0.0)) * STAR_SPEED_MULTIPLIER;
+        self.j_drive = 0.0;
+        self.boost = false;
+        self.streak = b * STAR_UNITS_PER_B * STAR_STREAK_TIME * envelope;
+
+        let step = b * STAR_UNITS_PER_B * dt;
+        self.move_stars(step);
+    }
+
+    /// Сдвинуть все звёзды на `step` назад и пересоздать ушедшие за облако.
+    fn move_stars(&mut self, step: f32) {
         let StarField { stars, rng, .. } = self;
         for star in stars.iter_mut() {
             if !star.pos.iter().all(|value| value.is_finite()) {
@@ -211,6 +237,11 @@ impl StarField {
             }
         }
     }
+}
+
+/// Базовый коэффициент скорости звёзд для значения `speed`.
+fn speed_b(speed: f32) -> f32 {
+    ((speed * 0.5).floor() + 1.0).max(1.0) * (1.0 + speed * STAR_SPEED_RAMP)
 }
 
 /// Сколько звёзд держать в сферическом поле для вида такого размера.
