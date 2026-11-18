@@ -36,7 +36,7 @@ pub(super) fn layout(w: u32, h: u32) -> Layout {
     let line = 8 * text as i32;
     let frame = crate::cockpit::LINE.max(1);
     let margin = crate::cockpit::panel_geometry(w, h).margin;
-    let title_y = margin + frame + 2 * line;
+    let title_y = margin + frame + line;
     Layout {
         margin,
         frame,
