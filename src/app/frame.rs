@@ -2,6 +2,7 @@
 
 use std::num::NonZeroU32;
 use std::rc::Rc;
+use std::time::Instant;
 
 use winit::window::Window;
 
@@ -91,6 +92,9 @@ impl App<'_> {
         // Текущее состояние до шага кадра — от него зависит ввод, эмуляция
         // и перехват сообщений.
         self.sync_state();
+        // Заглушка `DOCKED` живёт примерно секунду, затем экран возвращается
+        // к тому, что был открыт до неё.
+        self.docked.expire(Instant::now());
         let capture = matches!(self.state.screen, Screen::Flight | Screen::Animation(_))
             && !self.state.menu;
         self.machine.game_msg.set_capture(capture);
@@ -98,7 +102,8 @@ impl App<'_> {
         let size = window.inner_size();
         let layout = self.zx_layout(size.width, size.height);
         let (game_w, game_h) = self.game_size(size.width, size.height);
-        let is_alt_screen = !matches!(self.state.screen, Screen::Emulator(_));
+        let is_alt_screen = self.docked.is_active()
+            || !matches!(self.state.screen, Screen::Emulator(_));
 
         // HD-слой нативного рендера очищается каждый кадр.
         if is_alt_screen {
@@ -109,86 +114,99 @@ impl App<'_> {
             self.machine.hd.clear(display::TRANSPARENT);
         }
 
-        // Эмуляция и ввод зависят от текущего экрана.
-        match self.state.screen {
-            Screen::GalacticMap => {
-                self.machine.release_all_keys();
-                self.machine.release_joystick();
-                if !self.state.menu {
-                    let frames = self.emulation_frames();
-                    self.machine.run_frames(frames);
-                    self.open_pending_status();
-                    self.open_pending_sysinfo();
-                    self.sync_flight_after_frames(frames);
-                    self.play_frame_audio();
-                }
+        // Эмуляция и ввод зависят от текущего экрана. Пока показана заглушка
+        // `DOCKED`, эмулятор продолжает работать и получает переданное ему
+        // нажатие, но нативные экраны под заглушкой не меняются.
+        if self.docked.is_active() {
+            self.machine.release_all_keys();
+            self.machine.release_joystick();
+            if !self.state.menu {
+                let frames = self.emulation_frames();
+                self.forward_input();
+                self.machine.run_frames(frames);
+                self.play_frame_audio();
             }
-            Screen::EquipShop => {
-                self.machine.release_all_keys();
-                self.machine.release_joystick();
-            }
-            Screen::PilotStatus | Screen::PlanetInfo | Screen::Market => {
-                if !self.state.menu {
-                    self.apply_input();
-                    let frames = self.emulation_frames();
-                    self.machine.run_frames(frames);
-                    self.open_pending_status();
-                    self.open_pending_sysinfo();
-                    self.open_pending_shop();
-                    self.open_pending_flight();
-                    self.follow_native_screens();
-                    if self.machine.save_requested {
-                        self.machine.save_requested = false;
-                        storage::do_save(&mut self.machine, self.opts, &mut self.last_path);
+        } else {
+            match self.state.screen {
+                Screen::GalacticMap => {
+                    self.machine.release_all_keys();
+                    self.machine.release_joystick();
+                    if !self.state.menu {
+                        let frames = self.emulation_frames();
+                        self.machine.run_frames(frames);
+                        self.open_pending_status();
+                        self.open_pending_sysinfo();
+                        self.sync_flight_after_frames(frames);
+                        self.play_frame_audio();
                     }
-                    self.play_frame_audio();
-                } else {
+                }
+                Screen::EquipShop => {
                     self.machine.release_all_keys();
                     self.machine.release_joystick();
                 }
-            }
-            Screen::Flight | Screen::Animation(_) => {
-                if !self.state.menu {
-                    let frames = self.emulation_frames();
-                    self.forward_input();
-                    self.machine.run_frames(frames);
-                    self.sync_flight_after_frames(frames);
-                    self.play_frame_audio();
-                } else {
-                    self.machine.release_all_keys();
-                    self.machine.release_joystick();
-                }
-            }
-            Screen::Intro => {
-                self.splash.tick();
-                self.machine.release_all_keys();
-                self.machine.release_joystick();
-                if !self.state.menu {
-                    self.machine.run_frames(self.emulation_frames());
-                    // `Space` запустил игру: эмулятор уже перешёл в режим
-                    // капитана своей веткой старта. Проверяем это по состоянию
-                    // Z80 и только после этого показываем нативный экран —
-                    // пока идёт заставка, он был бы сразу закрыт.
-                    self.open_pending_status();
-                }
-            }
-            Screen::Emulator(_) => {
-                if self.state.menu {
-                    self.machine.release_all_keys();
-                    self.machine.release_joystick();
-                } else {
-                    self.apply_input();
-                    self.machine.run_frames(self.emulation_frames());
-                    self.open_pending_status();
-                    self.open_pending_sysinfo();
-                    self.open_pending_shop();
-                    self.open_pending_flight();
-                    self.follow_native_screens();
-                    if self.machine.save_requested {
-                        self.machine.save_requested = false;
-                        storage::do_save(&mut self.machine, self.opts, &mut self.last_path);
+                Screen::PilotStatus | Screen::PlanetInfo | Screen::Market => {
+                    if !self.state.menu {
+                        self.apply_input();
+                        let frames = self.emulation_frames();
+                        self.machine.run_frames(frames);
+                        self.open_pending_status();
+                        self.open_pending_sysinfo();
+                        self.open_pending_shop();
+                        self.open_pending_flight();
+                        self.follow_native_screens();
+                        if self.machine.save_requested {
+                            self.machine.save_requested = false;
+                            storage::do_save(&mut self.machine, self.opts, &mut self.last_path);
+                        }
+                        self.play_frame_audio();
+                    } else {
+                        self.machine.release_all_keys();
+                        self.machine.release_joystick();
                     }
-                    self.play_frame_audio();
+                }
+                Screen::Flight | Screen::Animation(_) => {
+                    if !self.state.menu {
+                        let frames = self.emulation_frames();
+                        self.forward_input();
+                        self.machine.run_frames(frames);
+                        self.sync_flight_after_frames(frames);
+                        self.play_frame_audio();
+                    } else {
+                        self.machine.release_all_keys();
+                        self.machine.release_joystick();
+                    }
+                }
+                Screen::Intro => {
+                    self.splash.tick();
+                    self.machine.release_all_keys();
+                    self.machine.release_joystick();
+                    if !self.state.menu {
+                        self.machine.run_frames(self.emulation_frames());
+                        // `Space` запустил игру: эмулятор уже перешёл в режим
+                        // капитана своей веткой старта. Проверяем это по состоянию
+                        // Z80 и только после этого показываем нативный экран —
+                        // пока идёт заставка, он был бы сразу закрыт.
+                        self.open_pending_status();
+                    }
+                }
+                Screen::Emulator(_) => {
+                    if self.state.menu {
+                        self.machine.release_all_keys();
+                        self.machine.release_joystick();
+                    } else {
+                        self.apply_input();
+                        self.machine.run_frames(self.emulation_frames());
+                        self.open_pending_status();
+                        self.open_pending_sysinfo();
+                        self.open_pending_shop();
+                        self.open_pending_flight();
+                        self.follow_native_screens();
+                        if self.machine.save_requested {
+                            self.machine.save_requested = false;
+                            storage::do_save(&mut self.machine, self.opts, &mut self.last_path);
+                        }
+                        self.play_frame_audio();
+                    }
                 }
             }
         }
@@ -200,90 +218,95 @@ impl App<'_> {
         // Состояние могло измениться за шаг кадра (открытие/закрытие экранов).
         self.sync_state();
 
-        // Отрисовка зависит от текущего экрана.
-        match self.state.screen {
-            Screen::GalacticMap => {
-                self.hdmap.draw(&mut self.machine.hd, ZX_FONT);
-                self.draw_danger_half();
-            }
-            Screen::Flight | Screen::Animation(_) => {
-                let g = cockpit::panel_geometry(game_w, game_h);
-                self.flight.draw(&mut self.machine.hd, &g, ZX_FONT);
-                let values = {
-                    let mut values = cockpit::KLADOV_COCKPIT.read(&self.machine.mem);
-                    values.blink = (self.machine.frames / 16) % 2 == 0;
-                    if matches!(
-                        self.flight.transition_kind(),
-                        Some(crate::flight::TransitionKind::Launch)
-                    ) {
-                        values.radar = cockpit::RadarContacts::empty();
-                        values.compass = cockpit::Compass::centered();
-                    }
-                    values
-                };
-                let style = cockpit::CockpitStyle {
-                    line: self.flight.cockpit_color(),
-                    bar: self.flight.cockpit_bar_color(),
-                };
-                self.cockpit.draw_with_geom(
-                    &mut self.machine.hd,
-                    &g,
-                    ZX_FONT,
-                    style,
-                    &values,
-                );
-                if self.state.menu {
-                    draw_pause_menu(&mut self.machine.hd, ZX_FONT, self.menu_sel, false);
-                }
-            }
-            Screen::EquipShop => {
-                self.shop
-                    .draw(&mut self.machine.hd, ZX_FONT, &self.machine.mem);
-                self.draw_danger_half();
-            }
-            Screen::PilotStatus => {
-                self.status.draw(&mut self.machine.hd, ZX_FONT);
-                self.draw_danger_half();
-                if self.state.menu {
-                    draw_pause_menu(&mut self.machine.hd, ZX_FONT, self.menu_sel, true);
-                }
-            }
-            Screen::PlanetInfo => {
-                self.sysinfo.draw(&mut self.machine.hd, ZX_FONT);
-                self.draw_danger_half();
-                if self.state.menu {
-                    draw_pause_menu(&mut self.machine.hd, ZX_FONT, self.menu_sel, true);
-                }
-            }
-            Screen::Market => {
-                self.market.refresh(
-                    &self.machine.mem,
-                    crate::market::KLADOV_MARKET,
-                    self.state.is_docked(),
-                );
-                self.market.draw(&mut self.machine.hd, ZX_FONT);
-                self.draw_danger_half();
-            }
-            Screen::Intro => {
-                let g = cockpit::panel_geometry(game_w, game_h);
-                self.splash.draw_in(&mut self.machine.hd, ZX_FONT, &g);
-                self.cockpit.draw_with_geom(
-                    &mut self.machine.hd,
-                    &g,
-                    ZX_FONT,
-                    cockpit::CockpitStyle::COBRA_MK3,
-                    &self.splash_values,
-                );
-                if self.state.menu {
-                    draw_pause_menu(&mut self.machine.hd, ZX_FONT, self.menu_sel, true);
-                }
-            }
-            Screen::Emulator(orig) => {
-                if !orig.is_cockpit_view() {
+        // Отрисовка зависит от текущего экрана. Заглушка `DOCKED` временно
+        // перекрывает нативный экран, который был открыт до неё.
+        if self.docked.is_active() {
+            self.docked.draw(&mut self.machine.hd, ZX_FONT);
+        } else {
+            match self.state.screen {
+                Screen::GalacticMap => {
+                    self.hdmap.draw(&mut self.machine.hd, ZX_FONT);
                     self.draw_danger_half();
                 }
-                if self.state.menu {
-                    draw_pause_menu(&mut self.machine.hd, ZX_FONT, self.menu_sel, false);
+                Screen::Flight | Screen::Animation(_) => {
+                    let g = cockpit::panel_geometry(game_w, game_h);
+                    self.flight.draw(&mut self.machine.hd, &g, ZX_FONT);
+                    let values = {
+                        let mut values = cockpit::KLADOV_COCKPIT.read(&self.machine.mem);
+                        values.blink = (self.machine.frames / 16) % 2 == 0;
+                        if matches!(
+                            self.flight.transition_kind(),
+                            Some(crate::flight::TransitionKind::Launch)
+                        ) {
+                            values.radar = cockpit::RadarContacts::empty();
+                            values.compass = cockpit::Compass::centered();
+                        }
+                        values
+                    };
+                    let style = cockpit::CockpitStyle {
+                        line: self.flight.cockpit_color(),
+                        bar: self.flight.cockpit_bar_color(),
+                    };
+                    self.cockpit.draw_with_geom(
+                        &mut self.machine.hd,
+                        &g,
+                        ZX_FONT,
+                        style,
+                        &values,
+                    );
+                    if self.state.menu {
+                        draw_pause_menu(&mut self.machine.hd, ZX_FONT, self.menu_sel, false);
+                    }
+                }
+                Screen::EquipShop => {
+                    self.shop
+                        .draw(&mut self.machine.hd, ZX_FONT, &self.machine.mem);
+                    self.draw_danger_half();
+                }
+                Screen::PilotStatus => {
+                    self.status.draw(&mut self.machine.hd, ZX_FONT);
+                    self.draw_danger_half();
+                    if self.state.menu {
+                        draw_pause_menu(&mut self.machine.hd, ZX_FONT, self.menu_sel, true);
+                    }
+                }
+                Screen::PlanetInfo => {
+                    self.sysinfo.draw(&mut self.machine.hd, ZX_FONT);
+                    self.draw_danger_half();
+                    if self.state.menu {
+                        draw_pause_menu(&mut self.machine.hd, ZX_FONT, self.menu_sel, true);
+                    }
+                }
+                Screen::Market => {
+                    self.market.refresh(
+                        &self.machine.mem,
+                        crate::market::KLADOV_MARKET,
+                        self.state.is_docked(),
+                    );
+                    self.market.draw(&mut self.machine.hd, ZX_FONT);
+                    self.draw_danger_half();
+                }
+                Screen::Intro => {
+                    let g = cockpit::panel_geometry(game_w, game_h);
+                    self.splash.draw_in(&mut self.machine.hd, ZX_FONT, &g);
+                    self.cockpit.draw_with_geom(
+                        &mut self.machine.hd,
+                        &g,
+                        ZX_FONT,
+                        cockpit::CockpitStyle::COBRA_MK3,
+                        &self.splash_values,
+                    );
+                    if self.state.menu {
+                        draw_pause_menu(&mut self.machine.hd, ZX_FONT, self.menu_sel, true);
+                    }
+                }
+                Screen::Emulator(orig) => {
+                    if !orig.is_cockpit_view() {
+                        self.draw_danger_half();
+                    }
+                    if self.state.menu {
+                        draw_pause_menu(&mut self.machine.hd, ZX_FONT, self.menu_sel, false);
+                    }
                 }
             }
         }
@@ -319,7 +342,7 @@ impl App<'_> {
         // показывается вместо ZX-кадра; сырой эмуляторный экран — с наложением
         // HD-слоя поверх масштабированного ZX-кадра.
         match self.state.screen {
-            Screen::Emulator(_) => {
+            Screen::Emulator(_) if !self.docked.is_active() => {
                 blit_zx_frame(src, &mut out, ow, oh, l);
                 self.machine.hd.composite_onto(
                     &mut out,

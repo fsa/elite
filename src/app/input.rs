@@ -151,6 +151,33 @@ impl App<'_> {
             return;
         }
 
+        // G/H на станции: оригинал не выполняет гиперпрыжок, а показывает
+        // экран `DOCKED` и издаёт звук. Под нативным экраном этот ответ
+        // эмулятора не виден, поэтому на время показываем свою заглушку.
+        // Нажатие всё равно отдаём эмулятору — он рисует такой же экран и
+        // проигрывает звук (см. `docked::Docked::show`).
+        if !repeat
+            && matches!(code, KeyCode::KeyG | KeyCode::KeyH)
+            && !self.menu
+            && !self.machine.intro_seen
+            && flight::z80_is_docked(&self.machine.mem)
+            && self.native_screen_active()
+        {
+            self.docked.show();
+            self.pending_key = matrix_pos(code);
+            // В матрице клавишу не держим: эмулятор должен получить одно
+            // нажатие, а не повторять его каждый кадр, пока идёт заглушка.
+            if let Some((row, bit)) = matrix_pos(code) {
+                self.matrix[row][bit as usize] = false;
+            }
+            return;
+        }
+        // Пока заглушка `DOCKED` на экране, остальные клавиши не должны
+        // управлять скрытым нативным экраном (например, автоповтор `G` не
+        // должен закрыть карту).
+        if self.docked.is_active() {
+            return;
+        }
         // F6 — основная клавиша отдельной нативной карты галактики.
         if code == KeyCode::F6 && !repeat {
             if self.hdmap.active {

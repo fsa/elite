@@ -214,6 +214,17 @@ impl App<'_> {
         self.pending_key = None;
     }
 
+    /// Показан ли сейчас нативный экран вместо экрана, который рисует
+    /// эмулятор.
+    pub(super) fn native_screen_active(&self) -> bool {
+        self.hdmap.active
+            || self.shop.active
+            || self.status.active
+            || self.sysinfo.active
+            || self.market.native
+            || self.flight.active
+    }
+
     /// Следить за экранными режимами Z80 под нативными экранами без
     /// собственного интерактива (F7/F9). Когда оригинал уходит с экрана,
     /// нативная надстройка закрывается; пока режим тот же — остаётся.

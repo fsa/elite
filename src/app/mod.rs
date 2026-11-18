@@ -22,6 +22,7 @@ use crate::audio::{self, Audio};
 use crate::cli::Options;
 use crate::cockpit;
 use crate::display;
+use crate::docked;
 use crate::equip;
 use crate::flight;
 use crate::hdmap;
@@ -92,6 +93,9 @@ struct App<'a> {
     /// После кадра эмулятора открыть нативный экран информации о планете:
     /// сначала игра должна обработать `P` и заполнить поля планеты.
     pending_sysinfo: bool,
+    /// Экран-заглушка `DOCKED`, который на станции заменяет ответ эмулятора
+    /// на `G`/`H` и показывается примерно секунду.
+    docked: docked::Docked,
     /// Нативный (альтернативный) показ экрана цен на станции (`K`).
     market: market::Market,
     /// Экран полёта (F1) — нативный рендер по данным Z80. Пока он активен,
@@ -174,6 +178,7 @@ impl<'a> App<'a> {
             pending_status: false,
             sysinfo: sysinfo::SysInfo::new(),
             pending_sysinfo: false,
+            docked: docked::Docked::new(),
             market: market::Market::new(),
             flight: flight::Flight::new(),
             splash: splash::Splash::new(),

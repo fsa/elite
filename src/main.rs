@@ -13,7 +13,7 @@
 //! - `ui` — меню паузы и показ кадра;
 //! - `app` — окно, ввод, нативные экраны и кадр;
 //! - `audio`, `machine`, `z80`, `native` — звук и эмуляция;
-//! - `cockpit`, `display`, `equip`, `flight`, `galaxy`, `hdmap`, `render3d`,
+//! - `cockpit`, `display`, `docked`, `equip`, `flight`, `galaxy`, `hdmap`, `render3d`,
 //!   `shipdata`, `splash`, `status` — графика и игровые подсистемы;
 //! - `font` — встроенный знакогенератор ZX для нативного интерфейса.
 
@@ -23,6 +23,7 @@ mod boot;
 mod cli;
 mod cockpit;
 mod display;
+mod docked;
 mod equip;
 mod flight;
 mod font;
