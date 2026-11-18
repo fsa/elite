@@ -333,11 +333,12 @@ impl App<'_> {
                 self.machine.hd.composite_onto(&mut out, ow, oh, 0, 0);
             }
         }
-        // Режим отладки: справа — кадр эмулятора 1:1 и дамп блока сохранения.
+        // Режим отладки: справа — кадр эмулятора 1:1, кнопки режима и
+        // сводка/дамп блока сохранения.
         if self.opts.debug {
             let layout = world::save_layout_kladov();
             let save = native::commander_block(&self.machine, layout);
-            draw_debug_panel(src, &mut out, ow, oh, save);
+            draw_debug_panel(src, &mut out, ow, oh, save, self.debug_view);
         }
         window.pre_present_notify();
         let _ = out.present();

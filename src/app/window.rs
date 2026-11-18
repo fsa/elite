@@ -14,7 +14,7 @@ use winit::window::{Fullscreen, Window, WindowId};
 
 use super::{App, FRAME_TIME};
 use crate::display;
-use crate::ui::present::{SRC_H, SRC_W};
+use crate::ui::present::{SRC_H, SRC_W, debug_button_at};
 
 impl App<'_> {
     fn create_window(&mut self, event_loop: &ActiveEventLoop) {
@@ -92,6 +92,8 @@ impl ApplicationHandler for App<'_> {
                 }
             }
             WindowEvent::CursorMoved { position, .. } => {
+                self.cursor_x = position.x;
+                self.cursor_y = position.y;
                 // Позиция мыши нужна карте для ЛКМ; храним её и когда карта
                 // закрыта, чтобы первый клик после открытия уже работал.
                 self.hdmap.pointer_moved(position.x, position.y);
@@ -126,6 +128,21 @@ impl ApplicationHandler for App<'_> {
             }
             WindowEvent::MouseInput { state, button, .. } => {
                 let pressed = state == ElementState::Pressed;
+                // Кнопки отладочной полосы переключают вид под миниатюрой и
+                // не попадают в игру.
+                if self.opts.debug && button == MouseButton::Left && pressed {
+                    let out_w = self
+                        .window
+                        .as_ref()
+                        .map(|w| w.inner_size().width as usize)
+                        .unwrap_or(0);
+                    if let Some(view) =
+                        debug_button_at(out_w, self.cursor_x, self.cursor_y)
+                    {
+                        self.debug_view = view;
+                        return;
+                    }
+                }
                 // При открытой карте ЛКМ перепрыгивает курсором на звезду под
                 // указателем и передаёт выбор в эмулятор.
                 if self.hdmap.active {

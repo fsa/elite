@@ -27,7 +27,9 @@ use crate::machine::Spectrum;
 use crate::native;
 use crate::splash;
 use crate::ui::menu::draw_pause_menu;
-use crate::ui::present::{SRC_H, SRC_W, blit_zx_frame, draw_debug_panel};
+use crate::ui::present::{
+    DebugView, SRC_H, SRC_W, blit_zx_frame, debug_button_at, debug_button_rects, draw_debug_panel,
+};
 use crate::world::{current_planet_color, save_layout_kladov, scene_markers};
 
 
@@ -220,7 +222,7 @@ use crate::world::{current_planet_color, save_layout_kladov, scene_markers};
             }
         }
         let mut out = vec![0xFFFF_FFFFu32; w as usize * h as usize];
-        draw_debug_panel(&src, &mut out, w as usize, h as usize, &[]);
+        draw_debug_panel(&src, &mut out, w as usize, h as usize, &[], DebugView::Summary);
         let x0 = display::debug_panel_x(w) as usize;
         assert_eq!(out[x0] & 0xFF, 0);
         assert_eq!(out[(SRC_H - 1) * w as usize + x0] & 0xFF, (SRC_H - 1) as u32);
@@ -229,6 +231,53 @@ use crate::world::{current_planet_color, save_layout_kladov, scene_markers};
         assert_eq!(out[(SRC_H + 4) * w as usize + x0 + 8], 0);
         assert_eq!(out[0], 0xFFFF_FFFF, "игровая часть затёрта");
         assert_eq!(out[x0 - 1], 0xFFFF_FFFF, "полоса задела игру");
+    }
+
+    /// Под миниатюрой две кнопки режимов: по умолчанию сводка, вторая кнопка
+    /// включает полный дамп. Клик определяется по координатам окна.
+    #[test]
+    fn debug_panel_buttons_switch_view() {
+        let w = 1280usize;
+        let rects = debug_button_rects(w);
+        let center = |r: (i32, i32, usize, usize)| {
+            (
+                r.0 as f64 + r.2 as f64 / 2.0,
+                r.1 as f64 + r.3 as f64 / 2.0,
+            )
+        };
+        let (x0, y0) = center(rects[0]);
+        let (x1, y1) = center(rects[1]);
+        assert_eq!(debug_button_at(w, x0, y0), Some(DebugView::Summary));
+        assert_eq!(debug_button_at(w, x1, y1), Some(DebugView::Dump));
+        // Вне кнопок клик режим не меняет.
+        assert_eq!(debug_button_at(w, 10.0, 10.0), None);
+        assert_eq!(
+            debug_button_at(w, x1, (rects[1].1 + rects[1].3 as i32 + 4) as f64),
+            None
+        );
+
+        // Сводка и дамп дают разное содержимое под кнопками.
+        let save: Vec<u8> = (0..0x66u8).collect();
+        let src = vec![0u32; SRC_W * SRC_H];
+        let mut summary = vec![0u32; w * 768];
+        let mut dump = vec![0u32; w * 768];
+        draw_debug_panel(
+            &src,
+            &mut summary,
+            w,
+            768,
+            &save,
+            DebugView::Summary,
+        );
+        draw_debug_panel(&src, &mut dump, w, 768, &save, DebugView::Dump);
+        let content = rects[0].1 as usize + rects[0].3 + 8;
+        let has_content = |buf: &[u32]| {
+            (content..(content + 200).min(768))
+                .any(|y| buf[y * w..y * w + w].iter().any(|&p| p != 0))
+        };
+        assert!(has_content(&summary));
+        assert!(has_content(&dump));
+        assert_ne!(summary, dump);
     }
 
     /// F6 открывает отдельную нативную карту галактики: игра не встаёт, но

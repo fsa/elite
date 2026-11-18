@@ -31,7 +31,7 @@ use crate::splash;
 use crate::state::{Animation, GameState, Location, OriginalScreen, Screen};
 use crate::status;
 use crate::sysinfo;
-use crate::ui::present::{SRC_H, SRC_W};
+use crate::ui::present::{DebugView, SRC_H, SRC_W};
 
 mod frame;
 mod input;
@@ -140,6 +140,12 @@ struct App<'a> {
     /// F12: ускорение эмуляции Z80 вдвое — за кадр показа прогоняются два
     /// кадра Z80. На отрисовку и звук это не влияет, кроме темпа.
     accelerated: bool,
+    /// Что показывать под миниатюрой в отладочной полосе. По умолчанию —
+    /// сокращённая сводка; дамп всех байтов включается второй кнопкой.
+    debug_view: DebugView,
+    /// Позиция указателя в координатах окна — для кнопок отладочной полосы.
+    cursor_x: f64,
+    cursor_y: f64,
     /// Позиция мыши в координатах экрана игры (0..255, 0..191)
     mouse_x: i32,
     mouse_y: i32,
@@ -188,6 +194,9 @@ impl<'a> App<'a> {
             ctrl: false,
             alt: false,
             accelerated: false,
+            debug_view: DebugView::default(),
+            cursor_x: 0.0,
+            cursor_y: 0.0,
             mouse_x: -1,
             mouse_y: -1,
             mouse_left: false,
