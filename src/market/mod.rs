@@ -90,6 +90,7 @@ fn unit(index: usize) -> &'static str {
 #[derive(Clone, Copy)]
 pub struct MarketLayout {
     /// Адрес таблицы параметров генерации цен (17 x 5 байт).
+    #[allow(dead_code)]
     pub params: usize,
     /// Адрес таблицы цен (17 x u16 LE).
     pub prices: usize,

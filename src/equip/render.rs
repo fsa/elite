@@ -103,7 +103,7 @@ impl Shop {
         // планеты всегда остаётся не меньше двух пробелов (макс. длина имени
         // планеты — 8 символов, см. galaxy::name).
         let mut x = x0;
-        let mut draw = |f: &mut Frame, x: &mut i32, s: &str, color: u32| {
+        let draw = |f: &mut Frame, x: &mut i32, s: &str, color: u32| {
             f.draw_text(font, *x, g.info_y, s, color, ts);
             *x += s.chars().count() as i32 * ch;
         };
