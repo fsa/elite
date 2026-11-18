@@ -52,7 +52,7 @@ const SUMMARY_LINE: i32 = 12;
 /// Прямоугольники двух кнопок переключения режима под миниатюрой:
 /// `(x, y, ширина, высота)` в координатах окна.
 pub(crate) fn debug_button_rects(out_w: usize) -> [(i32, i32, usize, usize); 2] {
-    let x0 = out_w.saturating_sub(SRC_W) as i32;
+    let x0 = crate::display::debug_panel_x(out_w as u32) as i32;
     let w = (SRC_W - 3 * BUTTON_MARGIN) / 2;
     let y = SRC_H as i32 + BUTTON_MARGIN as i32;
     [
@@ -92,8 +92,8 @@ pub(crate) fn draw_debug_panel(
     save_data: &[u8],
     view: DebugView,
 ) {
-    let panel_w = SRC_W.min(out_w);
-    let x0 = out_w - panel_w;
+    let x0 = crate::display::debug_panel_x(out_w as u32) as usize;
+    let panel_w = out_w - x0;
     // Вся полоса чёрная, включая нижнюю часть под миниатюрой.
     for y in 0..out_h {
         out[y * out_w + x0..y * out_w + out_w].fill(0);
