@@ -140,8 +140,8 @@ impl App<'_> {
 
         // В режиме анимации (вылет, гиперпереход, стыковка) переключение
         // экранов недоступно: работает только переход между F1 и 1 (нативная
-        // отрисовка или эмулятор). Эмулятор в это время проигрывает анимацию
-        // и игра не реагирует на кнопки.
+        // отрисовка или эмулятор) и пауза. Эмулятор в это время проигрывает
+        // анимацию и игра не реагирует на кнопки.
         if !self.machine.intro_seen && !self.menu && flight::z80_in_transition(&self.machine.mem) {
             if repeat {
                 return;
@@ -163,6 +163,9 @@ impl App<'_> {
                 // Показать анимацию, которую рисует эмулятор. Состояние
                 // перехода сохраняем, чтобы F1 мог вернуться к той же анимации.
                 self.flight.active = false;
+            } else if code == KeyCode::Escape {
+                self.menu = true;
+                self.menu_sel = 0;
             }
             return;
         }
@@ -190,8 +193,14 @@ impl App<'_> {
         }
         // Пока заглушка `DOCKED` на экране, остальные клавиши не должны
         // управлять скрытым нативным экраном (например, автоповтор `G` не
-        // должен закрыть карту).
+        // должен закрыть карту), кроме меню паузы.
         if self.docked.is_active() {
+            if self.menu {
+                self.menu_key(code);
+            } else if code == KeyCode::Escape && !repeat {
+                self.menu = true;
+                self.menu_sel = 0;
+            }
             return;
         }
         // F6 — основная клавиша отдельной нативной карты галактики.
@@ -336,6 +345,10 @@ impl App<'_> {
         // При открытой карте всё управление принадлежит ей; Z80 при этом
         // продолжает работать, но ввод в игру не передаётся.
         if self.hdmap.active {
+            if self.menu {
+                self.menu_key(code);
+                return;
+            }
             match code {
                 KeyCode::ArrowLeft | KeyCode::KeyN => {
                     self.hdmap.move_by(-4, 0);
@@ -397,10 +410,11 @@ impl App<'_> {
                     self.hdmap.zoom_by(-1);
                     self.sync_hdmap_target();
                 }
-                // Esc не закрывает карту: это отдельный режим, выйти из него
-                // можно только переходом на другой экран (Fn или игровая
-                // клавиша ниже).
-                KeyCode::Escape => {}
+                // Esc не закрывает карту (это отдельный режим), но открывает меню паузы.
+                KeyCode::Escape if !repeat => {
+                    self.menu = true;
+                    self.menu_sel = 0;
+                }
                 // Игровая клавиша: закрываем карту и отдаём нажатие игре,
                 // чтобы из карты сразу перейти к экранам игры (командир,
                 // станция и т.п.), не закрывая её вручную.
@@ -417,11 +431,18 @@ impl App<'_> {
         // Выход с экрана по F5/Esc запрещён; закрыть можно переключением на
         // другой экран по Fn или игровой (буквенной) клавише.
         if self.shop.active {
+            if self.menu {
+                self.menu_key(code);
+                return;
+            }
             match code {
                 KeyCode::F5 => {}
                 KeyCode::Escape if !repeat => {
                     if self.shop.mount_open() {
                         self.shop.cancel_mount();
+                    } else {
+                        self.menu = true;
+                        self.menu_sel = 0;
                     }
                 }
                 KeyCode::ArrowUp => self.shop.move_selection(-1),
@@ -486,6 +507,9 @@ impl App<'_> {
                     // Показать анимацию, которую рисует эмулятор. Состояние
                     // перехода сохраняем, чтобы F1 мог вернуться к ней.
                     self.flight.active = false;
+                } else if code == KeyCode::Escape {
+                    self.menu = true;
+                    self.menu_sel = 0;
                 }
                 return;
             }

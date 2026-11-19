@@ -225,11 +225,17 @@ impl App<'_> {
         // перекрывает нативный экран, который был открыт до неё.
         if self.docked.is_active() {
             self.docked.draw(&mut self.machine.hd, ZX_FONT);
+            if self.state.menu {
+                draw_pause_menu(&mut self.machine.hd, ZX_FONT, self.menu_sel, self.machine.intro_seen);
+            }
         } else {
             match self.state.screen {
                 Screen::GalacticMap => {
                     self.hdmap.draw(&mut self.machine.hd, ZX_FONT);
                     self.draw_danger_half();
+                    if self.state.menu {
+                        draw_pause_menu(&mut self.machine.hd, ZX_FONT, self.menu_sel, self.machine.intro_seen);
+                    }
                 }
                 Screen::Flight | Screen::Animation(_) => {
                     let g = cockpit::panel_geometry(game_w, game_h);
@@ -265,6 +271,9 @@ impl App<'_> {
                     self.shop
                         .draw(&mut self.machine.hd, ZX_FONT, &self.machine.mem);
                     self.draw_danger_half();
+                    if self.state.menu {
+                        draw_pause_menu(&mut self.machine.hd, ZX_FONT, self.menu_sel, self.machine.intro_seen);
+                    }
                 }
                 Screen::PilotStatus => {
                     self.status.open(&self.machine.mem, crate::status::KLADOV_STATUS);
@@ -291,6 +300,9 @@ impl App<'_> {
                     );
                     self.market.draw(&mut self.machine.hd, ZX_FONT);
                     self.draw_danger_half();
+                    if self.state.menu {
+                        draw_pause_menu(&mut self.machine.hd, ZX_FONT, self.menu_sel, self.machine.intro_seen);
+                    }
                 }
                 Screen::Intro => {
                     let g = cockpit::panel_geometry(game_w, game_h);
