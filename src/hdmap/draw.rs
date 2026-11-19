@@ -140,7 +140,7 @@ impl Map {
         }
         ty += line + 2;
         let help = format!(
-            "F6/Esc back   LMB: pick   D: nearest   wheel or +/-: zoom x{:.2}",
+            "Fn/keys: switch screen   LMB: pick   D: nearest   wheel or +/-: zoom x{:.2}",
             self.zoom()
         );
         f.draw_text(font, tx, ty, &help, TEXT_DIM, ts);

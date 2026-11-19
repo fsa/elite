@@ -178,10 +178,10 @@ impl App<'_> {
             return;
         }
         // F6 — основная клавиша отдельной нативной карты галактики.
+        // Повторное нажатие не закрывает карту и не сбрасывает курсор/зум:
+        // это отдельный режим, выход из него — только переход на другой экран.
         if code == KeyCode::F6 && !repeat {
-            if self.hdmap.active {
-                self.close_hdmap();
-            } else if !self.machine.intro_seen {
+            if !self.hdmap.active && !self.machine.intro_seen {
                 self.close_market();
                 self.open_hdmap();
             }
@@ -373,7 +373,10 @@ impl App<'_> {
                     self.hdmap.zoom_by(-1);
                     self.sync_hdmap_target();
                 }
-                KeyCode::Escape if !repeat => self.close_hdmap(),
+                // Esc не закрывает карту: это отдельный режим, выйти из него
+                // можно только переходом на другой экран (Fn или игровая
+                // клавиша ниже).
+                KeyCode::Escape => {}
                 // Игровая клавиша: закрываем карту и отдаём нажатие игре,
                 // чтобы из карты сразу перейти к экранам игры (командир,
                 // станция и т.п.), не закрывая её вручную.

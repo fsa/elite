@@ -258,8 +258,8 @@ use crate::world::{current_planet_color, save_layout_kladov, scene_markers};
     }
 
     /// F6 открывает отдельную нативную карту галактики: игра не встаёт, но
-    /// переходит в режим `SHORT RANGE CHART`, ввод уходит карте, повторный
-    /// F6/Esc возвращает экран игры.
+    /// переходит в режим `SHORT RANGE CHART`, ввод уходит карте. Ни повторный
+    /// F6, ни Esc не закрывают карту — выход только переходом на другой экран.
     #[test]
     fn f6_opens_and_closes_galaxy_map() {
         let opts = test_options();
@@ -296,16 +296,28 @@ use crate::world::{current_planet_color, save_layout_kladov, scene_markers};
         // Пока карта открыта, ввод не попадает в эмулятор.
         app.apply_input();
         assert_eq!(app.machine.kempston, 0, "ввод не должен уходить в игру");
-        // Повторное F6 закрывает карту и возвращает прежний экран.
+        // Повторное F6 не закрывает карту и не сбрасывает её состояние.
         app.key_event(KeyCode::F6, true, false);
-        assert!(!app.hdmap.active, "F6 не закрыл карту");
+        assert!(app.hdmap.active, "F6 не должен закрывать карту");
+        assert_eq!(app.hdmap.cursor(), (map_x, map_y));
+        assert_eq!(
+            app.machine.mem[flight::Z80_WHAT_ON_SCREEN],
+            flight::Z80_SCREEN_LOCAL_MAP
+        );
+        // Esc тоже не выход из режима карты.
+        app.key_event(KeyCode::Escape, true, false);
+        assert!(app.hdmap.active, "Esc не должен закрывать карту");
+        assert_eq!(
+            app.machine.mem[flight::Z80_WHAT_ON_SCREEN],
+            flight::Z80_SCREEN_LOCAL_MAP
+        );
+        // Переход на другой экран (F1) закрывает карту и возвращает экран игры.
+        app.key_event(KeyCode::F1, true, false);
+        assert!(!app.hdmap.active, "F1 не переключил экран");
         assert_eq!(app.machine.mem[flight::Z80_WHAT_ON_SCREEN], prev_screen);
-        // Открыть заново и закрыть по Esc.
+        // После перехода F6 снова открывает карту.
         app.key_event(KeyCode::F6, true, false);
         assert!(app.hdmap.active);
-        app.key_event(KeyCode::Escape, true, false);
-        assert!(!app.hdmap.active, "Esc не закрыл карту");
-        assert_eq!(app.machine.mem[flight::Z80_WHAT_ON_SCREEN], prev_screen);
     }
 
     /// F8 включает нативный экран цен; на станции стрелки выбирают товар,
@@ -670,7 +682,13 @@ use crate::world::{current_planet_color, save_layout_kladov, scene_markers};
         app.key_event(KeyCode::F6, true, false);
         assert!(app.hdmap.active, "F6 не открыл карту поверх полёта");
         app.key_event(KeyCode::F6, true, false);
-        assert!(!app.hdmap.active, "F6 не закрыл карту");
+        assert!(app.hdmap.active, "F6 не должен закрывать карту");
+        assert!(app.flight.active, "F6 выключил полёт под картой");
+        app.key_event(KeyCode::Escape, true, false);
+        assert!(app.hdmap.active, "Esc не должен закрывать карту");
+        // F4 — переход к другому экрану (виду вправо), он закрывает карту.
+        app.key_event(KeyCode::F4, true, false);
+        assert!(!app.hdmap.active, "F4 не переключил экран");
         assert!(app.flight.active, "закрытие карты выключило полёт");
 
         // Esc — пауза, но экран остаётся выбранным; Esc снова — продолжить.
@@ -1286,7 +1304,11 @@ use crate::world::{current_planet_color, save_layout_kladov, scene_markers};
             "после старта игры F6 должен открывать карту"
         );
         app.key_event(KeyCode::F6, true, false);
-        assert!(!app.hdmap.active, "повторный F6 должен закрывать карту");
+        assert!(app.hdmap.active, "повторный F6 не должен закрывать карту");
+        app.key_event(KeyCode::Escape, true, false);
+        assert!(app.hdmap.active, "Esc не должен закрывать карту");
+        app.close_hdmap();
+        assert!(!app.hdmap.active, "подготовка: карта не закрылась");
         // F10 пуста: ни открывать карту, ни уходить в эмулятор.
         app.key_event(KeyCode::F10, true, false);
         assert!(!app.hdmap.active, "F10 не должен открывать карту");
@@ -1730,12 +1752,13 @@ use crate::world::{current_planet_color, save_layout_kladov, scene_markers};
             "автоповтор Space не должен закрывать карту"
         );
 
-        // F4 на станции: сначала клавиша L уходит игре, затем открывается
-        // нативный экран закупки. Esc/F4 его не закрывают, буквенная клавиша —
-        // закрывает и уходит в эмулятор.
+        // F4 на станции: переход на другой экран закрывает карту, затем
+        // открывается нативный экран закупки. Esc/F4 закупку не закрывают,
+        // буквенная клавиша — закрывает и уходит в эмулятор.
         app.key_event(KeyCode::Escape, true, false);
-        assert!(!app.hdmap.active);
+        assert!(app.hdmap.active, "Esc не должен закрывать карту");
         app.key_event(KeyCode::F4, true, false);
+        assert!(!app.hdmap.active, "F4 не переключил экран");
         assert!(
             !app.shop.active,
             "закупка должна открыться после кадра игры"
