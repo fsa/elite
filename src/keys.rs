@@ -118,3 +118,47 @@ pub(crate) fn kempston_bit(code: KeyCode) -> Option<u8> {
 pub(crate) fn is_game_key(code: KeyCode) -> bool {
     matrix_pos(code).is_some() || kempston_bit(code).is_some()
 }
+
+/// Клавиши станции из `docs/z80/coriolis_keys.md`, по которым нативный режим
+/// возвращает управление эмулятору и передаёт ему это нажатие.
+///
+/// `G`/`H` сюда не входят: в нативном режиме они показывают заглушку `DOCKED`
+/// и звук, не отдавая Command'ы эмулятору.
+pub(crate) fn station_handoff_key(code: KeyCode) -> bool {
+    matches!(
+        code,
+        KeyCode::Digit1
+            | KeyCode::Digit2
+            | KeyCode::Digit3
+            | KeyCode::Digit4
+            | KeyCode::KeyI
+            | KeyCode::KeyO
+            | KeyCode::KeyP
+            | KeyCode::KeyK
+            | KeyCode::KeyL
+            | KeyCode::ShiftRight
+            | KeyCode::ControlLeft
+    )
+}
+
+/// Клавиши режима паузы Кладова из `docs/z80/kladov_keys.md`.
+///
+/// В нативном режиме станции их действие ещё не реализовано, поэтому они
+/// открывают временную страницу с сообщением. Когда управление принадлежит
+/// эмулятору, эти клавиши работают по-родному и сюда не попадают. `L` тоже
+/// перечислена в документе, но в нативном режиме её раньше перехватывает
+/// [`station_handoff_key`] как команду показа information о капитане.
+pub(crate) fn pause_settings_key(code: KeyCode) -> bool {
+    matches!(
+        code,
+        KeyCode::KeyY
+            | KeyCode::KeyB
+            | KeyCode::KeyC
+            | KeyCode::KeyL
+            | KeyCode::KeyR
+            | KeyCode::KeyF
+            | KeyCode::KeyQ
+            | KeyCode::KeyS
+            | KeyCode::Space
+    )
+}

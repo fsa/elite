@@ -24,11 +24,17 @@ impl App<'_> {
     }
 
     /// Синтезировать и отдать звук последнего кадра (эмулятор + эффекты).
-    fn play_frame_audio(&mut self) {
+    ///
+    /// Когда эмулятор заморожен на станции, бипер не обновляется: звучит
+    /// только нативный эффект (например гудок `DOCKED`).
+    fn play_frame_audio(&mut self, run_emulator: bool) {
         if self.audio.is_none() && self.wav_samples.is_none() && !self.sfx.is_playing() {
             return;
         }
-        self.machine.render_audio(&mut self.audio_buf);
+        self.audio_buf.clear();
+        if run_emulator {
+            self.machine.render_audio(&mut self.audio_buf);
+        }
         self.sfx.mix(&mut self.audio_buf);
         if let Some(audio) = &self.audio {
             audio.push(&self.audio_buf);
@@ -90,6 +96,10 @@ impl App<'_> {
             self.close_intro_screens();
         }
 
+        // Станция по умолчанию принадлежит нативным экранам: как только игра
+        // пристыковалась и управление не отдано эмулятору явно, замораживаем
+        // Z80 и открываем нативную страницу капитана.
+        self.maybe_enter_native_station();
         // Текущее состояние до шага кадра — от него зависит ввод, эмуляция
         // и перехват сообщений.
         self.sync_state();
@@ -103,7 +113,9 @@ impl App<'_> {
         let size = window.inner_size();
         let layout = self.zx_layout(size.width, size.height);
         let (game_w, game_h) = self.game_size(size.width, size.height);
-        let is_alt_screen = self.docked.is_active()
+        let is_alt_screen = self.station_native
+            || self.pause_stub
+            || self.docked.is_active()
             || !matches!(self.state.screen, Screen::Emulator(_));
 
         // HD-слой нативного рендера очищается каждый кадр.
@@ -115,17 +127,25 @@ impl App<'_> {
             self.machine.hd.clear(display::TRANSPARENT);
         }
 
-        // Эмуляция и ввод зависят от текущего экрана. Пока показана заглушка
-        // `DOCKED`, эмулятор продолжает работать, но не получает нажатий
-        // клавиш, а нативные экраны под заглушкой не меняются.
-        if self.docked.is_active() {
+        // Эмуляция и ввод зависят от текущего экрана. В нативном режиме
+        // станции эмулятор стоит на экране капитана и больше не исполняется:
+        // все данные уже доступны нативным экранам, ввод в Z80 не уходит.
+        if self.station_native {
+            self.machine.release_all_keys();
+            self.machine.release_joystick();
+            self.pending_key = None;
+            self.play_frame_audio(false);
+        // Пока показана заглушка `DOCKED`, эмулятор продолжает работать, но
+        // не получает нажатий клавиш, а нативные экраны под заглушкой не
+        // меняются.
+        } else if self.docked.is_active() {
             self.machine.release_all_keys();
             self.machine.release_joystick();
             self.pending_key = None;
             if !self.state.menu {
                 let frames = self.emulation_frames();
                 self.machine.run_frames(frames);
-                self.play_frame_audio();
+                self.play_frame_audio(true);
             }
         } else {
             match self.state.screen {
@@ -139,7 +159,7 @@ impl App<'_> {
                         self.open_pending_sysinfo();
                         self.open_pending_market();
                         self.sync_flight_after_frames(frames);
-                        self.play_frame_audio();
+                        self.play_frame_audio(true);
                     }
                 }
                 Screen::EquipShop => {
@@ -161,7 +181,7 @@ impl App<'_> {
                             self.machine.save_requested = false;
                             storage::do_save(&mut self.machine, self.opts, &mut self.last_path);
                         }
-                        self.play_frame_audio();
+                        self.play_frame_audio(true);
                     } else {
                         self.machine.release_all_keys();
                         self.machine.release_joystick();
@@ -173,7 +193,7 @@ impl App<'_> {
                         self.forward_input();
                         self.machine.run_frames(frames);
                         self.sync_flight_after_frames(frames);
-                        self.play_frame_audio();
+                        self.play_frame_audio(true);
                     } else {
                         self.machine.release_all_keys();
                         self.machine.release_joystick();
@@ -209,7 +229,7 @@ impl App<'_> {
                             self.machine.save_requested = false;
                             storage::do_save(&mut self.machine, self.opts, &mut self.last_path);
                         }
-                        self.play_frame_audio();
+                        self.play_frame_audio(true);
                     }
                 }
             }
@@ -219,7 +239,9 @@ impl App<'_> {
         self.mouse_wheel_down = false;
         self.machine.render_rgba(&mut self.buf);
 
-        // Состояние могло измениться за шаг кадра (открытие/закрытие экранов).
+        // Состояние могло измениться за шаг кадра (открытие/закрытие экранов,
+        // новая стыковка). После него снова проверяем станционный режим.
+        self.maybe_enter_native_station();
         self.sync_state();
 
         // Отрисовка зависит от текущего экрана. Заглушка `DOCKED` временно
@@ -329,6 +351,10 @@ impl App<'_> {
                 }
             }
         }
+        // Временная страница клавиш паузы перекрывает нативный экран станции.
+        if !self.docked.is_active() && self.pause_stub {
+            crate::ui::message::draw(&mut self.machine.hd, ZX_FONT, "AVAILABLE LATER");
+        }
 
         self.present(&window, &layout);
     }
@@ -361,7 +387,9 @@ impl App<'_> {
         // показывается вместо ZX-кадра; сырой эмуляторный экран — с наложением
         // HD-слоя поверх масштабированного ZX-кадра.
         match self.state.screen {
-            Screen::Emulator(_) if !self.docked.is_active() => {
+            Screen::Emulator(_)
+                if !self.station_native && !self.pause_stub && !self.docked.is_active() =>
+            {
                 blit_zx_frame(src, &mut out, ow, oh, l);
                 self.machine.hd.composite_onto(
                     &mut out,

@@ -96,6 +96,17 @@ struct App<'a> {
     /// После кадра эмулятора открыть нативный экран информации о планете:
     /// сначала игра должна обработать `P` и заполнить поля планеты.
     pending_sysinfo: bool,
+    /// Нативный режим станции: эмулятор заморожен, ввод и данные полностью
+    /// принадлежат нативным экранам. Этот режим включается сразу после
+    /// старта игры и после возврата на станцию, пока игрок сам не передаст
+    /// управление эмулятору клавишей из `coriolis_keys.md`.
+    station_native: bool,
+    /// Признак того, что на станции управление передано эмулятору. Держится до
+    /// вылета/новой стыковки или до открытия нативного экрана по `F`-клавише.
+    station_emulator: bool,
+    /// Временная страница для клавиш паузы Кладова (`kladov_keys.md`), чьи
+    /// настройки в нативном режиме ещё не реализованы.
+    pause_stub: bool,
     /// Экран-заглушка `DOCKED`, который на станции заменяет ответ эмулятора
     /// на `G`/`H` и показывается примерно секунду.
     docked: docked::Docked,
@@ -189,6 +200,9 @@ impl<'a> App<'a> {
             pending_status: false,
             sysinfo: sysinfo::SysInfo::new(),
             pending_sysinfo: false,
+            station_native: false,
+            station_emulator: false,
+            pause_stub: false,
             docked: docked::Docked::new(),
             market: market::Market::new(),
             pending_market: false,
@@ -224,6 +238,7 @@ impl<'a> App<'a> {
             docked_consumed_h: false,
             next_frame: Instant::now(),
         };
+        app.maybe_enter_native_station();
         app.sync_state();
         app
     }

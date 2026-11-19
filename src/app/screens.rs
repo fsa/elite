@@ -1,5 +1,7 @@
 //! Открытие и закрытие нативных экранов (полёт, карта, закупка).
 
+use winit::keyboard::KeyCode;
+
 use super::App;
 use crate::equip;
 use crate::flight;
@@ -11,6 +13,89 @@ use crate::sysinfo;
 use crate::world;
 
 impl App<'_> {
+    /// Закрыть все нативные экраны и отложенные переходы. Используется при
+    /// передаче управления эмулятору и при входе в нативный режим станции.
+    fn close_all_native(&mut self) {
+        self.close_hdmap();
+        self.shop.close();
+        self.close_status();
+        self.close_sysinfo();
+        self.close_market();
+        self.flight.close();
+        self.docked.close();
+        self.pause_stub = false;
+        self.pending_status = false;
+        self.pending_sysinfo = false;
+        self.pending_market = false;
+        self.pending_shop = false;
+        self.pending_flight = None;
+        self.pending_launch = false;
+        self.pending_key = None;
+    }
+
+    /// Запомнить, что открытый нативный экран на станции забирает управление у
+    /// эмулятора. В полёте этот вызов ничего не меняет.
+    fn native_screen_opened(&mut self) {
+        if !self.machine.intro_seen
+            && !self.flight.active
+            && flight::z80_is_docked(&self.machine.mem)
+        {
+            self.station_native = true;
+            self.station_emulator = false;
+        }
+    }
+
+    /// Войти в нативный режим станции: эмулятор остаётся на экране капитана и
+    /// больше не исполняется, пока управление не вернут ему клавишей из
+    /// `coriolis_keys.md`.
+    pub(super) fn enter_native_station(&mut self) {
+        if self.machine.intro_seen
+            || !flight::z80_is_docked(&self.machine.mem)
+            || flight::z80_in_transition(&self.machine.mem)
+        {
+            return;
+        }
+        self.close_all_native();
+        self.station_native = true;
+        self.station_emulator = false;
+        self.menu = false;
+        if !self.status.active {
+            self.status.open(&self.machine.mem, status::KLADOV_STATUS);
+        }
+    }
+
+    /// Включить нативный режим станции, если игра оказалась пристыкованной и
+    /// управление ещё не передано эмулятору явно.
+    pub(super) fn maybe_enter_native_station(&mut self) {
+        if !flight::z80_is_docked(&self.machine.mem) {
+            self.station_native = false;
+            self.station_emulator = false;
+            return;
+        }
+        if self.machine.intro_seen || self.flight.active || self.station_native || self.station_emulator {
+            return;
+        }
+        if flight::z80_in_transition(&self.machine.mem) {
+            return;
+        }
+        self.enter_native_station();
+    }
+
+    /// Нативный экран передаёт управление эмулятору: скрываем все нативные
+    /// экраны, показываем кадр Z80 и подаём одну клавишу в матрицу.
+    pub(super) fn handoff_to_emulator(&mut self, key: KeyCode) {
+        self.close_all_native();
+        self.station_native = false;
+        self.station_emulator = true;
+        self.menu = false;
+        // Клавишу держим в pending_key только один кадр: она должна сработать
+        // один раз, даже если пользователь её ещё не отпустил.
+        if let Some((row, bit)) = crate::keys::matrix_pos(key) {
+            self.matrix[row][bit as usize] = false;
+            self.pending_key = Some((row, bit));
+        }
+    }
+
     /// Открыть нативную карту галактики и перевести игру в режим
     /// `SHORT RANGE CHART`: Z80 продолжает работать, но считает, что на
     /// экране локальная карта.
@@ -35,6 +120,7 @@ impl App<'_> {
         self.pending_key = None;
         self.pending_flight = None;
         self.pending_launch = false;
+        self.native_screen_opened();
     }
 
     /// Закрыть нативную карту. Прежний экран восстанавливается только если
@@ -68,7 +154,7 @@ impl App<'_> {
     }
 
     /// Открыть нативный экран закупки поверх текущего состояния игры.
-    fn open_shop(&mut self) {
+    pub(super) fn open_shop(&mut self) {
         self.shop.open(&self.machine.mem, equip::KLADOV_SHOP);
         if let Some(w) = &self.window {
             let size = w.inner_size();
@@ -85,6 +171,7 @@ impl App<'_> {
         self.pending_key = None;
         self.pending_flight = None;
         self.pending_launch = false;
+        self.native_screen_opened();
     }
 
     /// Открыть закупку, отложенную до конца кадра (см. `pending_shop`).
@@ -119,6 +206,7 @@ impl App<'_> {
         self.pending_shop = false;
         self.pending_flight = None;
         self.pending_launch = false;
+        self.native_screen_opened();
     }
 
     /// Закрыть нативные экраны, которые не показываются на заставке.
@@ -227,6 +315,7 @@ impl App<'_> {
         let name = self.state.planet.clone();
         self.sysinfo
             .open(&self.machine.mem, sysinfo::KLADOV_SYSINFO, &name);
+        self.native_screen_opened();
     }
 
     /// Выключить нативную отрисовку экрана информации о планете. Экранная
@@ -237,21 +326,15 @@ impl App<'_> {
         self.pending_key = None;
     }
 
-    /// Показан ли сейчас нативный экран вместо экрана, который рисует
-    /// эмулятор.
-    pub(super) fn native_screen_active(&self) -> bool {
-        self.hdmap.active
-            || self.shop.active
-            || self.status.active
-            || self.sysinfo.active
-            || self.market.native
-            || self.flight.active
-    }
-
     /// Следить за экранными режимами Z80 под нативными экранами без
     /// собственного интерактива (F7/F8/F9). Когда оригинал уходит с экрана,
     /// нативная надстройка закрывается; пока режим тот же — остаётся.
     pub(super) fn follow_native_screens(&mut self) {
+        // В нативном режиме станции эмулятор стоит на месте, поэтому его
+        // экранная переменная не является признаком закрытия нативного вида.
+        if self.station_native {
+            return;
+        }
         let screen = self.machine.mem[flight::Z80_WHAT_ON_SCREEN];
         if self.status.active
             && !self.pending_status
@@ -295,6 +378,7 @@ impl App<'_> {
         self.pending_shop = false;
         self.pending_flight = None;
         self.pending_launch = false;
+        self.native_screen_opened();
     }
 
     /// Выключить нативный показ экрана цен.

@@ -7,20 +7,20 @@ use super::App;
 use crate::flight;
 use crate::keys::{
     digit_of, function_game_key, function_view, is_game_key, kempston_bit, matrix_pos,
+    pause_settings_key, station_handoff_key,
 };
 use crate::native;
 use crate::storage;
 use crate::world;
 
 impl App<'_> {
-    /// Нажатие `F1`-`F4`/`F5`: отдать игре соответствующую оригинальную
-    /// клавишу или переключить нативный экран.
+    /// Нажатие `F1`-`F9`: отдать игре соответствующую оригинальную клавишу
+    /// или переключить нативный экран.
     ///
-    /// На станции доступны только `F1` (вылет) и `F5` (оборудование): `F1`
-    /// сразу открывает нативный вид и запускает анимацию вылета. `F2`-`F4`
-    /// пустые — их цифры увели бы эмулятор в режимы покупки/продажи и закупки
-    /// оригинала. В прыжке и стыковке уже открытый вид сам показывает переход,
-    /// а закрытый — открывается с нативной анимацией.
+    /// На станции `F1` — вылет, `F5` — оборудование, `F6` — карта, `F7` —
+    /// планеты, `F8` — цены, `F9` — статус. `F2`-`F4` пустые: их цифры увели бы
+    /// эмулятор в несовместимые с нативным режимом экраны оригинала.
+    /// `F5`-`F9` возвращают управление из эмулятора на нативный экран.
     fn function_key(&mut self, code: KeyCode) {
         // F5 — нативная закупка оборудования на станции. В полёте и в других
         // состояниях отдельного действия нет.
@@ -34,17 +34,15 @@ impl App<'_> {
             self.pending_status = false;
             self.pending_sysinfo = false;
             self.menu = false;
-            self.pending_shop = docked;
+            self.pending_shop = false;
             self.pending_flight = None;
             self.pending_launch = false;
-            // Для закупки эмулятору передаём `L` (режим информации о пилоте),
-            // а не `4`: экран 4 в оригинале ждёт номер товара и мешает
-            // нативному экрану, а экран `L` пассивен.
-            self.pending_key = if docked {
-                matrix_pos(KeyCode::KeyL)
-            } else {
-                None
-            };
+            self.pending_key = None;
+            if docked && !self.machine.intro_seen {
+                // На станции закупка полностью нативная: эмулятору не нужно
+                // передавать `L` и ждать кадр. Открытие само заберёт управление.
+                self.open_shop();
+            }
             return;
         }
 
@@ -81,6 +79,12 @@ impl App<'_> {
         if docked {
             // На станции из F1-F4 доступен только `F1` (вылет): включает
             // нативный вид сразу с анимацией вылета. Закупка вынесена на `F5`.
+            if code == KeyCode::F1 {
+                // Вылет возвращает управление эмулятору: он должен получить
+                // клавишу `1`, иначе Z80 останется замороженным на станции.
+                self.station_native = false;
+                self.station_emulator = true;
+            }
             if code == KeyCode::F1 && in_cockpit {
                 // Снимок/переход, где станция уже отдала полётный экран.
                 self.show_flight(dir);
@@ -122,6 +126,9 @@ impl App<'_> {
         if let Some(bit) = kempston_bit(code) {
             self.kempston[bit as usize] = pressed;
         }
+        // Состояние станции могло измениться между кадрами (стыковка, вылет,
+        // загрузка). Синхронизируем режим до обработки нажатия.
+        self.maybe_enter_native_station();
         // G/H на станции обрабатываются как одноразовое действие: после показа
         // `DOCKED` удержание не должно уходить в эмулятор даже после закрытия заглушки.
         if matches!(code, KeyCode::KeyG | KeyCode::KeyH) {
@@ -159,6 +166,11 @@ impl App<'_> {
         // завершаем явно, чтобы она не задела другие режимы).
         if code == KeyCode::F10 {
             return;
+        }
+        // Временная страница клавиш паузы закрывается следующим нажатием;
+        // само нажатие при этом продолжает обрабатываться обычным порядком.
+        if self.pause_stub && !repeat {
+            self.pause_stub = false;
         }
 
         // В режиме анимации (вылет, гиперпереход, стыковка) переключение
@@ -215,9 +227,7 @@ impl App<'_> {
         if !repeat
             && matches!(code, KeyCode::KeyG | KeyCode::KeyH)
             && !self.menu
-            && !self.machine.intro_seen
-            && flight::z80_is_docked(&self.machine.mem)
-            && self.native_screen_active()
+            && self.station_native
         {
             self.docked.show();
             self.sfx.play(crate::sfx::Sfx::DockedBeep);
@@ -231,6 +241,26 @@ impl App<'_> {
                 self.matrix[row][bit as usize] = false;
             }
             return;
+        }
+        // Клавиши станции из `coriolis_keys.md` возвращают управление
+        // эмулятору. Нативный экран показывает его кадр и передаёт одно
+        // нажатие; дальше игра работает сама. `G`/`H` обработаны выше и сюда
+        // не попадают. Цифры 1-3 в модальном окне крепления лазера остаются
+        // управлением самого экрана закупки.
+        if self.station_native && !self.menu && !repeat && station_handoff_key(code) {
+            let mount_digit = self.shop.mount_open()
+                && matches!(code, KeyCode::Digit1 | KeyCode::Digit2 | KeyCode::Digit3);
+            if !mount_digit {
+                // `Left Ctrl` в оригинале соответствует CAPS SHIFT — это
+                // клавиша паузы/дополнительных функций (матрица 0,0).
+                let key = if code == KeyCode::ControlLeft {
+                    KeyCode::ShiftLeft
+                } else {
+                    code
+                };
+                self.handoff_to_emulator(key);
+                return;
+            }
         }
         // F6 — основная клавиша отдельной нативной карты галактики.
         // Повторное нажатие не закрывает карту и не сбрасывает курсор/зум:
@@ -249,11 +279,13 @@ impl App<'_> {
             return;
         }
         // F7 — нативная альтернатива экрану информации о планете (`P`).
-        // Эмулятору отдаём `P`, а нативный экран включаем после кадра, когда
-        // оригинал обработает команду и заполнит поля планеты. Если оригинал
-        // уже на этом экране, достаточно включить нативную отрисовку.
+        // Данные планеты уже есть в памяти игры, поэтому экран открывается
+        // сразу, без передачи `P` в эмулятор и без ожидания кадра.
         if code == KeyCode::F7 && !repeat {
-            if !self.sysinfo.active && !self.menu && !self.machine.intro_seen {
+            if !self.menu && !self.machine.intro_seen {
+                let docked = flight::z80_is_docked(&self.machine.mem);
+                let on_planet = self.machine.mem[flight::Z80_WHAT_ON_SCREEN]
+                    == flight::Z80_SCREEN_INFO_PLANET;
                 self.close_hdmap();
                 self.shop.close();
                 self.close_status();
@@ -264,23 +296,25 @@ impl App<'_> {
                 self.pending_launch = false;
                 self.pending_status = false;
                 self.pending_sysinfo = false;
-                if self.machine.mem[flight::Z80_WHAT_ON_SCREEN] == flight::Z80_SCREEN_INFO_PLANET {
-                    self.open_sysinfo();
-                } else {
-                    self.open_sysinfo();
+                self.pending_key = None;
+                self.open_sysinfo();
+                // На станции данные планеты уже в памяти. В полёте оригинал
+                // должен сам перейти на свой экран `P`, иначе нативная
+                // надстройка закроется на следующем кадре.
+                if !docked && !on_planet {
                     self.pending_sysinfo = true;
                     self.pending_key = matrix_pos(KeyCode::KeyP);
                 }
-                self.menu = false;
             }
             return;
         }
-        // F9 — нативная альтернатива экрану капитана (`L`). Эмулятору при
-        // необходимости отдаём `L`, а нативный экран включаем после кадра,
-        // когда оригинал перейдёт в режим показа капитана. Если оригинал уже
-        // на этом экране, достаточно включить нативную отрисовку.
+        // F9 — нативная альтернатива экрану капитана (`L`). Открывается
+        // сразу по живым данным блока командира, без нажатия `L` в эмулятор.
         if code == KeyCode::F9 && !repeat {
-            if !self.status.active && !self.menu && !self.machine.intro_seen {
+            if !self.menu && !self.machine.intro_seen {
+                let docked = flight::z80_is_docked(&self.machine.mem);
+                let on_status = self.machine.mem[flight::Z80_WHAT_ON_SCREEN]
+                    == flight::Z80_SCREEN_PILOT_INFO;
                 self.close_hdmap();
                 self.shop.close();
                 self.close_sysinfo();
@@ -291,27 +325,27 @@ impl App<'_> {
                 self.pending_launch = false;
                 self.pending_status = false;
                 self.pending_sysinfo = false;
-                if self.machine.mem[flight::Z80_WHAT_ON_SCREEN] == flight::Z80_SCREEN_PILOT_INFO {
-                    self.open_status();
-                } else {
-                    self.open_status();
+                self.pending_key = None;
+                self.open_status();
+                // В полёте экран капитана — нативная отрисовка родного
+                // экрана `L`, поэтому эмулятор должен на него перейти.
+                if !docked && !on_status {
                     self.pending_status = true;
                     self.pending_key = matrix_pos(KeyCode::KeyL);
                 }
-                self.menu = false;
             }
             return;
         }
         // F8 — нативный показ экрана цен (альтернатива `K`). Смотреть цены
-        // можно и в полёте, поэтому стойку не требуем. Эмулятору при
-        // необходимости отдаём `K`, а нативный экран включаем после кадра,
-        // когда оригинал перейдёт в режим рынка. Если оригинал уже на этом
-        // экране, достаточно включить нативную отрисовку. Повторное нажатие
-        // не выключает показ. Работает и при открытых нативных экранах.
+        // можно и в полёте, поэтому стойку не требуем. Экран открывается
+        // сразу по живым таблицам цен, без передачи `K` в эмулятор.
         // Торговля отдельно разрешена только на станции (см. блок стрелок
         // ниже и `Market::trade`).
         if code == KeyCode::F8 && !repeat {
             if !self.menu && !self.machine.intro_seen {
+                let docked = flight::z80_is_docked(&self.machine.mem);
+                let on_market = self.machine.mem[flight::Z80_WHAT_ON_SCREEN]
+                    == flight::Z80_SCREEN_MARKET;
                 self.close_hdmap();
                 self.shop.close();
                 self.close_status();
@@ -323,10 +357,11 @@ impl App<'_> {
                 self.pending_market = false;
                 self.pending_flight = None;
                 self.pending_launch = false;
-                if self.machine.mem[flight::Z80_WHAT_ON_SCREEN] == flight::Z80_SCREEN_MARKET {
-                    self.open_market();
-                } else {
-                    self.open_market();
+                self.pending_key = None;
+                self.open_market();
+                // В полёте цены остаются нативной отрисовкой родного экрана
+                // `K`; на станции эмулятор не трогаем.
+                if !docked && !on_market {
                     self.pending_market = true;
                     self.pending_key = matrix_pos(KeyCode::KeyK);
                 }
@@ -446,11 +481,17 @@ impl App<'_> {
                 }
                 // Игровая клавиша: закрываем карту и отдаём нажатие игре,
                 // чтобы из карты сразу перейти к экранам игры (командир,
-                // станция и т.п.), не закрывая её вручную.
+                // станция и т.п.), не закрывая её вручную. В нативном режиме
+                // станции карта сама обрабатывает своё управление, а всё
+                // остальное игре не передаётся.
                 _ => {
                     if is_game_key(code) {
-                        self.close_hdmap();
-                        self.pending_key = matrix_pos(code);
+                        if self.station_native {
+                            self.release_pressed(code);
+                        } else {
+                            self.close_hdmap();
+                            self.pending_key = matrix_pos(code);
+                        }
                     }
                 }
             }
@@ -492,11 +533,31 @@ impl App<'_> {
                     } else if is_game_key(code) {
                         // Игровая (буквенная) клавиша: закрываем закупку и
                         // отдаём нажатие игре (переход на экран эмулятора).
-                        self.shop.close();
-                        self.pending_key = matrix_pos(code);
+                        // В нативном режиме станции не-списочные клавиши
+                        // закупку не закрывают и в эмулятор не уходят.
+                        if self.station_native {
+                            self.release_pressed(code);
+                        } else {
+                            self.shop.close();
+                            self.pending_key = matrix_pos(code);
+                        }
                     }
                 }
             }
+            return;
+        }
+        // Клавиши паузы Кладова в нативном режиме станции пока не делают
+        // ничего: вместо их родного действия показывается временная страница.
+        // В эмуляторе (после handoff) они работают по-прежнему. `Ctrl+Q`
+        // остаётся глобальной командой выхода.
+        if self.station_native
+            && !self.menu
+            && !repeat
+            && pause_settings_key(code)
+            && !(code == KeyCode::KeyQ && self.ctrl)
+        {
+            self.pause_stub = true;
+            self.release_pressed(code);
             return;
         }
         // Нативные экраны капитана (F9) и информации о планете (F7) не
@@ -610,6 +671,11 @@ impl App<'_> {
             }
             _ => {}
         }
+        // На станции в нативном режиме любая неиспользованная клавиша
+        // пропадает: эмулятор заморожен и не должен получать ввод.
+        if self.station_native && !self.menu {
+            self.release_pressed(code);
+        }
     }
 
     /// Обработка клавиш в меню паузы (Esc). Пункты: 0 — продолжить,
@@ -644,6 +710,18 @@ impl App<'_> {
         }
     }
 
+    /// Снять нажатие из матрицы и джойстика: клавиша не должна уйти в
+    /// эмулятор, если её обработал нативный экран.
+    fn release_pressed(&mut self, code: KeyCode) {
+        if let Some((row, bit)) = matrix_pos(code) {
+            self.matrix[row][bit as usize] = false;
+        }
+        if let Some(bit) = kempston_bit(code) {
+            self.kempston[bit as usize] = false;
+        }
+        self.pending_key = None;
+    }
+
     /// Переключить полноэкранный (borderless) режим.
     fn toggle_fullscreen(&mut self) {
         let Some(window) = &self.window else {
@@ -658,6 +736,12 @@ impl App<'_> {
 
     /// Перенести состояние клавиатуры и джойстика в эмулятор.
     pub(super) fn apply_input(&mut self) {
+        if self.station_native {
+            self.machine.release_all_keys();
+            self.machine.release_joystick();
+            self.pending_key = None;
+            return;
+        }
         if self.menu || self.hdmap.active || self.shop.active {
             self.machine.release_all_keys();
             self.machine.release_joystick();
