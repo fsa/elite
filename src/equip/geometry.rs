@@ -3,7 +3,7 @@
 use crate::cockpit;
 
 use super::Shop;
-use super::items::{LIST_CHARS, NAME_CHARS, PANEL_MIN_CHARS, PRICE_CHARS};
+use super::items::{LIST_CHARS, NAME_CHARS, PRICE_CHARS};
 
 /// Геометрия окна для отрисовки и попадания мышью (считается из размера
 /// окна и числа строк списка).
@@ -83,11 +83,9 @@ impl Shop {
     }
 
     pub(super) fn geo(&self) -> Geo {
-        // Масштаб подбирается и по высоте (строки), и по ширине: список
-        // занимает ровно свои колонки, всё остальное — панель корабля.
-        let ts_h = (self.win_h as i32 / 300).max(1);
-        let ts_w = (self.win_w as i32 / ((LIST_CHARS + PANEL_MIN_CHARS + 6) * 8)).max(1);
-        let ts = ts_h.min(ts_w) as usize;
+        // Масштаб текста — как на экранах рынка, статуса и информации, чтобы
+        // заголовок при переключении экранов оставался на месте.
+        let ts = (self.win_h as f32 / 300.0).floor().max(1.0) as usize;
         let ch = 8 * ts as i32;
         let line = ch;
         // Рамка и отступ берутся из кокпита — при переключении экранов
@@ -95,20 +93,20 @@ impl Shop {
         let margin = cockpit::panel_geometry(self.win_w, self.win_h).margin;
         let frame = cockpit::LINE.max(1);
         let x0 = margin + frame + ch;
-        // Шапка: заголовок + строка SYSTEM/TECH/CASH — внутри рамки.
-        let title_ts = ts + 1;
-        let title_y = margin + frame + 4 * ts as i32;
-        let info_y = title_y + 8 * title_ts as i32 + 4 * ts as i32;
-        let top = info_y + line + 8 * ts as i32;
-        // Строка помощи прижимается к нижней линии рамки.
-        let help_y = self.win_h as i32 - margin - frame - line - 2 * ts as i32;
+        // Шапка: заголовок + строка SYSTEM/TECH/CASH — как на других нативных
+        // экранах (масштаб и отступы общие).
+        let title_y = margin + frame + line;
+        let info_y = title_y + 2 * line;
+        let top = info_y + line;
+        // Строка помощи — на том же уровне, что и в экране маркета.
+        let help_y = self.win_h as i32 - margin - frame - 3 * line;
         let content_bottom = help_y - 4 * ts as i32;
         // Слева — только колонки списка, остальная ширина уходит панели.
         let list_w = (LIST_CHARS * ch).max(0) as usize;
         let panel_x = x0 + list_w as i32 + 2 * ch;
         let panel_w = (self.win_w as i32 - panel_x - x0).max(0) as usize;
-        let list_y = top + 2 * ts as i32;
-        let row_h = line * 5 / 2;
+        let list_y = info_y + 2 * line;
+        let row_h = line + line / 2;
         Geo {
             ts,
             ch,

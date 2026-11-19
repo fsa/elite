@@ -89,7 +89,7 @@ impl Shop {
     pub(super) fn pay(&mut self, mem: &mut [u8], price: u32) -> bool {
         if self.cash < price {
             // Оригинал: «CASH?» (токен 0xC5) плюс откат снимка `sub_E85D`.
-            self.set_toast("NOT ENOUGH CASH");
+            self.set_toast("Not enough cash");
             return false;
         }
         self.cash -= price;

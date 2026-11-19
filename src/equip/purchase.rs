@@ -9,7 +9,6 @@ use super::layout::{OFF_FREE_CARGO, OFF_FUEL, OFF_LASERS, OFF_MINERAL, OFF_MISSI
 impl Shop {
     /// Сдвинуть выбор клавиатурой (стрелки вверх/вниз).
     pub fn move_selection(&mut self, delta: i32) {
-        self.pending = None;
         if self.rows.is_empty() {
             return;
         }
@@ -18,41 +17,21 @@ impl Shop {
         self.cursor = cur.clamp(0, n - 1) as usize;
     }
 
-    /// Цифра номера товара (как в `sub_E776`: первая `1..9`, вторая `0..9`,
-    /// Enter подтверждает однозначный номер). В модалке крепления цифра `0..3`
-    /// выбирает позицию — как в оригинале (`cp 30h; cp 34h`).
+    /// Цифра в модалке крепления лазера (`0..3`) выбирает позицию — как в
+    /// оригинале (`cp 30h; cp 34h`). Покупка по номеру товара отключена.
     pub fn input_digit(&mut self, mem: &mut [u8], d: u8) {
-        if self.mount.is_some() {
-            if d < 4 {
-                self.choose_mount(mem, d);
-            }
-            return;
-        }
-        match self.pending.take() {
-            None => {
-                if (1..=9).contains(&d) {
-                    self.pending = Some(d);
-                }
-            }
-            Some(first) => {
-                let number = first * 10 + d;
-                self.buy_number(mem, number);
-            }
+        if self.mount.is_some() && d < 4 {
+            self.choose_mount(mem, d);
         }
     }
 
-    /// Enter: подтвердить набранный номер либо купить выбранную строку.
+    /// Enter: купить выбранную строку.
     pub fn confirm(&mut self, mem: &mut [u8]) {
         if self.mount.is_some() {
             return;
         }
-        match self.pending.take() {
-            Some(first) => self.buy_number(mem, first),
-            None => {
-                if let Some(&number) = self.rows.get(self.cursor) {
-                    self.buy_number(mem, number);
-                }
-            }
+        if let Some(&number) = self.rows.get(self.cursor) {
+            self.buy_number(mem, number);
         }
     }
 
@@ -84,12 +63,12 @@ impl Shop {
         }
         if self.in_flight {
             // Оригинал сюда вообще не попадает: `Cmd_4` вызывается только с
-            // экрана станции. Для F4-варианта — запрет с подсказкой.
-            self.set_toast("DOCK AT A STATION TO BUY EQUIPMENT");
+            // экрана станции. Для нативного экрана — запрет с подсказкой.
+            self.set_toast("Dock at a station to buy equipment");
             return;
         }
         if !(1..=MAX_ITEMS as u8).contains(&number) || !self.rows.contains(&number) {
-            self.set_toast("NO SUCH ITEM");
+            self.set_toast("No such item");
             return;
         }
         let item = &ITEMS[(number - 1) as usize];
@@ -106,14 +85,14 @@ impl Shop {
                 self.fuel = FUEL_MAX;
                 mem[self.pilot() + OFF_FUEL] = FUEL_MAX;
                 self.write_fuel_derived(mem);
-                self.set_toast("FUEL TANK FULL");
+                self.set_toast("Fuel tank full");
             }
             Kind::Missile => {
                 // `loc_EA3B`: `cp 4; jp nc, <ALL PRESENT>; inc a`.
                 if self.missiles >= MISSILES_MAX {
                     // Оригинал: «ALL PRESENT» (токен 0x7C).
                     self.set_toast(format!(
-                        "MISSILES FULL ({}/{})",
+                        "Missiles full ({}/{})",
                         self.missiles, MISSILES_MAX
                     ));
                     return;
@@ -126,7 +105,7 @@ impl Shop {
             }
             Kind::Bay => {
                 if self.fitted[number as usize] {
-                    self.set_toast(format!("{} ALREADY FITTED", item.name));
+                    self.set_toast(format!("{} already fitted", item.name));
                     return;
                 }
                 if !self.pay(mem, price) {
@@ -144,7 +123,7 @@ impl Shop {
             }
             Kind::Flag => {
                 if self.fitted[number as usize] {
-                    self.set_toast(format!("{} ALREADY FITTED", item.name));
+                    self.set_toast(format!("{} already fitted", item.name));
                     return;
                 }
                 if !self.pay(mem, price) {
@@ -157,7 +136,7 @@ impl Shop {
                 // списывает сразу, но при неверной клавише откатывает снимок
                 // `sub_E85D` — итог тот же).
                 if self.cash < price {
-                    self.set_toast("NOT ENOUGH CASH");
+                    self.set_toast("Not enough cash");
                     return;
                 }
                 self.mount = Some(number);

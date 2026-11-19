@@ -15,12 +15,10 @@ pub(super) const BG: u32 = 0xFF00_0000;
 pub(super) const FRAME: u32 = FRAME_COLOR;
 pub(super) const TEXT: u32 = FRAME_COLOR;
 pub(super) const LABEL: u32 = 0xFF00_D7D7;
-pub(super) const LIST_BG: u32 = BG;
-pub(super) const PANEL_BG: u32 = BG;
 pub(super) const BORDER: u32 = FRAME;
 pub(super) const TEXT_DIM: u32 = LABEL;
 pub(super) const HOVER_BG: u32 = 0xFF00_1A20;
-pub(super) const CURSOR_BG: u32 = 0xFF00_2E3C;
+pub(super) const CURSOR_BG: u32 = 0xFF00_5458;
 pub(super) const FITTED_FG: u32 = LABEL;
 pub(super) const PRICE_FG: u32 = FRAME_COLOR;
 pub(super) const WARN_BG: u32 = 0xFF30_0C08;
@@ -91,61 +89,45 @@ impl Shop {
         f.clear(BG);
 
         // ——— Шапка: заголовок и строки данных командира ———
-        // Как на экране цен: верх глифов белый, низ — голубой.
-        let title_ts = ts + 1;
+        // Как на экранах рынка и информации: верх глифов белый, низ — голубой.
         let title = "EQUIP SHIP";
-        let tw = title.len() as i32 * 8 * title_ts as i32;
+        let tw = title.len() as i32 * 8 * ts as i32;
         let tx = ((f.width as i32 - tw) / 2).max(0);
-        draw_two_tone_text(f, font, tx, g.title_y, title, TEXT, LABEL, title_ts);
+        draw_two_tone_text(f, font, tx, g.title_y, title, TEXT, LABEL, ts);
 
-        // Система и тех. уровень: название параметра голубым, двоеточие и
-        // значение — белым (как на экране информации о системе). После имени
-        // планеты всегда остаётся не меньше двух пробелов (макс. длина имени
-        // планеты — 8 символов, см. galaxy::name).
+        // Информация: название параметра голубым, двоеточие и значение белым.
+        // Между параметрами — два пробела.
         let mut x = x0;
         let draw = |f: &mut Frame, x: &mut i32, s: &str, color: u32| {
             f.draw_text(font, *x, g.info_y, s, color, ts);
             *x += s.chars().count() as i32 * ch;
         };
         draw(f, &mut x, "System", LABEL);
-        draw(
-            f,
-            &mut x,
-            &format!(": {:<8}  ", title_case(&self.system)),
-            TEXT,
-        );
+        draw(f, &mut x, &format!(": {}", title_case(&self.system)), TEXT);
+        draw(f, &mut x, "  ", TEXT);
         draw(f, &mut x, "Tech. level", LABEL);
         draw(f, &mut x, &format!(": {}", self.tech), TEXT);
-
-        let cash_s = format!("CASH {} CR", fmt_tenths(self.cash));
-        let cx = (f.width as i32 - x0 - cash_s.len() as i32 * ch).max(0);
-        f.draw_text(font, cx, g.info_y, &cash_s, PRICE_FG, ts);
+        draw(f, &mut x, "  ", TEXT);
+        draw(f, &mut x, "Cash", LABEL);
+        draw(f, &mut x, &format!(": {} Cr", fmt_tenths(self.cash)), TEXT);
 
         // ——— Список товаров ———
         let content_h = (g.content_bottom - g.list_y).max(1) as usize;
-        f.fill_rect(x0, g.list_y, g.list_w, content_h, LIST_BG);
-        f.hline(x0, g.list_y, g.list_w, BORDER);
-        f.hline(x0, g.list_y + content_h as i32 - 1, g.list_w, BORDER);
-        f.vline(x0, g.list_y, content_h, BORDER);
-        f.vline(x0 + g.list_w as i32 - 1, g.list_y, content_h, BORDER);
         f.set_clip(x0, g.list_y, g.list_w, content_h);
-        // Подсветка вставляется внутрь ячейки: иначе заливка верхней строки
-        // перекрывала бы её верхнюю линию. Отступ берём равным толщине
-        // рамки, чтобы выделение не задевало ни одну из сторон ячейки.
-        let hi_pad = g.frame.max(1);
-        let hi_x = x0 + hi_pad;
-        let hi_w = g.list_w.saturating_sub((2 * hi_pad) as usize);
-        let hi_h = (g.row_h - 2 * hi_pad).max(0) as usize;
+        let hi_x = x0;
+        let hi_w = g.list_w;
+        let sel_pad = 2 * ts as i32;
+        let sel_h = (line + 2 * sel_pad).max(1) as usize;
         for (i, &number) in self.rows.iter().enumerate() {
             let ry = g.list_y + i as i32 * g.row_h;
             let sel = i == self.cursor;
             let hov = self.hover == Some(i);
-            if sel {
-                f.fill_rect(hi_x, ry + hi_pad, hi_w, hi_h, CURSOR_BG);
-            } else if hov {
-                f.fill_rect(hi_x, ry + hi_pad, hi_w, hi_h, HOVER_BG);
-            }
             let ty = ry + (g.row_h - line) / 2;
+            if sel {
+                f.fill_rect(hi_x, ty - sel_pad, hi_w, sel_h, CURSOR_BG);
+            } else if hov {
+                f.fill_rect(hi_x, ty - sel_pad, hi_w, sel_h, HOVER_BG);
+            }
             let item = &ITEMS[(number - 1) as usize];
             // «Установлено» есть только у флаговых товаров: у лазеров свой
             // слот крепления, а байт «флага» номера лазера — чужое поле
@@ -156,11 +138,11 @@ impl Shop {
             f.draw_text(font, g.x_num, ty, &num_s, TEXT_DIM, ts);
             let name_color = if fitted { FITTED_FG } else { TEXT };
             f.draw_text(font, g.x_name, ty, item.name, name_color, ts);
-            // На месте цены у установленного товара — «FITTED» (иначе
+            // На месте цены у установленного товара — «Fitted» (иначе
             // название и цена налезали бы друг на друга на узком списке).
             // Иначе цена показывается «как в оригинале» (со сдвигом бага Elita).
             let (price_s, price_color) = if fitted {
-                ("FITTED".to_string(), FITTED_FG)
+                ("Fitted".to_string(), FITTED_FG)
             } else {
                 (
                     format!("{:>w$}", fmt_tenths(self.price_shown(mem, number)), w = g.price_w as usize),
@@ -175,30 +157,25 @@ impl Shop {
         // ——— Панель корабля справа ———
         if g.panel_w > 0 {
             let ph = (g.content_bottom - g.list_y).max(1) as usize;
-            f.fill_rect(g.panel_x, g.list_y, g.panel_w, ph, PANEL_BG);
-            f.hline(g.panel_x, g.list_y, g.panel_w, BORDER);
-            f.hline(g.panel_x, g.list_y + ph as i32 - 1, g.panel_w, BORDER);
-            f.vline(g.panel_x, g.list_y, ph, BORDER);
-            f.vline(g.panel_x + g.panel_w as i32 - 1, g.list_y, ph, BORDER);
             let px = g.panel_x + 2 * ch;
             // Ширина панели в символах (за вычетом рамки и боковых отступов).
             let pch = (g.panel_w as i32 / ch - 4).max(1) as usize;
             let step = line + 2 * ts as i32;
             let mut texts: Vec<(String, u32)> = vec![
-                ("YOUR SHIP".to_string(), TEXT),
+                ("Your ship".to_string(), TEXT),
                 (
-                    format!("{:<9}{}/{} LY", "FUEL", fmt_fuel(self.fuel), fmt_fuel(FUEL_MAX)),
+                    format!("{:<9}{}/{} LY", "Fuel", fmt_fuel(self.fuel), fmt_fuel(FUEL_MAX)),
                     TEXT_DIM,
                 ),
                 (
-                    format!("{:<9}{}/{}", "MISSILES", self.missiles, MISSILES_MAX),
+                    format!("{:<9}{}/{}", "Missiles", self.missiles, MISSILES_MAX),
                     TEXT_DIM,
                 ),
                 (
-                    format!("{:<9}{} T", "CARGO", self.free_cargo),
+                    format!("{:<9}{} T", "Cargo", self.free_cargo),
                     TEXT_DIM,
                 ),
-                ("LASERS".to_string(), TEXT),
+                ("Lasers".to_string(), TEXT),
             ];
             for (i, m) in MOUNTS.iter().enumerate() {
                 texts.push((
@@ -238,8 +215,8 @@ impl Shop {
 
         // ——— Баннер «в полёте» ———
         if self.in_flight {
-            let msg = "DOCK AT A STATION TO BUY EQUIPMENT";
-            let scale = title_ts;
+            let msg = "Dock at a station to buy equipment";
+            let scale = ts + 1;
             let mw = msg.len() as i32 * 8 * scale as i32 + 6 * ch;
             let mh = 8 * scale as i32 + 6 * ts as i32;
             let mx = ((f.width as i32 - mw) / 2).max(0);
@@ -266,17 +243,30 @@ impl Shop {
             f.draw_text(font, mx + 3 * ch, my + 2 * ts as i32, msg, WARN_FG, ts);
         }
 
-        // ——— Строка помощи ———
-        let help = if let Some(d) = self.pending {
-            format!("ITEM? {d}_    UP/DOWN SELECT  ENTER BUY")
-        } else {
-            "ENTER/CLICK BUY   UP/DOWN SELECT   1-9 ITEM NO.".to_string()
-        };
-        f.draw_text(font, x0, g.help_y, &help, TEXT_DIM, ts);
+        // ——— Строка подсказок внизу (как на экране рынка) ———
+        self.draw_status_line(f, font, &g);
 
         // Рамка рисуется последней, как на остальных нативных экранах,
         // чтобы содержимое не перекрывало её линии.
         draw_screen_frame(f, &g);
+    }
+
+    /// Нижняя строка подсказок: голубые названия, белые двоеточия и значения,
+    /// между полями — два пробела (как на экране рынка).
+    fn draw_status_line(&self, f: &mut Frame, font: &[u8], g: &Geo) {
+        let fields = [("Select", "Up/Down"), ("Buy", "Enter/Click")];
+        let ch = g.ch;
+        let mut x = g.x0;
+        for (i, (name, value)) in fields.iter().enumerate() {
+            if i > 0 {
+                x += 2 * ch;
+            }
+            f.draw_text(font, x, g.help_y, name, LABEL, g.ts);
+            let vx = x + name.chars().count() as i32 * ch;
+            let tail = format!(": {value}");
+            f.draw_text(font, vx, g.help_y, &tail, TEXT, g.ts);
+            x = vx + tail.chars().count() as i32 * ch;
+        }
     }
 
     /// Окно выбора крепления (как в оригинале: `0 FRONT .. 3 RIGHT`).
@@ -288,7 +278,7 @@ impl Shop {
         let Kind::Laser(laser) = ITEMS[(number - 1) as usize].kind else {
             return;
         };
-        let title = format!("MOUNT {} LASER WHERE?", LASER_NAMES[laser as usize]);
+        let title = format!("Mount {} laser where?", LASER_NAMES[laser as usize]);
         let mw = (44 * ch).max(0) as usize;
         let opt_h = (line + 4 * ts as i32).max(1);
         let mh = (2 * line + 4 * opt_h + line + 4 * ts as i32) as usize;
@@ -322,7 +312,7 @@ impl Shop {
             font,
             mx + 2 * ch,
             hy,
-            "0-3 SELECT   ESC CANCEL",
+            "0-3 select   Esc cancel",
             TEXT_DIM,
             ts,
         );

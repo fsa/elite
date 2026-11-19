@@ -113,7 +113,7 @@ fn buy_docking_computer_writes_flag_and_cash() {
     shop.buy_number(&mut mem, 11);
     assert_eq!(
         shop.toast_text(),
-        Some("Docking Computer ALREADY FITTED")
+        Some("Docking Computer already fitted")
     );
     assert_eq!(cash_of(&mem), before - 15000);
 }
@@ -124,7 +124,7 @@ fn missiles_full_refused_without_payment() {
     let (mut shop, mut mem) = opened();
     let before = cash_of(&mem);
     shop.buy_number(&mut mem, 2);
-    assert_eq!(shop.toast_text(), Some("MISSILES FULL (4/4)"));
+    assert_eq!(shop.toast_text(), Some("Missiles full (4/4)"));
     assert_eq!(cash_of(&mem), before, "деньги не должны списаться");
     // Товар 2 — ракета: `pilot+45+2 = pilot+47` совпадает с PilotMissiles.
     assert_eq!(mem[shop.flag_addr(2)], MISSILES_MAX, "предусловие: 4 ракеты");
@@ -147,7 +147,7 @@ fn not_enough_cash_is_refused() {
     mem[p + OFF_CASH1..p + OFF_CASH1 + 2].copy_from_slice(&500u16.to_le_bytes());
     shop.refresh(&mem);
     shop.buy_number(&mut mem, 13); // MILITARY LASER, 6000.0
-    assert_eq!(shop.toast_text(), Some("NOT ENOUGH CASH"));
+    assert_eq!(shop.toast_text(), Some("Not enough cash"));
     assert_eq!(cash_of(&mem), 500);
     assert_eq!(mem[shop.flag_addr(13)], 0, "лазер не должен записаться");
 }
@@ -171,7 +171,7 @@ fn fuel_purchase_refills_and_zeroes_price() {
         "списана динамическая цена 1.6 CR"
     );
     assert_eq!(mem[KLADOV_SHOP.fuel_derived as usize], 2 * 70 + 70 / 4);
-    assert_eq!(shop.toast_text(), Some("FUEL TANK FULL"));
+    assert_eq!(shop.toast_text(), Some("Fuel tank full"));
 }
 
 /// Лазер: крепление выбирается после покупки, старый лазер снимается и
@@ -224,7 +224,7 @@ fn in_flight_blocks_purchases() {
     assert!(shop.in_flight);
     assert_eq!(
         shop.toast_text(),
-        Some("DOCK AT A STATION TO BUY EQUIPMENT")
+        Some("Dock at a station to buy equipment")
     );
     assert_eq!(cash_of(&mem), before);
     assert_eq!(mem[shop.flag_addr(11)], 0);
@@ -251,35 +251,33 @@ fn mouse_hover_and_click_buy_row() {
     assert_eq!(shop.hover, None);
 }
 
-/// Клавиатура: две цифры выбирают товар (как `sub_E776`), Enter —
-/// однозначный номер или выбранную строку.
+/// Клавиатура: стрелки выбирают строку, Enter покупает выбранную; в окне
+/// крепления цифра 0-3 выбирает слот (покупка по номеру товара отключена).
 #[test]
-fn digits_and_enter_buy_items() {
+fn enter_buys_selected_row_and_mount_digit_selects_slot() {
     let (mut shop, mut mem) = opened();
+    // Строка 0 = FUEL (динамическая цена 1.6 в fake mem).
     let before = cash_of(&mem);
-    // «1» + «1» = товар 11 (DOCKING COMPUTER).
-    shop.input_digit(&mut mem, 1);
-    assert_eq!(shop.pending, Some(1));
-    shop.input_digit(&mut mem, 1);
-    assert_eq!(shop.pending, None);
-    assert_eq!(cash_of(&mem), before - 15000);
-    // «3» + Enter = товар 3 (грузовой отсек) — но он уже установлен.
-    let before = cash_of(&mem);
-    shop.input_digit(&mut mem, 3);
     shop.confirm(&mut mem);
-    assert_eq!(cash_of(&mem), before);
     assert_eq!(
-        shop.toast_text(),
-        Some("Large Cargo Bay ALREADY FITTED")
+        cash_of(&mem),
+        before - 16,
+        "Enter должен купить выбранную строку"
     );
-    // Выбранная строка + Enter: строка 0 = FUEL (цена 0x10 = 1.6).
-    shop.move_selection(0);
+
+    // Товар 5 (PULSE LASER) — 5-я строка в списке 1..=13.
+    shop.move_selection(4);
+    assert_eq!(shop.cursor, 4);
+    let before = cash_of(&mem);
     shop.confirm(&mut mem);
-    assert_eq!(cash_of(&mem), before - 16);
-    // Несуществующий номер — тост, без изменений.
-    shop.input_digit(&mut mem, 1);
+    assert!(shop.mount.is_some(), "должно открыться окно крепления");
+    // Цифры вне 0-3 игнорируются, 3 выбирает RIGHT.
     shop.input_digit(&mut mem, 9);
-    assert_eq!(shop.toast_text(), Some("NO SUCH ITEM"));
+    assert!(shop.mount.is_some());
+    shop.input_digit(&mut mem, 3);
+    assert!(shop.mount.is_none());
+    assert_eq!(mem[shop.pilot() + OFF_LASERS + 3], 1);
+    assert_eq!(cash_of(&mem), before - 4000);
 }
 
 /// Слой рисуется непрозрачно: есть шапка, строки, панель и помощь.
@@ -292,9 +290,8 @@ fn draw_fills_layer() {
     assert!(f.pixels().iter().all(|&p| p != 0), "слой не непрозрачный");
     let distinct: std::collections::HashSet<u32> =
         f.pixels().iter().copied().collect();
-    // Общая палитра намеренно узкая: фон, рамка/значения, подписи и
-    // подсветка выбранной строки. Остальные оттенки появляются вместе с
-    // тостом и модальным окном.
+    // Общая палитра: фон, рамка/значения, подписи и подсветка выбранной
+    // строки. Остальные оттенки появляются вместе с тостом и модальным окном.
     assert!(
         [BG, FRAME, LABEL, CURSOR_BG]
             .iter()
@@ -306,7 +303,7 @@ fn draw_fills_layer() {
     // Тост рисуется и гаснет через несколько кадров (ракеты уже полны —
     // покупка отклоняется с сообщением, память не меняется).
     shop.buy_number(&mut { fake_kladov_mem() }, 2);
-    assert_eq!(shop.toast_text(), Some("MISSILES FULL (4/4)"));
+    assert_eq!(shop.toast_text(), Some("Missiles full (4/4)"));
     shop.draw(&mut f, &font, &mem);
     assert!(f.pixels().iter().any(|&p| p == WARN_BG), "нет панели тоста");
     for _ in 0..TOAST_FRAMES {
@@ -341,17 +338,16 @@ fn draw_uses_common_screen_frame() {
     assert_eq!(px(m + t - 1, m + t - 1), FRAME);
     assert_eq!(px(m + t, m + t), BG);
 
-    // Выделение первой строки не задевает верхнюю и боковые линии списка.
-    assert_eq!(px((g.x0 + g.ch / 2) as usize, g.list_y as usize), FRAME);
-    assert_eq!(px(g.x0 as usize, (g.list_y + g.row_h / 2) as usize), FRAME);
+    // Внутренних рамок списка нет: выделение первой строки начинается сразу
+    // от левого края списка.
     assert_eq!(
-        px((g.x0 + g.frame) as usize, (g.list_y + g.frame) as usize),
+        px(g.x0 as usize, (g.list_y + 1) as usize),
         CURSOR_BG,
-        "выделение должно начинаться внутри ячейки"
+        "выделение должно начинаться от края списка"
     );
 
     // Заголовок: верх глифов белый, низ — голубой, как на экране цен.
-    let title_ts = g.ts + 1;
+    let title_ts = g.ts;
     let tx = ((1280 - "EQUIP SHIP".len() * 8 * title_ts) / 2) as usize;
     assert_eq!(px(tx, g.title_y as usize + 1), FRAME);
     assert_eq!(px(tx, (g.title_y + 4 * title_ts as i32) as usize), LABEL);

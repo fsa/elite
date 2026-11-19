@@ -71,7 +71,5 @@ pub(super) const PRICE_CHARS: i32 = 7;
 /// Ширина списка в символах: рамка + номер 2 + зазор + имя 19 + зазор +
 /// цена 7 + отступ (см. `Shop::geo`).
 pub(super) const LIST_CHARS: i32 = 1 + 2 + 1 + NAME_CHARS + 1 + PRICE_CHARS + 1;
-/// Минимум символов, оставляемых панели корабля (описания переносятся).
-pub(super) const PANEL_MIN_CHARS: i32 = 18;
 /// Сколько кадров показывается тост (~5 с при 50 к/с).
 pub(super) const TOAST_FRAMES: u32 = 250;

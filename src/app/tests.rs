@@ -433,30 +433,30 @@ use crate::world::{current_planet_color, save_layout_kladov, scene_markers};
         assert_eq!(app.emulation_frames(), 1);
     }
 
-    /// F4 — нативный экран закупки оборудования на станции. Эмулятору
+    /// F5 — нативный экран закупки оборудования на станции. Эмулятору
     /// уходит `L` (пассивный экран информации о пилоте), а не `4`, чтобы
-    /// оригинальный экран 4 не ждал номер товара. Выход по F4 и Esc запрещён;
+    /// оригинальный экран 4 не ждал номер товара. Выход по F5 и Esc запрещён;
     /// закрыть можно Fn-клавишей или игровой буквенной клавишей.
     #[test]
-    fn f4_opens_equip_shop_without_f4_or_esc_exit() {
+    fn f5_opens_equip_shop_without_f5_or_esc_exit() {
         let opts = test_options();
         let mut app = App::new(boot(), &opts);
         assert!(!app.shop.active);
-        app.key_event(KeyCode::F4, true, false);
+        app.key_event(KeyCode::F5, true, false);
         // Закупка отложена: сначала кадр игры с клавишей L.
-        assert!(!app.shop.active, "F4 открыл закупку до перехода игры");
+        assert!(!app.shop.active, "F5 открыл закупку до перехода игры");
         app.apply_input();
         let (row, bit) = matrix_pos(KeyCode::KeyL).expect("L в матрице");
         assert_eq!(
             app.machine.keyboard[row] & (1 << bit),
             0,
-            "F4 не передал игре клавишу L"
+            "F5 не передал игре клавишу L"
         );
         app.machine.run_frame();
         app.open_pending_shop();
-        assert!(app.shop.active, "F4 не открыл экран закупки");
+        assert!(app.shop.active, "F5 не открыл экран закупки");
         assert!(!app.hdmap.active, "карта галактики не должна открыться");
-        // Экран снят данные живого командира.
+        // Экран снял данные живого командира.
         let p = equip::KLADOV_SHOP.pilot as usize;
         let cash = u16::from_le_bytes([app.machine.mem[p + 18], app.machine.mem[p + 19]]) as u32
             * 10000
@@ -468,11 +468,11 @@ use crate::world::{current_planet_color, save_layout_kladov, scene_markers};
         // Стрелка двигает выбор списка, а не корабль.
         app.key_event(KeyCode::ArrowDown, true, false);
 
-        // Esc и F4 не закрывают экран.
+        // Esc и F5 не закрывают экран.
         app.key_event(KeyCode::Escape, true, false);
         assert!(app.shop.active, "Esc не должен закрывать экран закупки");
-        app.key_event(KeyCode::F4, true, false);
-        assert!(app.shop.active, "F4 не должен закрывать экран закупки");
+        app.key_event(KeyCode::F5, true, false);
+        assert!(app.shop.active, "F5 не должен закрывать экран закупки");
 
         // Закрыть можно Fn-клавишей (F1 — вылет/вид).
         app.key_event(KeyCode::F1, true, false);
@@ -722,9 +722,9 @@ use crate::world::{current_planet_color, save_layout_kladov, scene_markers};
         );
     }
 
-    /// На станции F1 повторяет оригинальную клавишу 1 (вылет), а F4 открывает
+    /// На станции F1 повторяет оригинальную клавишу 1 (вылет), а F5 открывает
     /// нативную закупку и передаёт эмулятору `L` (пассивный экран), чтобы не
-    /// входить в режим ожидания номера товара на экране 4. F2/F3 не реализованы:
+    /// входить в режим ожидания номера товара на экране 4. F2-F4 не реализованы:
     /// их цифры не уходят в эмулятор, иначе он сбивается в покупку/продажу.
     #[test]
     fn function_keys_send_original_number_keys() {
@@ -740,25 +740,26 @@ use crate::world::{current_planet_color, save_layout_kladov, scene_markers};
             "F1 не передал игре Digit1"
         );
 
-        // F4 -> L (открытие закупки без входа в экран 4 оригинала)
+        // F5 -> L (открытие закупки без входа в экран 4 оригинала)
         let mut app = App::new(boot(), &opts);
-        app.key_event(KeyCode::F4, true, false);
+        app.key_event(KeyCode::F5, true, false);
         app.apply_input();
         let (row, bit) = matrix_pos(KeyCode::KeyL).expect("L в матрице");
         assert_eq!(
             app.machine.keyboard[row] & (1 << bit),
             0,
-            "F4 не передал игре KeyL"
+            "F5 не передал игре KeyL"
         );
 
-        for fkey in [KeyCode::F2, KeyCode::F3] {
+        for fkey in [KeyCode::F2, KeyCode::F3, KeyCode::F4] {
             let mut app = App::new(boot(), &opts);
             app.key_event(fkey, true, false);
             app.apply_input();
-            let digit = if fkey == KeyCode::F2 {
-                KeyCode::Digit2
-            } else {
-                KeyCode::Digit3
+            let digit = match fkey {
+                KeyCode::F2 => KeyCode::Digit2,
+                KeyCode::F3 => KeyCode::Digit3,
+                KeyCode::F4 => KeyCode::Digit4,
+                _ => unreachable!(),
             };
             let (row, bit) = matrix_pos(digit).expect("цифра в матрице");
             assert_ne!(
@@ -770,8 +771,8 @@ use crate::world::{current_planet_color, save_layout_kladov, scene_markers};
         }
     }
 
-    /// На нативной карте F1 закрывает её и уходит игре. F4 закрывает карту и
-    /// открывает закупку на станции (эмулятору уходит `L`). F2/F3 на станции
+    /// На нативной карте F1 закрывает её и уходит игре. F5 закрывает карту и
+    /// открывает закупку на станции (эмулятору уходит `L`). F2-F4 на станции
     /// остаются пустыми: карта не закрывается и цифры в игру не идут.
     #[test]
     fn map_function_keys_forward_original_keys() {
@@ -790,35 +791,36 @@ use crate::world::{current_planet_color, save_layout_kladov, scene_markers};
             "F1 на карте не передал игре клавишу 1"
         );
 
-        // F4 закрывает карту и запрашивает закупку (на станции), эмулятору L.
+        // F5 закрывает карту и запрашивает закупку (на станции), эмулятору L.
         let mut app = App::new(boot(), &opts);
         app.key_event(KeyCode::F6, true, false);
         assert!(app.hdmap.active);
-        app.key_event(KeyCode::F4, true, false);
-        assert!(!app.hdmap.active, "F4 не закрыл карту");
-        assert!(!app.flight.active, "F4 не должен включать полёт");
-        assert!(app.pending_shop, "F4 на станции должен запросить закупку");
+        app.key_event(KeyCode::F5, true, false);
+        assert!(!app.hdmap.active, "F5 не закрыл карту");
+        assert!(!app.flight.active, "F5 не должен включать полёт");
+        assert!(app.pending_shop, "F5 на станции должен запросить закупку");
         app.apply_input();
         let (row, bit) = matrix_pos(KeyCode::KeyL).expect("L в матрице");
         assert_eq!(
             app.machine.keyboard[row] & (1 << bit),
             0,
-            "F4 на карте не передал игре клавишу L"
+            "F5 на карте не передал игре клавишу L"
         );
 
-        // F2/F3 на станции не передают цифры; открытая карта при этом
+        // F2-F4 на станции не передают цифры; открытая карта при этом
         // остаётся — эти клавиши здесь просто не реализованы.
-        for fkey in [KeyCode::F2, KeyCode::F3] {
+        for fkey in [KeyCode::F2, KeyCode::F3, KeyCode::F4] {
             let mut app = App::new(boot(), &opts);
             app.key_event(KeyCode::F6, true, false);
             assert!(app.hdmap.active);
             app.key_event(fkey, true, false);
             assert!(app.hdmap.active, "{fkey:?} закрыл карту");
             app.apply_input();
-            let digit = if fkey == KeyCode::F2 {
-                KeyCode::Digit2
-            } else {
-                KeyCode::Digit3
+            let digit = match fkey {
+                KeyCode::F2 => KeyCode::Digit2,
+                KeyCode::F3 => KeyCode::Digit3,
+                KeyCode::F4 => KeyCode::Digit4,
+                _ => unreachable!(),
             };
             let (row, bit) = matrix_pos(digit).expect("цифра в матрице");
             assert_ne!(
@@ -1256,7 +1258,7 @@ use crate::world::{current_planet_color, save_layout_kladov, scene_markers};
         test_options()
     }
 
-    /// На заставке нативные экраны не открываются: F6/F4 игнорируются, пока
+    /// На заставке нативные экраны не открываются: F6/F5 игнорируются, пока
     /// игра проигрывает интро. F10 пуста и в эмулятор не передаётся.
     #[test]
     fn native_screens_blocked_on_intro() {
@@ -1280,10 +1282,10 @@ use crate::world::{current_planet_color, save_layout_kladov, scene_markers};
             !app.hdmap.active,
             "F10 не должен открывать карту"
         );
-        app.key_event(KeyCode::F4, true, false);
+        app.key_event(KeyCode::F5, true, false);
         assert!(
             !app.shop.active && !app.pending_shop,
-            "F4 не должен открываться на заставке Кладова"
+            "F5 не должен открываться на заставке Кладова"
         );
         app.key_event(KeyCode::F1, true, false);
         assert!(
@@ -1763,13 +1765,13 @@ use crate::world::{current_planet_color, save_layout_kladov, scene_markers};
             "автоповтор Space не должен закрывать карту"
         );
 
-        // F4 на станции: переход на другой экран закрывает карту, затем
-        // открывается нативный экран закупки. Esc/F4 закупку не закрывают,
+        // F5 на станции: переход на другой экран закрывает карту, затем
+        // открывается нативный экран закупки. Esc/F5 закупку не закрывают,
         // буквенная клавиша — закрывает и уходит в эмулятор.
         app.key_event(KeyCode::Escape, true, false);
         assert!(app.hdmap.active, "Esc не должен закрывать карту");
-        app.key_event(KeyCode::F4, true, false);
-        assert!(!app.hdmap.active, "F4 не переключил экран");
+        app.key_event(KeyCode::F5, true, false);
+        assert!(!app.hdmap.active, "F5 не переключил экран");
         assert!(
             !app.shop.active,
             "закупка должна открыться после кадра игры"
@@ -1780,8 +1782,8 @@ use crate::world::{current_planet_color, save_layout_kladov, scene_markers};
         assert!(app.shop.active);
         app.key_event(KeyCode::Escape, true, false);
         assert!(app.shop.active, "Esc не должен закрывать закупку");
-        app.key_event(KeyCode::F4, true, false);
-        assert!(app.shop.active, "F4 не должен закрывать закупку");
+        app.key_event(KeyCode::F5, true, false);
+        assert!(app.shop.active, "F5 не должен закрывать закупку");
         app.key_event(KeyCode::KeyO, true, false);
         assert!(!app.shop.active, "игровая клавиша не закрыла закупку");
         app.apply_input();
