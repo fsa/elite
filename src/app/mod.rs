@@ -28,6 +28,7 @@ use crate::flight;
 use crate::hdmap;
 use crate::machine::Spectrum;
 use crate::market;
+use crate::sfx;
 use crate::splash;
 use crate::state::{Animation, GameState, Location, OriginalScreen, Screen};
 use crate::status;
@@ -71,6 +72,7 @@ struct App<'a> {
     audio: Option<Audio>,
     audio_buf: Vec<i16>,
     wav_samples: Option<Vec<i16>>,
+    sfx: sfx::SfxPlayer,
     last_path: String,
     /// Централизованное состояние игры (место игрока, текущий экран, меню).
     /// Нативные компоненты читают его вместо прямых обращений к эмулятору.
@@ -161,6 +163,10 @@ struct App<'a> {
     mouse_right: bool,
     mouse_wheel_up: bool,
     mouse_wheel_down: bool,
+    /// Нажатие `G`/`H` на станции уже обработано (заглушка `DOCKED`) и должно
+    /// игнорироваться до отпускания, чтобы не уходить в эмулятор после её закрытия.
+    docked_consumed_g: bool,
+    docked_consumed_h: bool,
     next_frame: Instant,
 }
 
@@ -173,6 +179,7 @@ impl<'a> App<'a> {
             audio: audio::start_output(opts.mute),
             audio_buf: Vec::new(),
             wav_samples: opts.wav.as_ref().map(|_| Vec::new()),
+            sfx: sfx::SfxPlayer::new(),
             last_path: String::new(),
             menu: false,
             hdmap: hdmap::Map::new(),
@@ -213,6 +220,8 @@ impl<'a> App<'a> {
             mouse_right: false,
             mouse_wheel_up: false,
             mouse_wheel_down: false,
+            docked_consumed_g: false,
+            docked_consumed_h: false,
             next_frame: Instant::now(),
         };
         app.sync_state();

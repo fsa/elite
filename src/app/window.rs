@@ -77,6 +77,8 @@ impl ApplicationHandler for App<'_> {
                 self.kempston = [false; 5];
                 self.ctrl = false;
                 self.alt = false;
+                self.docked_consumed_g = false;
+                self.docked_consumed_h = false;
             }
             WindowEvent::ModifiersChanged(m) => {
                 self.ctrl = m.state().contains(ModifiersState::CONTROL);

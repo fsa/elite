@@ -36,6 +36,7 @@ mod keys;
 mod machine;
 mod native;
 mod render3d;
+mod sfx;
 mod shipdata;
 mod splash;
 mod market;

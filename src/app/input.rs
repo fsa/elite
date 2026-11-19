@@ -122,6 +122,29 @@ impl App<'_> {
         if let Some(bit) = kempston_bit(code) {
             self.kempston[bit as usize] = pressed;
         }
+        // G/H на станции обрабатываются как одноразовое действие: после показа
+        // `DOCKED` удержание не должно уходить в эмулятор даже после закрытия заглушки.
+        if matches!(code, KeyCode::KeyG | KeyCode::KeyH) {
+            if !pressed {
+                match code {
+                    KeyCode::KeyG => self.docked_consumed_g = false,
+                    KeyCode::KeyH => self.docked_consumed_h = false,
+                    _ => {}
+                }
+                return;
+            }
+            let consumed = match code {
+                KeyCode::KeyG => self.docked_consumed_g,
+                KeyCode::KeyH => self.docked_consumed_h,
+                _ => false,
+            };
+            if consumed {
+                if let Some((row, bit)) = matrix_pos(code) {
+                    self.matrix[row][bit as usize] = false;
+                }
+                return;
+            }
+        }
         if !pressed {
             return;
         }
@@ -170,11 +193,25 @@ impl App<'_> {
             return;
         }
 
+        // Пока заглушка `DOCKED` на экране, клавиши не должны
+        // управлять скрытым нативным экраном и не передаются эмулятору,
+        // кроме меню паузы.
+        if self.docked.is_active() {
+            if self.menu {
+                self.menu_key(code);
+            } else if code == KeyCode::Escape && !repeat {
+                self.menu = true;
+                self.menu_sel = 0;
+            } else if let Some((row, bit)) = matrix_pos(code) {
+                self.matrix[row][bit as usize] = false;
+            }
+            return;
+        }
         // G/H на станции: оригинал не выполняет гиперпрыжок, а показывает
         // экран `DOCKED` и издаёт звук. Под нативным экраном этот ответ
-        // эмулятора не виден, поэтому на время показываем свою заглушку.
-        // Нажатие всё равно отдаём эмулятору — он рисует такой же экран и
-        // проигрывает звук (см. `docked::Docked::show`).
+        // эмулятора не виден, поэтому показываем свою заглушку и проигрываем
+        // звук нативным компонентом эффектов. Фиксируем только факт нажатия,
+        // без повтора при удержании.
         if !repeat
             && matches!(code, KeyCode::KeyG | KeyCode::KeyH)
             && !self.menu
@@ -183,23 +220,15 @@ impl App<'_> {
             && self.native_screen_active()
         {
             self.docked.show();
-            self.pending_key = matrix_pos(code);
-            // В матрице клавишу не держим: эмулятор должен получить одно
-            // нажатие, а не повторять его каждый кадр, пока идёт заглушка.
+            self.sfx.play(crate::sfx::Sfx::DockedBeep);
+            match code {
+                KeyCode::KeyG => self.docked_consumed_g = true,
+                KeyCode::KeyH => self.docked_consumed_h = true,
+                _ => {}
+            }
+            // Клавишу не держим в матрице, чтобы эмулятор не получал повторов.
             if let Some((row, bit)) = matrix_pos(code) {
                 self.matrix[row][bit as usize] = false;
-            }
-            return;
-        }
-        // Пока заглушка `DOCKED` на экране, остальные клавиши не должны
-        // управлять скрытым нативным экраном (например, автоповтор `G` не
-        // должен закрыть карту), кроме меню паузы.
-        if self.docked.is_active() {
-            if self.menu {
-                self.menu_key(code);
-            } else if code == KeyCode::Escape && !repeat {
-                self.menu = true;
-                self.menu_sel = 0;
             }
             return;
         }

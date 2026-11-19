@@ -1796,9 +1796,9 @@ use crate::world::{current_planet_color, save_layout_kladov, scene_markers};
     }
 
     /// На станции `G`/`H` при открытом нативном экране показывают заглушку
-    /// `DOCKED` примерно на секунду. Сами нажатия уходят эмулятору (он тоже
-    /// рисует такой экран и издаёт звук), а нативный экран под заглушкой
-    /// остаётся открытым и возвращается после её закрытия.
+    /// `DOCKED` примерно на секунду и воспроизводят звук нативным компонентом
+    /// эффектов. Нативный экран под заглушкой остаётся открытым и возвращается
+    /// после её закрытия.
     #[test]
     fn g_and_h_on_station_show_docked_stub_over_native_screen() {
         let opts = test_options();
@@ -1809,22 +1809,15 @@ use crate::world::{current_planet_color, save_layout_kladov, scene_markers};
         assert!(app.hdmap.active, "подготовка: карта не открылась");
 
         for key in [KeyCode::KeyG, KeyCode::KeyH] {
-            let pos = matrix_pos(key).expect("клавиша в матрице");
+            let (row, bit) = matrix_pos(key).expect("клавиша в матрице");
             app.key_event(key, true, false);
             assert!(app.docked.is_active(), "{key:?} не показал DOCKED");
             assert!(app.hdmap.active, "{key:?} закрыл нативный экран");
-            assert_eq!(app.pending_key, Some(pos), "{key:?} не передан эмулятору");
+            assert!(app.sfx.is_playing(), "{key:?} не запустил звук");
 
-            // Клавиша не залипает в матрице: эмулятор получает одно нажатие.
-            let (row, bit) = pos;
-            assert!(!app.matrix[row][bit as usize]);
-
-            app.forward_input();
-            assert_eq!(
-                app.machine.keyboard[row] & (1 << bit),
-                0,
-                "нажатие {key:?} не ушло в эмулятор"
-            );
+            // Клавиша не залипает в матрице.
+            assert!(!app.matrix[row][bit as usize], "{key:?} залипла в матрице");
+            assert_eq!(app.pending_key, None, "{key:?} не должна уходить в эмулятор");
 
             // После показа заглушки возвращается прежний нативный экран.
             app.docked.close();

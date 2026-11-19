@@ -23,12 +23,13 @@ impl App<'_> {
         if self.accelerated { 2 } else { 1 }
     }
 
-    /// Синтезировать и отдать звук последнего кадра эмулятора.
+    /// Синтезировать и отдать звук последнего кадра (эмулятор + эффекты).
     fn play_frame_audio(&mut self) {
-        if self.audio.is_none() && self.wav_samples.is_none() {
+        if self.audio.is_none() && self.wav_samples.is_none() && !self.sfx.is_playing() {
             return;
         }
         self.machine.render_audio(&mut self.audio_buf);
+        self.sfx.mix(&mut self.audio_buf);
         if let Some(audio) = &self.audio {
             audio.push(&self.audio_buf);
         }
@@ -115,14 +116,14 @@ impl App<'_> {
         }
 
         // Эмуляция и ввод зависят от текущего экрана. Пока показана заглушка
-        // `DOCKED`, эмулятор продолжает работать и получает переданное ему
-        // нажатие, но нативные экраны под заглушкой не меняются.
+        // `DOCKED`, эмулятор продолжает работать, но не получает нажатий
+        // клавиш, а нативные экраны под заглушкой не меняются.
         if self.docked.is_active() {
             self.machine.release_all_keys();
             self.machine.release_joystick();
+            self.pending_key = None;
             if !self.state.menu {
                 let frames = self.emulation_frames();
-                self.forward_input();
                 self.machine.run_frames(frames);
                 self.play_frame_audio();
             }
