@@ -8,6 +8,8 @@ fn fake_mem() -> Vec<u8> {
     m[0xD090..0xD096].copy_from_slice(&[0x4A, 0x5A, 0x48, 0x02, 0x53, 0xB7]);
     m[0xD097] = 173; // Y системы (LAVE)
     m[0xD099] = 20; // X системы (LAVE)
+    m[0xD0BB] = 20; // X цели гиперпрыжка: по умолчанию та же система
+    m[0xD0BC] = 173; // Y цели гиперпрыжка
     m[0xD065] = 2; // номер галактики (PilotNumGalaxy, 0-based)
     m[0xD082] = 70; // топливо (Pilot_Fuel)
     m[0xFDB3..0xFDB3 + 64]
@@ -39,6 +41,29 @@ fn open_builds_galaxy_and_centers_cursor_on_system() {
     assert_eq!(map.zoom(), 1.0);
     // Круг дальности прыжка: топливо 70 -> радиус 17 единиц поля.
     assert_eq!(galaxy::jump_radius(map.fuel), 17);
+}
+
+/// Повторный вход в карту продолжает с той точки, куда нацелен гиперпрыжок:
+/// курсор читается из игровых полей цели, а не из координат текущей системы.
+#[test]
+fn reopens_at_saved_hyperjump_target() {
+    let mut mem = fake_mem();
+    mem[galaxy::KLADOV_GALAXY.target_x] = 22; // ORESQU
+    mem[galaxy::KLADOV_GALAXY.target_y] = 217;
+    let mut map = Map::new();
+    map.open(&mem, galaxy::KLADOV_GALAXY);
+    assert_eq!(map.cursor(), (22, 217));
+    assert_eq!(map.nearest_index(), Some(204));
+    // Система по-прежнему LAVE — камера и круг дальности считаются от неё.
+    assert_eq!(map.system_index(), Some(7));
+
+    // Пока карта закрыта, игра может сама изменить цель — следующий вход
+    // должен увидеть новые координаты.
+    mem[galaxy::KLADOV_GALAXY.target_x] = 11; // DISO
+    mem[galaxy::KLADOV_GALAXY.target_y] = 174;
+    map.close();
+    map.open(&mem, galaxy::KLADOV_GALAXY);
+    assert_eq!(map.cursor(), (11, 174));
 }
 
 #[test]

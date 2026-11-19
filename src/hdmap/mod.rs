@@ -81,6 +81,11 @@ impl Map {
     }
 
     /// Открыть карту: собрать галактику из памяти запущенной игры.
+    ///
+    /// Курсор берётся из `Pilot_CrdXTarget`/`Pilot_CrdYTarget` — это актуальная
+    /// цель гиперперехода, которую игра обновляет при движении по своей карте.
+    /// Ставить курсор заново на текущую систему нельзя: при повторном входе
+    /// карта забывала бы, куда игрок нацелился в прошлый раз.
     pub fn open(&mut self, mem: &[u8], layout: GalaxyLayout) {
         self.layout = layout;
         let seed: [u8; 6] = mem[layout.seed..layout.seed + 6].try_into().unwrap();
@@ -90,8 +95,8 @@ impl Map {
         self.sys_y_raw = mem[layout.sys_y] as i32;
         self.galaxy_num = mem[layout.galaxy] & 7;
         self.fuel = mem[layout.fuel];
-        self.cursor_x = self.sys_x;
-        self.cursor_y_raw = self.sys_y_raw;
+        self.cursor_x = mem[layout.target_x] as i32;
+        self.cursor_y_raw = mem[layout.target_y] as i32;
         self.zoom = ZOOM_MIN;
         self.active = true;
     }

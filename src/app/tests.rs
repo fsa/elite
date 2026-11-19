@@ -315,9 +315,11 @@ use crate::world::{current_planet_color, save_layout_kladov, scene_markers};
         app.key_event(KeyCode::F1, true, false);
         assert!(!app.hdmap.active, "F1 не переключил экран");
         assert_eq!(app.machine.mem[flight::Z80_WHAT_ON_SCREEN], prev_screen);
-        // После перехода F6 снова открывает карту.
+        // После перехода F6 снова открывает карту — курсор остаётся на цели,
+        // которую игра хранит как координаты гиперпрыжка.
         app.key_event(KeyCode::F6, true, false);
         assert!(app.hdmap.active);
+        assert_eq!(app.hdmap.cursor(), (map_x, map_y));
     }
 
     /// F8 включает нативный экран цен; на станции стрелки выбирают товар,
