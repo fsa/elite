@@ -212,6 +212,7 @@ impl App<'_> {
                 if self.machine.mem[flight::Z80_WHAT_ON_SCREEN] == flight::Z80_SCREEN_INFO_PLANET {
                     self.open_sysinfo();
                 } else {
+                    self.open_sysinfo();
                     self.pending_sysinfo = true;
                     self.pending_key = matrix_pos(KeyCode::KeyP);
                 }
@@ -238,6 +239,7 @@ impl App<'_> {
                 if self.machine.mem[flight::Z80_WHAT_ON_SCREEN] == flight::Z80_SCREEN_PILOT_INFO {
                     self.open_status();
                 } else {
+                    self.open_status();
                     self.pending_status = true;
                     self.pending_key = matrix_pos(KeyCode::KeyL);
                 }
@@ -246,11 +248,13 @@ impl App<'_> {
             return;
         }
         // F8 — нативный показ экрана цен (альтернатива `K`). Смотреть цены
-        // можно и в полёте, поэтому стойку не требуем. Включаем нативную
-        // отрисовку и при необходимости переводим эмулятор в режим рынка
-        // клавишей `K`. Повторное нажатие не выключает показ. Работает и при
-        // открытых нативных экранах. Торговля отдельно разрешена только на
-        // станции (см. блок стрелок ниже и `Market::trade`).
+        // можно и в полёте, поэтому стойку не требуем. Эмулятору при
+        // необходимости отдаём `K`, а нативный экран включаем после кадра,
+        // когда оригинал перейдёт в режим рынка. Если оригинал уже на этом
+        // экране, достаточно включить нативную отрисовку. Повторное нажатие
+        // не выключает показ. Работает и при открытых нативных экранах.
+        // Торговля отдельно разрешена только на станции (см. блок стрелок
+        // ниже и `Market::trade`).
         if code == KeyCode::F8 && !repeat {
             if !self.menu && !self.machine.intro_seen {
                 self.close_hdmap();
@@ -258,14 +262,17 @@ impl App<'_> {
                 self.close_status();
                 self.close_sysinfo();
                 self.flight.close();
+                self.close_market();
                 self.pending_status = false;
                 self.pending_sysinfo = false;
+                self.pending_market = false;
                 self.pending_flight = None;
                 self.pending_launch = false;
-                let need_k = self.machine.mem[flight::Z80_WHAT_ON_SCREEN]
-                    != flight::Z80_SCREEN_MARKET;
-                self.open_market();
-                if need_k {
+                if self.machine.mem[flight::Z80_WHAT_ON_SCREEN] == flight::Z80_SCREEN_MARKET {
+                    self.open_market();
+                } else {
+                    self.open_market();
+                    self.pending_market = true;
                     self.pending_key = matrix_pos(KeyCode::KeyK);
                 }
                 return;
@@ -274,7 +281,7 @@ impl App<'_> {
         // `K` — оригинальная клавиша: показать оригинальный (эмуляторный)
         // экран рынка. Нативная альтернатива выключается, ввод уходит в игру.
         if code == KeyCode::KeyK && !repeat {
-            self.market.disable();
+            self.close_market();
         }
         // Стрелки перехватываем только на станции: там они выбирают товар и
         // торгуют им. В полёте экран остаётся только для просмотра цен, поэтому

@@ -78,6 +78,11 @@ impl SysInfo {
         self.active = true;
     }
 
+    /// Обновить данные экрана из памяти запущенной игры.
+    pub fn refresh(&mut self, mem: &[u8], name: &str) {
+        self.info = read_info(mem, name);
+    }
+
     /// Закрыть экран.
     pub fn close(&mut self) {
         self.active = false;

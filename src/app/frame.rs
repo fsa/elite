@@ -136,6 +136,7 @@ impl App<'_> {
                         self.machine.run_frames(frames);
                         self.open_pending_status();
                         self.open_pending_sysinfo();
+                        self.open_pending_market();
                         self.sync_flight_after_frames(frames);
                         self.play_frame_audio();
                     }
@@ -151,6 +152,7 @@ impl App<'_> {
                         self.machine.run_frames(frames);
                         self.open_pending_status();
                         self.open_pending_sysinfo();
+                        self.open_pending_market();
                         self.open_pending_shop();
                         self.open_pending_flight();
                         self.follow_native_screens();
@@ -198,6 +200,7 @@ impl App<'_> {
                         self.machine.run_frames(self.emulation_frames());
                         self.open_pending_status();
                         self.open_pending_sysinfo();
+                        self.open_pending_market();
                         self.open_pending_shop();
                         self.open_pending_flight();
                         self.follow_native_screens();
@@ -264,6 +267,7 @@ impl App<'_> {
                     self.draw_danger_half();
                 }
                 Screen::PilotStatus => {
+                    self.status.open(&self.machine.mem, crate::status::KLADOV_STATUS);
                     self.status.draw(&mut self.machine.hd, ZX_FONT);
                     self.draw_danger_half();
                     if self.state.menu {
@@ -271,6 +275,7 @@ impl App<'_> {
                     }
                 }
                 Screen::PlanetInfo => {
+                    self.sysinfo.refresh(&self.machine.mem, &self.state.planet);
                     self.sysinfo.draw(&mut self.machine.hd, ZX_FONT);
                     self.draw_danger_half();
                     if self.state.menu {

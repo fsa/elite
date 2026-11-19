@@ -168,16 +168,19 @@ impl App<'_> {
             return;
         }
         self.pending_status = false;
-        self.close_hdmap();
-        self.shop.close();
-        self.flight.close();
-        self.close_sysinfo();
-        self.close_market();
-        self.pending_sysinfo = false;
-        self.pending_shop = false;
-        self.pending_flight = None;
-        self.pending_launch = false;
-        self.status.open(&self.machine.mem, status::KLADOV_STATUS);
+        if !self.status.active {
+            self.close_hdmap();
+            self.shop.close();
+            self.flight.close();
+            self.close_sysinfo();
+            self.close_market();
+            self.pending_sysinfo = false;
+            self.pending_market = false;
+            self.pending_shop = false;
+            self.pending_flight = None;
+            self.pending_launch = false;
+            self.status.open(&self.machine.mem, status::KLADOV_STATUS);
+        }
     }
 
     /// Открыть нативный экран информации о планете (F7), отложенный до
@@ -195,15 +198,20 @@ impl App<'_> {
             return;
         }
         self.pending_sysinfo = false;
-        self.close_hdmap();
-        self.shop.close();
-        self.flight.close();
-        self.close_status();
-        self.close_market();
-        self.pending_status = false;
-        self.pending_flight = None;
-        self.pending_launch = false;
-        self.open_sysinfo();
+        if self.sysinfo.active {
+            self.refresh_selected_planet();
+        } else {
+            self.close_hdmap();
+            self.shop.close();
+            self.flight.close();
+            self.close_status();
+            self.close_market();
+            self.pending_status = false;
+            self.pending_market = false;
+            self.pending_flight = None;
+            self.pending_launch = false;
+            self.open_sysinfo();
+        }
     }
 
     /// Обновить в состоянии имя планеты, выбранной для показа. Оригинал
@@ -241,19 +249,31 @@ impl App<'_> {
     }
 
     /// Следить за экранными режимами Z80 под нативными экранами без
-    /// собственного интерактива (F7/F9). Когда оригинал уходит с экрана,
+    /// собственного интерактива (F7/F8/F9). Когда оригинал уходит с экрана,
     /// нативная надстройка закрывается; пока режим тот же — остаётся.
     pub(super) fn follow_native_screens(&mut self) {
         let screen = self.machine.mem[flight::Z80_WHAT_ON_SCREEN];
-        if self.status.active && screen != flight::Z80_SCREEN_PILOT_INFO {
+        if self.status.active
+            && !self.pending_status
+            && screen != flight::Z80_SCREEN_PILOT_INFO
+        {
             self.close_status();
         }
-        if self.sysinfo.active && screen != flight::Z80_SCREEN_INFO_PLANET {
+        if self.sysinfo.active
+            && !self.pending_sysinfo
+            && screen != flight::Z80_SCREEN_INFO_PLANET
+        {
             self.close_sysinfo();
+        }
+        if self.market.native
+            && !self.pending_market
+            && screen != flight::Z80_SCREEN_MARKET
+        {
+            self.close_market();
         }
     }
 
-    /// Включить нативный показ экрана цен на станции (альтернатива `K`).
+    /// Включить нативный показ экрана цен (альтернатива `K`).
     /// Эмулятор должен находиться в режиме рынка (`Z80_SCREEN_MARKET`).
     pub(super) fn open_market(&mut self) {
         self.close_hdmap();
@@ -263,6 +283,7 @@ impl App<'_> {
         self.close_sysinfo();
         self.pending_status = false;
         self.pending_sysinfo = false;
+        self.pending_market = false;
         let docked = flight::z80_is_docked(&self.machine.mem);
         self.market.enable(
             &self.machine.mem,
@@ -279,6 +300,26 @@ impl App<'_> {
     /// Выключить нативный показ экрана цен.
     pub(super) fn close_market(&mut self) {
         self.market.disable();
+        self.pending_market = false;
+        self.pending_key = None;
+    }
+
+    /// Открыть нативный экран цен, отложенный до выхода оригинала в
+    /// режим `Z80_SCREEN_MARKET`: по `F8` (клавиша `K`), когда эмулятор
+    /// сам переходит на экран рынка.
+    pub(super) fn open_pending_market(&mut self) {
+        if !self.pending_market {
+            return;
+        }
+        if self.machine.intro_seen || self.menu {
+            self.pending_market = false;
+            return;
+        }
+        if self.machine.mem[flight::Z80_WHAT_ON_SCREEN] != flight::Z80_SCREEN_MARKET {
+            return;
+        }
+        self.pending_market = false;
+        self.open_market();
     }
 
     /// Открыть нативный экран полёта поверх текущего состояния игры.

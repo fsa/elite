@@ -387,6 +387,14 @@ use crate::world::{current_planet_color, save_layout_kladov, scene_markers};
 
         app.key_event(KeyCode::F8, true, false);
         assert!(app.market.native, "F8 не открыл рынок в полёте");
+        assert!(app.pending_market, "F8 не запросил переход в режим рынка");
+
+        app.apply_input();
+        app.machine.run_frame();
+        app.machine.mem[flight::Z80_WHAT_ON_SCREEN] = flight::Z80_SCREEN_MARKET;
+        app.open_pending_market();
+        assert!(app.market.native, "F8 не открыл рынок в полёте");
+        assert!(!app.pending_market, "переход в режим рынка не завершён");
 
         app.key_event(KeyCode::ArrowRight, true, false);
         assert_eq!(app.machine.mem[market_layout.quantities], 2);
@@ -472,10 +480,10 @@ use crate::world::{current_planet_color, save_layout_kladov, scene_markers};
     }
 
     /// F7 — нативная альтернатива экрану информации о планете (`P`).
-    /// Эмулятору уходит нажатие `P`, нативный экран открывается после кадра,
-    /// когда оригинал обработал команду. Управление остаётся за эмулятором,
-    /// Esc открывает меню паузы, а нативный слой закрывается сам, когда Z80
-    /// уходит с экрана планеты.
+    /// Нативный экран открывается сразу, эмулятору уходит нажатие `P`, а
+    /// переход в режим оригинала завершается после его обработки. Управление
+    /// остаётся за эмулятором, Esc открывает меню паузы, а нативный слой
+    /// закрывается сам, когда Z80 уходит с экрана планеты.
     #[test]
     fn f7_opens_planet_info() {
         let opts = test_options();
@@ -497,16 +505,16 @@ use crate::world::{current_planet_color, save_layout_kladov, scene_markers};
         assert!(!app.machine.intro_seen, "подготовка: игра не запустилась");
 
         app.key_event(KeyCode::F7, true, false);
-        assert!(!app.sysinfo.active, "экран не должен открыться до кадра");
-        assert!(app.pending_sysinfo, "F7 не запросил экран информации");
+        assert!(app.sysinfo.active, "F7 не открыл нативный экран");
+        assert!(app.pending_sysinfo, "F7 не запросил переход в режим планеты");
         let (prow, pbit) = matrix_pos(KeyCode::KeyP).expect("P в матрице");
         assert_eq!(app.pending_key, Some((prow, pbit)), "F7 не отдал игре P");
 
-        // Кадр, в котором оригинал обрабатывает P, затем открывается нативный экран.
+        // Кадр, в котором оригинал обрабатывает P и завершает переход.
         app.apply_input();
         app.machine.run_frame();
         app.open_pending_sysinfo();
-        assert!(app.sysinfo.active, "F7 не открыл нативный экран");
+        assert!(app.sysinfo.active, "F7 закрыл нативный экран");
         assert_eq!(
             app.machine.mem[flight::Z80_WHAT_ON_SCREEN],
             flight::Z80_SCREEN_INFO_PLANET,
@@ -572,8 +580,8 @@ use crate::world::{current_planet_color, save_layout_kladov, scene_markers};
         app.machine.mem[flight::Z80_WHAT_ON_SCREEN] = 0;
         assert!(!app.status.active);
         app.key_event(KeyCode::F9, true, false);
-        assert!(!app.status.active, "экран не должен открыться до кадра");
-        assert!(app.pending_status, "F9 не запросил экран капитана");
+        assert!(app.status.active, "F9 не открыл нативный экран");
+        assert!(app.pending_status, "F9 не запросил переход в режим капитана");
 
         // Эмулятору подготовлено нажатие `L`; первый кадр отдаёт его игре
         // через обычный ввод.
@@ -594,6 +602,7 @@ use crate::world::{current_planet_color, save_layout_kladov, scene_markers};
             "эмулятор не перешёл в режим показа капитана"
         );
         assert!(app.status.active, "нативный экран закрылся в режиме капитана");
+        assert!(!app.pending_status, "переход в режим капитана не завершён");
 
         // Ввод больше не перехватывается и уходит в эмулятор.
         app.key_event(KeyCode::ArrowUp, true, false);
@@ -630,7 +639,7 @@ use crate::world::{current_planet_color, save_layout_kladov, scene_markers};
         app.key_event(KeyCode::F1, true, false);
         assert!(app.flight.active);
         app.key_event(KeyCode::F9, true, false);
-        assert!(!app.status.active, "экран не должен открыться до кадра");
+        assert!(app.status.active, "F9 не открыл нативный экран в полёте");
         assert!(app.pending_status, "F9 не запросил экран капитана в полёте");
         assert!(!app.flight.active, "нативный вид остался под экраном");
         let (lrow, lbit) = matrix_pos(KeyCode::KeyL).expect("L в матрице");

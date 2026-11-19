@@ -99,6 +99,9 @@ struct App<'a> {
     docked: docked::Docked,
     /// Нативный (альтернативный) показ экрана цен на станции (`K`).
     market: market::Market,
+    /// После кадра эмулятора открыть нативный экран цен: сначала игра
+    /// должна обработать `K` и перейти в режим рынка.
+    pending_market: bool,
     /// Экран полёта (F1) — нативный рендер по данным Z80. Пока он активен,
     /// окно занимает вид из кабины и нативная приборная панель; эмулятор
     /// продолжает работать и задаёт мир, поэтому ввод идёт в игру.
@@ -181,6 +184,7 @@ impl<'a> App<'a> {
             pending_sysinfo: false,
             docked: docked::Docked::new(),
             market: market::Market::new(),
+            pending_market: false,
             flight: flight::Flight::new(),
             splash: splash::Splash::new(),
             cockpit: cockpit::Cockpit::new(),
@@ -262,15 +266,9 @@ impl<'a> App<'a> {
         // Показывается ли нативная альтернатива экранов эмулятора (те же
         // режимы Z80, но отрисованные нативно). Это зеркалирует условия,
         // по которым кадр выбирает, что рисовать.
-        let show_status = self.status.active
-            && !intro
-            && emu_screen == flight::Z80_SCREEN_PILOT_INFO;
-        let show_sysinfo = self.sysinfo.active
-            && !intro
-            && emu_screen == flight::Z80_SCREEN_INFO_PLANET;
-        let show_market = self.market.native
-            && !intro
-            && emu_screen == flight::Z80_SCREEN_MARKET;
+        let show_status = self.status.active && !intro;
+        let show_sysinfo = self.sysinfo.active && !intro;
+        let show_market = self.market.native && !intro;
 
         let screen = if intro {
             Screen::Intro
