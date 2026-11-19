@@ -1,4 +1,4 @@
-//! Аудиовыход: PipeWire (Linux) с запасным вариантом cpal.
+//! Аудиовыход: бэкенд выбирается платформой по умолчанию.
 //!
 //! Игра использует только 1-битный бипер (порт 0xFE, бит 4). Кадры эмулятора
 //! кладут готовые моно-сэмплы в очередь методом [`Audio::push`]; фоновый поток
@@ -10,13 +10,10 @@
 //! (`CUSHION`) не даёт колбэкам забирать данные из пустой очереди.
 //!
 //! Бэкенды:
-//! - `audio-pipewire` (Linux, включён по умолчанию) — нативный вывод через
-//!   PipeWire, если он есть в системе;
-//! - `audio-cpal` (включён по умолчанию, единственный на macOS) — ALSA на
-//!   Linux, CoreAudio на macOS, WASAPI на Windows.
+//! - PipeWire (Linux, по умолчанию) — нативный вывод;
+//! - cpal (macOS/Windows по умолчанию; на Linux — при явном выборе
+//!   `--no-default-features --features audio-cpal`) — CoreAudio/WASAPI/ALSA.
 //!
-//! Если PipeWire собран, он пробуется первым; при ошибке инициализации
-//! (например, демон не запущен) `start_output` автоматически переходит на cpal.
 //! Мьют и `--wav` от выбора бэкенда не зависят.
 
 use std::collections::VecDeque;
@@ -27,7 +24,7 @@ use std::time::Instant;
 #[cfg(all(target_os = "linux", feature = "audio-pipewire"))]
 mod pipewire;
 
-#[cfg(feature = "audio-cpal")]
+#[cfg(any(not(target_os = "linux"), feature = "audio-cpal"))]
 mod cpal;
 
 pub const SAMPLE_RATE: u32 = 44100;
@@ -70,7 +67,7 @@ pub struct Audio {
 }
 
 /// Запустить вывод звука, если он не отключён. Возвращает `None` (с
-/// предупреждением), если ни один аудиобэкенд не инициализировался.
+/// предупреждением), если аудиобэкенд не инициализировался.
 pub fn start_output(mute: bool) -> Option<Audio> {
     if mute {
         return None;
@@ -82,11 +79,11 @@ pub fn start_output(mute: bool) -> Option<Audio> {
     {
         match pipewire::start(Arc::clone(&shared)) {
             Ok(()) => return Some(Audio { shared }),
-            Err(e) => eprintln!("audio: PipeWire недоступен, пробую cpal: {e}"),
+            Err(e) => eprintln!("audio: PipeWire: {e}"),
         }
     }
 
-    #[cfg(feature = "audio-cpal")]
+    #[cfg(any(not(target_os = "linux"), feature = "audio-cpal"))]
     {
         match cpal::start(Arc::clone(&shared)) {
             Ok(()) => return Some(Audio { shared }),
@@ -94,10 +91,11 @@ pub fn start_output(mute: bool) -> Option<Audio> {
         }
     }
 
-    #[cfg(not(any(
-        all(target_os = "linux", feature = "audio-pipewire"),
-        feature = "audio-cpal"
-    )))]
+    #[cfg(all(
+        target_os = "linux",
+        not(feature = "audio-pipewire"),
+        not(feature = "audio-cpal")
+    ))]
     {
         let _ = &shared;
         eprintln!("audio: сборка без аудиобэкенда (нет фич audio-pipewire/audio-cpal)");

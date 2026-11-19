@@ -1,9 +1,13 @@
-//! Кросс-платформенный бэкенд на cpal (фича `audio-cpal`).
+//! Кросс-платформенный бэкенд на cpal.
 //!
-//! Linux — ALSA (в системах с PipeWire обычно маршрутизируется через
-//! pipewire-alsa), macOS — CoreAudio, Windows — WASAPI. Частота устройства
-//! может отличаться от [`SAMPLE_RATE`], поэтому очередь 44100 Гц прореживается
-//! или растягивается прямо в колбэке простым удержанием сэмпла.
+//! macOS — CoreAudio, Windows — WASAPI. На Linux используется при явном выборе
+//! `audio-cpal` (ALSA; в системах с PipeWire обычно маршрутизируется через
+//! pipewire-alsa). Частота устройства может отличаться от [`SAMPLE_RATE`],
+//! поэтому очередь 44100 Гц прореживается или растягивается прямо в колбэке
+//! простым удержанием сэмпла.
+
+#[cfg(not(target_os = "linux"))]
+use cpal_platform as cpal;
 
 use std::sync::mpsc;
 use std::sync::{Arc, Mutex};
