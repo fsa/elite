@@ -16,7 +16,7 @@ pub(crate) const SCAN_KEYS_MAX: u64 = 12062;
 /// `ScanKeys` (`0xFD69`) — покадровый опрос клавиатуры, вызывается из
 /// обработчика прерывания `sub_FF25`.
 ///
-/// Разбор по образу `zx_bin/kladov.bin` (листинг `kladov.asm` в этом районе
+/// Разбор по образу `zx_bin/kladov128.bin` (листинг `kladov.asm` в этом районе
 /// смещён: `call ScanKeys` в `sub_FF25` указывает на `0xFD69`, а не `0xFD72`):
 ///
 /// - зануляет `byte_FC0F` (`0xFC0F`) и ставит `PressKeyPrnSymbol` (`0xFC0D`)

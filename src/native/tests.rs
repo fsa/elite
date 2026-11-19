@@ -1,15 +1,12 @@
 //! Тесты эквивалентности: нативные реализации против настоящих рутин
-//! из образа `zx_bin/kladov.bin`, исполняемых на эмуляторе.
+//! из образа `zx_bin/kladov128.bin`, исполняемых на эмуляторе.
 
 use super::*;
 
-/// Загружает полный образ Кладова (для прогона настоящих рутин на Z80).
+/// Загружает 128K-образ Кладова (для прогона настоящих рутин на Z80).
 fn kladov() -> Spectrum {
-    let base = env!("CARGO_MANIFEST_DIR");
-    let data = std::fs::read(format!("{base}/zx_bin/kladov.bin"))
-        .expect("zx_bin/kladov.bin (собрать: python3 tools/make_kladov_image.py)");
     let mut m = Spectrum::new(None);
-    m.load(0x4000, &data);
+    crate::boot::load_kladov_image(&mut m);
     m
 }
 
@@ -41,28 +38,9 @@ fn run_routine_sp(m: &mut Spectrum, addr: u16, sp: u16) {
 fn boot_kladov() -> Spectrum {
     let base = env!("CARGO_MANIFEST_DIR");
     let rom = std::fs::read(format!("{base}/zx_bin/48.rom")).expect("zx_bin/48.rom");
-    let game = std::fs::read(format!("{base}/zx_bin/kladov.bin"))
-        .expect("zx_bin/kladov.bin (собрать: python3 tools/make_kladov_image.py)");
     let mut m = Spectrum::new(Some(&rom));
-    m.load(crate::boot::KLADOV_LOAD_ADDR, &game);
-    let c = &mut m.cpu;
-    c.a = crate::boot::KLADOV_STATE_A;
-    c.f = crate::boot::KLADOV_STATE_F;
-    c.b = (crate::boot::KLADOV_STATE_BC >> 8) as u8;
-    c.c = (crate::boot::KLADOV_STATE_BC & 0xFF) as u8;
-    c.d = (crate::boot::KLADOV_STATE_DE >> 8) as u8;
-    c.e = (crate::boot::KLADOV_STATE_DE & 0xFF) as u8;
-    c.h = (crate::boot::KLADOV_STATE_HL >> 8) as u8;
-    c.l = (crate::boot::KLADOV_STATE_HL & 0xFF) as u8;
-    c.ix = crate::boot::KLADOV_STATE_IX;
-    c.iy = crate::boot::KLADOV_STATE_IY;
-    c.sp = crate::boot::KLADOV_STATE_SP;
-    c.pc = crate::boot::KLADOV_STATE_PC;
-    c.i = crate::boot::KLADOV_I;
-    c.r = crate::boot::KLADOV_STATE_R;
-    c.im = 2;
-    c.iff1 = true;
-    c.iff2 = true;
+    crate::boot::load_kladov_image(&mut m);
+    crate::boot::set_kladov_cpu(&mut m);
     m
 }
 
@@ -586,7 +564,10 @@ fn scr_copy_alt_lines_matches_z80() {
         // посреди цикла).
         let seed = (hl as usize) ^ ((de as usize) << 1) ^ (a as usize);
         for i in 0..0x1_0000usize {
-            if (0x7FCD..0x7FEF).contains(&i) || (0x8445..0x8459).contains(&i) {
+            if (0x7FCD..0x7FEF).contains(&i)
+                || (0x8445..0x8459).contains(&i)
+                || (0xB2A0..0xB2ED).contains(&i)
+            {
                 continue;
             }
             let v = (i.wrapping_mul(31).wrapping_add(seed) & 0xFF) as u8;
@@ -622,18 +603,17 @@ fn scr_copy_alt_lines_matches_z80() {
     }
 }
 
-/// Ветка Yield: когда целая итерация копии не влезает в остаток кадра,
-/// хук обязан отдать управление в точку цикла `0x7FCF` с состоянием ровно
-/// на начало итерации, а рутину дальше доигрывает обычный Z80. Так длинная
-/// копия (≈99000 тактов, больше кадра) переживает vblank-прерывание в
-/// середине, не расходясь с прогоном без хука.
+/// Оптимизированная копия `0x7FCD` укладывается в один кадр (~36K тактов),
+/// поэтому хук больше не отдаёт управление Z80 (`Yield` не нужен). Но он не
+/// должен запускаться, если не влезает в остаток кадра: тогда рутину целиком
+/// исполняет Z80. Проверяем это на плотной сетке бюджетов: состояние по
+/// достижении такта `budget` обязано совпасть с чистым Z80-прогоном — по
+/// регистрам, флагам, `R`, SP, PC и всей памяти.
 ///
 /// Мини-диспетчер ниже повторяет `Spectrum::run_frame`: на хуке циклы
 /// прибавляются, `RET` выполняется только если хук не отдал управление.
-/// Состояние по достижении такта `budget` обязано совпасть с чистым
-/// Z80-прогоном — по регистрам, флагам, `R`, SP, PC и всей памяти.
 #[test]
-fn scr_copy_alt_lines_yield_matches_z80() {
+fn scr_copy_alt_lines_budget_matches_z80() {
     // Плотная сетка бюджетов: кадровая граница попадает и в середину
     // копии, и внутрь коротких хуков (0x7FE7/0x8445), которые должны
     // уступать место Z80, чтобы не «проскочить» границу.
@@ -645,7 +625,10 @@ fn scr_copy_alt_lines_yield_matches_z80() {
         install(&mut n);
         // Детерминированный паттерн, кроме кода рутины и compDownScrAdr_HL.
         for i in 0..0x1_0000usize {
-            if (0x7FCD..0x7FEF).contains(&i) || (0x8445..0x8459).contains(&i) {
+            if (0x7FCD..0x7FEF).contains(&i)
+                || (0x8445..0x8459).contains(&i)
+                || (0xB2A0..0xB2ED).contains(&i)
+            {
                 continue;
             }
             let v = (i.wrapping_mul(31).wrapping_add(7) & 0xFF) as u8;
@@ -670,7 +653,6 @@ fn scr_copy_alt_lines_yield_matches_z80() {
         z.cpu = cz;
         // Хук + Z80: мини-диспетчер, как в `Spectrum::run_frame`.
         let mut cn = std::mem::take(&mut n.cpu);
-        let mut yielded = false;
         while cn.cycles < budget {
             let pc = cn.pc;
             if let Some(hook) = n.hooks.get(&pc).copied() {
@@ -684,7 +666,6 @@ fn scr_copy_alt_lines_yield_matches_z80() {
                     let cyc = hook(&mut cn, &mut n);
                     cn.cycles += cyc;
                     if n.hook_yield {
-                        yielded = true;
                         continue;
                     }
                     let lo = n.mem[cn.sp as usize] as u16;
@@ -697,11 +678,6 @@ fn scr_copy_alt_lines_yield_matches_z80() {
             cn.step(&mut n);
         }
         n.cpu = cn;
-        // При бюджете меньше одной итерации хук не запускается (охрана
-        // `hook_max`) — рутину целиком играет Z80, отдачи управления нет.
-        if budget >= COPY_ALT_MAX_ITER {
-            assert!(yielded, "budget={budget}: хук ни разу не отдал управление");
-        }
         assert_eq!(snap(&z.cpu), snap(&n.cpu), "регистры budget={budget}");
         assert_eq!(z.cpu.pc, n.cpu.pc, "PC budget={budget}");
         assert_eq!(z.cpu.sp, n.cpu.sp, "SP budget={budget}");

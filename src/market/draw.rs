@@ -200,6 +200,7 @@ pub(super) fn status_fields(cash_tenths: u32, docked: bool) -> Vec<Field> {
 }
 
 /// Текст нижней строки — для тестов и отладки.
+#[cfg(test)]
 pub(super) fn status_line(cash_tenths: u32, docked: bool) -> String {
     status_fields(cash_tenths, docked)
         .iter()

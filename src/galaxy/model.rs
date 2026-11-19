@@ -69,7 +69,7 @@ pub struct GalaxyLayout {
     pub metric: Metric,
 }
 
-/// Версия Кладова (`zx_bin/kladov.bin`).
+/// Версия Кладова (`zx_bin/kladov128.bin`).
 pub const KLADOV_GALAXY: GalaxyLayout = GalaxyLayout {
     seed: 0xD090,
     digraphs: 0xFDB3,

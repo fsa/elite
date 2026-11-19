@@ -1,5 +1,5 @@
 //! 3D-модели объектов игры из таблицы `AdrDataShips` версии Кладова
-//! (`zx_bin/kladov.bin`).
+//! (`zx_bin/kladov128.bin`).
 //!
 //! Каждая модель лежит в отдельном модуле (`src/shipdata/<имя>.rs`),
 //! список [`SHIPS`] сохраняет порядок таблицы `AdrDataShips`.
@@ -103,7 +103,7 @@ pub struct Ship {
     pub faces: &'static [Face],
 }
 
-/// Модели версии Кладова (`zx_bin/kladov.bin`, 23 шт.).
+/// Модели версии Кладова (`zx_bin/kladov128.bin`, 23 шт.).
 pub static SHIPS: &[Ship] = &[
     coriolis::SHIP_D_CORIOLIS,
     missile::SHIP_D_MISSILE,

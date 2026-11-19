@@ -117,7 +117,7 @@ pub struct SaveLayout {
     start_hook: Hook,
 }
 
-/// Раскладка версии Кладова (`zx_bin/kladov.bin`).
+/// Раскладка версии Кладова (`zx_bin/kladov128.bin`).
 pub const KLADOV_SAVE: SaveLayout = SaveLayout {
     menu_save_load: 0xD04E,
     control_key1: 0xFC08,

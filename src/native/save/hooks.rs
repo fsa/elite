@@ -11,8 +11,7 @@ use super::*;
 /// делает сама ветка: младшие 2 бита `FlagsSetUp` — тип устройства управления.
 pub(crate) fn start_game_gate(cpu: &mut Z80, m: &mut Spectrum, layout: SaveLayout) -> u64 {
     for &addr in layout.intro_loop_start {
-        m.hooks.remove(&addr);
-        m.hook_max.remove(&addr);
+        m.remove_hook(addr);
     }
     cpu.b = m.mem[layout.flags_setup as usize] & 3;
     cpu.pc = layout.docked_setup;
@@ -81,8 +80,7 @@ pub fn request_teleport(m: &mut Spectrum, layout: SaveLayout, x: u8, y: u8) {
 
 /// Тело хука телепортации (см. [`request_teleport`]).
 pub(crate) fn teleport(cpu: &mut Z80, m: &mut Spectrum, layout: SaveLayout) -> u64 {
-    m.hooks.remove(&layout.game_main);
-    m.hook_max.remove(&layout.game_main);
+    m.remove_hook(layout.game_main);
     // Ветка переинициализации выполняет `and 0FCh / or b`, где `b` — младшие
     // два бита `FlagsSetUp` (тип устройства управления). Берём их из памяти,
     // чтобы не сбить настройку.
@@ -114,11 +112,9 @@ pub(crate) fn teleport_kladov_hook(cpu: &mut Z80, m: &mut Spectrum) -> u64 {
 pub(crate) fn load_into_docked(cpu: &mut Z80, m: &mut Spectrum, layout: SaveLayout) -> u64 {
     // Снимаем хук со всех точек, куда его ставил `request_load`.
     for &addr in layout.intro_loop_start {
-        m.hooks.remove(&addr);
-        m.hook_max.remove(&addr);
+        m.remove_hook(addr);
     }
-    m.hooks.remove(&layout.game_main);
-    m.hook_max.remove(&layout.game_main);
+    m.remove_hook(layout.game_main);
     m.load_requested = false;
 
     // На виде из кабины (и на заставке, где `WhatOnScreen` тоже 0) нижняя
@@ -161,7 +157,7 @@ pub(crate) fn load_kladov_hook(cpu: &mut Z80, m: &mut Spectrum) -> u64 {
 /// выбора файла и записывает блок командира (родная рутина требует
 /// 128K-пейджинга и в 48K-ядре не работает).
 pub fn install_save(m: &mut Spectrum, layout: SaveLayout) {
-    m.hooks.insert(layout.menu_save_load, layout.hook);
+    install_hook(m, layout.menu_save_load, layout.hook, 0);
 }
 
 /// Общий код нативной замены `MenuSaveLoad`: сбросить «залипшие» клавиши и

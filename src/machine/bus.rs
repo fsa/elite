@@ -49,10 +49,23 @@ impl Bus for Spectrum {
     }
 
     fn output(&mut self, port: u16, val: u8) {
-        if port & 0xC000 == 0x4000 && port & 0x0002 == 0 {
-            // Порт пейджинга памяти 0x7FFD (и родственный 0x1FFD).
+        if port & 0xC002 == 0x4000 {
+            // Порт пейджинга памяти 0x7FFD.
             self.paging_writes = self.paging_writes.wrapping_add(1);
             self.paging_last = val;
+            if self.paging_enabled && !self.paging_locked {
+                // Сохраняем текущую страницу 0xC000 в её банк, затем показываем
+                // банк из младших трёх битов. Банки 5/2 зафиксированы, экран и
+                // ROM в используемых игрой значениях порта не переключаются.
+                let off = 0xC000usize;
+                self.ram_banks[self.paged_bank]
+                    .copy_from_slice(&self.mem[off..off + 0x4000]);
+                self.paging_reg = val;
+                self.paged_bank = (val & 7) as usize;
+                self.mem[off..off + 0x4000]
+                    .copy_from_slice(&self.ram_banks[self.paged_bank]);
+                self.paging_locked = val & 0x20 != 0;
+            }
         }
         if port & 0x01 == 0 {
             self.border = val & 0x07;

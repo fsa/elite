@@ -1,13 +1,12 @@
 //! Загрузка образа игры и начальное состояние эмулятора.
 //!
-//! Версия Кладова (с дискеты `ELITE3HL.TRD`) грузится как полный 48K-образ
-//! памяти (0x4000-0xFFFF). Образ и ROM 48K встроены в исполняемый файл
+//! Версия Кладова грузится как 128K-образ: восемь банков ОЗУ по 16K из
+//! `zx_src/kladov128.snapshot`. Образ и ROM 48K встроены в исполняемый файл
 //! (`src/assets.rs`), поэтому запуск не зависит от внешних файлов. Образ
-//! получен `tools/make_kladov_image.py` из снапшота `zx_src/kladov.snapshot` и
-//! хранится в репозитории как `zx_bin/kladov.bin`. Файл `ELITE3  C` на дискете
-//! — это слепок уже работающей игры, без согласованной точки холодного старта,
-//! поэтому мы не проходим загрузчик, а возобновляем исполнение ровно там, где
-//! был прерван обработчик прерывания в снапшоте:
+//! получен `tools/make_kladov_image.py` и хранится как `zx_bin/kladov128.bin`.
+//! Файл `ELITE3  C` на дискете — слепок уже работающей игры, без согласованной
+//! точки холодного старта, поэтому мы не проходим загрузчик, а возобновляем
+//! исполнение ровно там, где был прерван обработчик прерывания в снапшоте:
 //! IM2, `I=0xFD`, обработчик 0xFEFE (таблица векторов уже в образе).
 
 use std::env;
@@ -18,43 +17,67 @@ use crate::machine::Spectrum;
 use crate::native;
 use crate::world;
 
-/// Адрес загрузки полного образа версии Кладова.
-pub const KLADOV_LOAD_ADDR: u16 = 0x4000;
 pub const KLADOV_I: u8 = 0xFD;
+/// Регистры из заголовка SNA-снапшота `kladov128.snapshot`.
 pub const KLADOV_STATE_PC: u16 = 0xFEFE;
-pub const KLADOV_STATE_SP: u16 = 0x4114;
-pub const KLADOV_STATE_AF: u16 = 0x0045;
-pub const KLADOV_STATE_BC: u16 = 0x0012;
-pub const KLADOV_STATE_DE: u16 = 0x482E;
-pub const KLADOV_STATE_HL: u16 = 0xC80E;
+pub const KLADOV_STATE_SP: u16 = 0x4112;
+pub const KLADOV_STATE_AF: u16 = 0x1101;
+pub const KLADOV_STATE_BC: u16 = 0x0000;
+pub const KLADOV_STATE_DE: u16 = 0x3D08;
+pub const KLADOV_STATE_HL: u16 = 0xD045;
 pub const KLADOV_STATE_IX: u16 = 0x6159;
-pub const KLADOV_STATE_IY: u16 = 0x629B;
-pub const KLADOV_STATE_R: u8 = 0x3E;
+pub const KLADOV_STATE_IY: u16 = 0x62B2;
+pub const KLADOV_STATE_R: u8 = 0x7D;
 pub const KLADOV_STATE_A: u8 = (KLADOV_STATE_AF >> 8) as u8;
 pub const KLADOV_STATE_F: u8 = (KLADOV_STATE_AF & 0xFF) as u8;
+/// Альтернативный набор регистров (после `EXX`/`EX AF,AF'`).
+pub const KLADOV_STATE_AF_ALT: u16 = 0xC99A;
+pub const KLADOV_STATE_BC_ALT: u16 = 0x0221;
+pub const KLADOV_STATE_DE_ALT: u16 = 0x0060;
+pub const KLADOV_STATE_HL_ALT: u16 = 0x0240;
+
+/// Загрузить 128K-образ Кладова в уже созданную машину.
+pub fn load_kladov_image(machine: &mut Spectrum) {
+    machine.load_game_image(assets::KLADOV_IMAGE, assets::KLADOV_PAGE_REG);
+}
+
+/// Выставить регистры из заголовка снапшота, включая альтернативный набор.
+pub fn set_kladov_cpu(machine: &mut Spectrum) {
+    let c = &mut machine.cpu;
+    c.a = KLADOV_STATE_A;
+    c.f = KLADOV_STATE_F;
+    c.b = (KLADOV_STATE_BC >> 8) as u8;
+    c.c = (KLADOV_STATE_BC & 0xFF) as u8;
+    c.d = (KLADOV_STATE_DE >> 8) as u8;
+    c.e = (KLADOV_STATE_DE & 0xFF) as u8;
+    c.h = (KLADOV_STATE_HL >> 8) as u8;
+    c.l = (KLADOV_STATE_HL & 0xFF) as u8;
+    c.a_ = (KLADOV_STATE_AF_ALT >> 8) as u8;
+    c.f_ = (KLADOV_STATE_AF_ALT & 0xFF) as u8;
+    c.b_ = (KLADOV_STATE_BC_ALT >> 8) as u8;
+    c.c_ = (KLADOV_STATE_BC_ALT & 0xFF) as u8;
+    c.d_ = (KLADOV_STATE_DE_ALT >> 8) as u8;
+    c.e_ = (KLADOV_STATE_DE_ALT & 0xFF) as u8;
+    c.h_ = (KLADOV_STATE_HL_ALT >> 8) as u8;
+    c.l_ = (KLADOV_STATE_HL_ALT & 0xFF) as u8;
+    c.ix = KLADOV_STATE_IX;
+    c.iy = KLADOV_STATE_IY;
+    c.sp = KLADOV_STATE_SP;
+    c.pc = KLADOV_STATE_PC;
+    c.i = KLADOV_I;
+    c.r = KLADOV_STATE_R;
+    c.im = 2;
+    // Как и в прежней точке старта: прерывания включены, чтобы обработчик
+    // 0xFEFE продолжал работать после RETN.
+    c.iff1 = true;
+    c.iff2 = true;
+}
 
 /// Настроить машину с загруженной игрой под версию Кладова.
 pub fn machine(opts: &Options) -> Spectrum {
     let mut machine = Spectrum::new(Some(assets::ROM_48));
-    // Версия Кладова: полный 48K-образ (0x4000..0xFFFF) загружается как есть.
-    machine.load(KLADOV_LOAD_ADDR, assets::KLADOV_IMAGE);
-    machine.cpu.a = KLADOV_STATE_A;
-    machine.cpu.f = KLADOV_STATE_F;
-    machine.cpu.b = (KLADOV_STATE_BC >> 8) as u8;
-    machine.cpu.c = (KLADOV_STATE_BC & 0xFF) as u8;
-    machine.cpu.d = (KLADOV_STATE_DE >> 8) as u8;
-    machine.cpu.e = (KLADOV_STATE_DE & 0xFF) as u8;
-    machine.cpu.h = (KLADOV_STATE_HL >> 8) as u8;
-    machine.cpu.l = (KLADOV_STATE_HL & 0xFF) as u8;
-    machine.cpu.ix = KLADOV_STATE_IX;
-    machine.cpu.iy = KLADOV_STATE_IY;
-    machine.cpu.sp = KLADOV_STATE_SP;
-    machine.cpu.pc = KLADOV_STATE_PC;
-    machine.cpu.i = KLADOV_I;
-    machine.cpu.r = KLADOV_STATE_R;
-    machine.cpu.im = 2;
-    machine.cpu.iff1 = true;
-    machine.cpu.iff2 = true;
+    load_kladov_image(&mut machine);
+    set_kladov_cpu(&mut machine);
 
     if opts.native || env::var("ELITE_NATIVE").is_ok() {
         native::install(&mut machine);

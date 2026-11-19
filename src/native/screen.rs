@@ -228,153 +228,148 @@ pub(crate) fn scr_xor_col_down_hook(cpu: &mut Z80, m: &mut Spectrum) -> u64 {
     48 * n + 5 // 35 на проход + 13 (`djnz` взят) на все, кроме последнего, + 8 + 10
 }
 
-/// Число строк копирования в `scr_copy_alt_lines` (`ld b,3Ch`).
-pub(crate) const COPY_ALT_LINES: u8 = 0x3C;
-/// Длина строки в байтах (`ld bc,0020h` перед `ldir`).
-pub(crate) const COPY_ALT_LINE: u16 = 0x20;
-/// Верхняя оценка тактов одной итерации цикла `scr_copy_alt_lines`. Складывается
-/// из push bc/hl/de (33), ld bc (10), ldir (37·31+32 = 1179), pop de/hl/bc (30),
-/// двух юнитов call 7FE3/ex de,hl/call 7FE7 (2·38 = 76), четырёх сдвигов адреса
-/// (4·87 = 348, худший случай) и djnz (13) — итого 1689. Хук гоняет итерацию
-/// быстро, только если она целиком укладывается в остаток кадра; иначе отдаёт
-/// управление Z80, чтобы прерывание сработало ровно там же, где без хука.
-pub(crate) const COPY_ALT_MAX_ITER: u64 = 1689;
+/// Число проходов внутреннего цикла `0xB2A0` (`ld a,4`) и внешнего цикла
+/// `0x7FCD` (`ld a,0Fh`) в оптимизированной версии рутины.
+const COPY_ALT_INNER: u8 = 4;
+const COPY_ALT_OUTER: u8 = 15;
+/// Длина одной строки в байтах (32 `ldi` за проход `0xB2A0`).
+const COPY_ALT_LINE: u16 = 0x20;
+/// Верхняя оценка тактов `scr_copy_alt_lines` (все 30 вызовов `0x8445` идут
+/// по длинной ветке): 36_661 такт.
+pub(crate) const COPY_ALT_MAX_ITER: u64 = 37_000;
 
-/// `scr_copy_alt_lines` (`0x7FCD`, внутренний цикл `CopyBuf2Screen`): копирует
-/// `3Ch` строк по `20h` байтов из `HL` в `DE`, после каждой строки сдвигая оба
-/// указателя на **две** пиксельные строки — то есть заполняет строки «через
-/// одну». Записи в адреса ниже `ROM_SIZE` отбрасываются — так же поступает
-/// шина настоящего Spectrum.
+/// `scr_copy_alt_lines` (`0x7FCD`) в 128K-образе Кладова. Оптимизированная
+/// версия отличается от старой 48K: вместо `ld b,3Ch` + `ldir` здесь
+/// `ld bc,01E0h`, внешний счётчик `A=0Fh` и 4 прохода по 32 `ldi` с
+/// интересом адресов на `0x200` внутри `0xB2A0`. Итого 15×4×32 = 1920 байт —
+/// те же 60 строк «через одну», что и раньше, но за ~36K тактов вместо ~99K
+/// (укладывается в один кадр, поэтому `Yield` больше не нужен).
 ///
 /// ```text
-///         ld b,3Ch
-/// loop:   push bc ; push hl ; push de
-///         ld bc,20h
-///         ldir
-///         pop de ; pop hl ; pop bc
-///         call unit ; call unit
-///         djnz loop
-///         ret
-/// unit:   ex de,hl ; call 7FE7h
-/// 7FE7h:  inc h ; ld a,h ; and 7 ; call z, compDownScrAdr_HL ; ret
+/// 7FCD: ld bc,01E0h ; ld a,0Fh ; ex af,af'
+/// loop: ex af,af' ; call B2A0h ; ex de,hl ; call 8445h
+///       ex de,hl ; call 8445h ; ex af,af' ; dec a ; jr nz,loop ; ret
+/// B2A0: ld a,04h
+/// inner: 32× ldi ; ld c,0E0h
+///        ex de,hl ; add hl,bc ; ex de,hl ; add hl,bc
+///        dec a ; jp nz,inner ; ret
 /// ```
 ///
-/// `call 7FE7h` кладёт в стек адрес, указывающий на собственное тело: после
-/// первого `ret` тело выполняется повторно, поэтому каждый `unit` двигает
-/// указатель на две строки, а не на одну. `CopyBuf2Screen` (`0x7FBE`) вызывает
-/// рутину дважды подряд (0xC000→0x4020 и 0xC100→0x4120): проходы дополняют
-/// друг друга — первый пишет строки 8, 10, …, второй 9, 11, … и вместе
-/// покрывают экран начиная со строки 8.
-///
-/// `push`/`pop`/`ld bc` на регистрах в сумме следа не оставляют (кроме `B`,
-/// который `djnz` обнуляет, и `F` от последнего `ldir`, перекрываемого телом
-/// `scr_adr_next_line`), поэтому хук копирует прямо по текущим `HL`/`DE`, а
-/// сдвиг указателей выполняют те же точные примитивы, что и настоящий код.
-///
-/// Резиду в СТЕКЕ, напротив, обязателен: в игре стек живёт прямо в экранной
-/// памяти (SP=4116h..411Eh — строки 1–7, которые копирование не трогает),
-/// и шесть байт под SP с регистрами и адресами возврата видны на экране.
-/// Слоты: `push bc/hl/de` пишут в S-2/S-4/S-6; `call 7FE3h` перезаписывает
-/// S-2 адресом возврата (7FDDh/7FE0h), `call 7FE7h` — S-4 (7FE7h). Тело
-/// под `call 7FE7h` работает с SP=S-4 и пишет резиду `call z` (7FEEh) в
-/// слот S-6, а его повторный прогон после `ret` идёт с SP=S-2 и
-/// перезаписывает слот S-4. Хук пишет резиду в том же хронологическом
-/// порядке, что и настоящие `push`/`call`, включая перезапись ldir-копией.
-///
-/// Прямые заходы в середину рутины (профиль показал единичные попадания на
-/// `0x7FCF`/`0x7FD5` минуя вход) хук не перехватывает — код рутины в памяти
-/// сохранён и выполняется как есть.
+/// Сдвиг на `0x200` получается как 32 (`ldi`) + `0x1E0` (`add hl,bc`).
+/// Резиду стека: три `call` пишут по `SP-2` адреса возврата `7FD6h`,
+/// `7FDAh`, `7FDEh` (последний остаётся в памяти).
 pub(crate) fn scr_copy_alt_lines_hook(cpu: &mut Z80, m: &mut Spectrum) -> u64 {
-    let mut cycles = 7u64; // ld b,3Ch (в этом эмуляторе ld r,n = 7)
-    bump_r(cpu, 1);
-    cpu.b = COPY_ALT_LINES;
     let sp = cpu.sp;
-    // Остаток кадра считаем от такта на входе; `frame_target` = u64::MAX вне
-    // кадрового цикла (тесты) — тогда хук отрабатывает рутину целиком.
-    let budget_end = m.frame_target.saturating_sub(cpu.cycles);
+    // ld bc,01E0h ; ld a,0Fh. Первый `ex af,af'` — это уже начало цикла
+    // по адресу 7FD2h, отдельного обмена на входе в рутину нет.
+    cpu.b = 0x01;
+    cpu.c = 0xE0;
+    cpu.a = 0x0F;
+    bump_r(cpu, 2);
+    let mut cycles = 17u64;
+
+    let mut outer = COPY_ALT_OUTER;
     loop {
-        // Итерация длиннее остатка кадра — отдаём управление в точку цикла
-        // 0x7FCF с состоянием на начало итерации. Дальше Z80 доиграет рутину
-        // как обычно, и vblank-прерывание попадёт ровно в тот же такт, что и
-        // без хука (иначе хук «проскочил» бы прерывание и разошёлся с plain).
-        if cycles + COPY_ALT_MAX_ITER > budget_end {
-            cpu.pc = 0x7FCF;
-            m.hook_yield = true;
-            return cycles;
-        }
-        // push bc ; push hl ; push de
-        bump_r(cpu, 3);
-        cycles += 33;
-        let hl = cpu.hl();
-        let de = cpu.de();
-        mem_write(m, sp.wrapping_sub(2), cpu.c);
-        mem_write(m, sp.wrapping_sub(1), cpu.b);
-        mem_write(m, sp.wrapping_sub(4), cpu.l);
-        mem_write(m, sp.wrapping_sub(3), cpu.h);
-        mem_write(m, sp.wrapping_sub(6), cpu.e);
-        mem_write(m, sp.wrapping_sub(5), cpu.d);
-        // ld bc,20h + ldir. У эмулятора каждый байт ldir — отдельный step:
-        // повторяющиеся байты стоят block_ldi(16)+21, последний 16+16.
-        let mut last = 0u8;
-        for i in 0..COPY_ALT_LINE {
-            let s = hl.wrapping_add(i) as usize;
-            let d = de.wrapping_add(i) as usize;
-            last = m.mem[s];
-            if d >= ROM_SIZE {
-                m.mem[d] = last;
+        // 7FD2h: ex af,af' — вернуть счётчик внешнего цикла в A.
+        std::mem::swap(&mut cpu.a, &mut cpu.a_);
+        std::mem::swap(&mut cpu.f, &mut cpu.f_);
+        bump_r(cpu, 2); // ex af,af' + call B2A0h
+        cycles += 4 + 17;
+        mem_write(m, sp.wrapping_sub(2), 0xD6);
+        mem_write(m, sp.wrapping_sub(1), 0x7F);
+
+        // B2A0h: ld a,04h, затем 4 прохода по 32 `ldi`.
+        cpu.a = COPY_ALT_INNER;
+        bump_r(cpu, 1);
+        cycles += 7;
+        let mut inner = COPY_ALT_INNER;
+        loop {
+            for _ in 0..COPY_ALT_LINE {
+                let src = cpu.hl() as usize;
+                let dst = cpu.de() as usize;
+                let v = m.mem[src];
+                if dst >= ROM_SIZE {
+                    m.mem[dst] = v;
+                }
+                let hl = cpu.hl().wrapping_add(1);
+                cpu.h = (hl >> 8) as u8;
+                cpu.l = hl as u8;
+                let de = cpu.de().wrapping_add(1);
+                cpu.d = (de >> 8) as u8;
+                cpu.e = de as u8;
+                cpu.c = cpu.c.wrapping_sub(1);
+                if cpu.c == 0 {
+                    cpu.b = cpu.b.wrapping_sub(1);
+                }
+                let n = cpu.a.wrapping_add(v);
+                cpu.f = (cpu.f & (SF | ZF | CF))
+                    | (n & XF)
+                    | if n & 0x02 != 0 { YF } else { 0 }
+                    | if cpu.bc() != 0 { PF } else { 0 };
+                bump_r(cpu, 1);
+                cycles += 16;
             }
-        }
-        // Флаги block_ldi: S,Z,C сохраняются от входа, X/Y от A+последнего
-        // перенесённого байта, PV=0 (BC кончился), N=H=0.
-        let n = cpu.a.wrapping_add(last);
-        cpu.f = (cpu.f & (SF | ZF | CF)) | (n & XF) | if n & 0x02 != 0 { YF } else { 0 };
-        bump_r(cpu, 1 + COPY_ALT_LINE as u32);
-        cycles += 10 + 37 * (COPY_ALT_LINE as u64 - 1) + 32;
-        // pop de ; pop hl ; pop bc. Регистры восстанавливаются ИЗ ПАМЯТИ:
-        // когда копия перекрывает кадр стека (в игре SP=411Eh, и строка 1
-        // экрана лежит в 4100h..411Fh), `pop` возвращает уже испорченные
-        // `ldir` значения — ровно так, как это делает настоящий Z80.
-        bump_r(cpu, 3);
-        cycles += 30;
-        cpu.e = m.mem[sp.wrapping_sub(6) as usize];
-        cpu.d = m.mem[sp.wrapping_sub(5) as usize];
-        cpu.l = m.mem[sp.wrapping_sub(4) as usize];
-        cpu.h = m.mem[sp.wrapping_sub(3) as usize];
-        cpu.c = m.mem[sp.wrapping_sub(2) as usize];
-        cpu.b = m.mem[sp.wrapping_sub(1) as usize];
-        for unit in 0..2u16 {
+            // ld c,0E0h ; ex de,hl ; add hl,bc ; ex de,hl ; add hl,bc
+            cpu.c = 0xE0;
+            bump_r(cpu, 1);
+            cycles += 7;
             std::mem::swap(&mut cpu.h, &mut cpu.d);
             std::mem::swap(&mut cpu.l, &mut cpu.e);
-            bump_r(cpu, 3); // call unit + ex de,hl + call 7FE7h
-            cycles += 17 + 4 + 17;
-            // call 7FE3h кладёт в стек адрес возврата (7FDDh или 7FE0h),
-            // затем call 7FE7h кладёт 7FE7h — по два байта на слот.
-            let ret = if unit == 0 { 0x7FDDu16 } else { 0x7FE0 };
-            mem_write(m, sp.wrapping_sub(2), ret as u8);
-            mem_write(m, sp.wrapping_sub(1), (ret >> 8) as u8);
-            mem_write(m, sp.wrapping_sub(4), 0xE7);
-            mem_write(m, sp.wrapping_sub(3), 0x7F);
-            // Первое тело работает под `call 7FE7h` (SP=S-4) и пишет резиду
-            // `call z` в слот S-6; повторный прогон после `ret` идёт с
-            // SP=S-2 и перезаписывает слот S-4 — адрес возврата 7FE7h.
-            for slot in [6u16, 4] {
-                // call z,8445h берётся, когда (H+1) mod 8 == 0 — так же
-                // решает внутренний хук scr_adr_next_line.
-                if cpu.h.wrapping_add(1) & 7 == 0 {
-                    mem_write(m, sp.wrapping_sub(slot), 0xEE);
-                    mem_write(m, sp.wrapping_sub(slot - 1), 0x7F);
-                }
-                cycles += scr_adr_next_line_advance(cpu, m);
+            let r = cpu.add16(cpu.hl(), cpu.bc());
+            cpu.h = (r >> 8) as u8;
+            cpu.l = r as u8;
+            bump_r(cpu, 2); // ex de,hl + add hl,bc
+            cycles += 4 + 11;
+            std::mem::swap(&mut cpu.h, &mut cpu.d);
+            std::mem::swap(&mut cpu.l, &mut cpu.e);
+            let r = cpu.add16(cpu.hl(), cpu.bc());
+            cpu.h = (r >> 8) as u8;
+            cpu.l = r as u8;
+            bump_r(cpu, 2); // ex de,hl + add hl,bc
+            cycles += 4 + 11;
+            // dec a ; jp nz,inner
+            cpu.a = cpu.dec8(cpu.a);
+            bump_r(cpu, 2);
+            cycles += 4 + 10;
+            inner -= 1;
+            if inner == 0 {
+                break;
             }
         }
-        // djnz loop
+        // ret из B2A0h.
         bump_r(cpu, 1);
-        cpu.b = cpu.b.wrapping_sub(1);
-        if cpu.b == 0 {
-            cycles += 8;
+        cycles += 10;
+
+        // ex de,hl ; call 8445h (сдвиг HL)
+        std::mem::swap(&mut cpu.h, &mut cpu.d);
+        std::mem::swap(&mut cpu.l, &mut cpu.e);
+        bump_r(cpu, 2);
+        cycles += 4 + 17;
+        mem_write(m, sp.wrapping_sub(2), 0xDA);
+        mem_write(m, sp.wrapping_sub(1), 0x7F);
+        cycles += scr_adr_next_char_line_hook(cpu, m);
+
+        // ex de,hl ; call 8445h (сдвиг DE)
+        std::mem::swap(&mut cpu.h, &mut cpu.d);
+        std::mem::swap(&mut cpu.l, &mut cpu.e);
+        bump_r(cpu, 2);
+        cycles += 4 + 17;
+        mem_write(m, sp.wrapping_sub(2), 0xDE);
+        mem_write(m, sp.wrapping_sub(1), 0x7F);
+        cycles += scr_adr_next_char_line_hook(cpu, m);
+
+        // ex af,af' ; dec a ; jr nz,loop
+        std::mem::swap(&mut cpu.a, &mut cpu.a_);
+        std::mem::swap(&mut cpu.f, &mut cpu.f_);
+        cpu.a = cpu.dec8(cpu.a);
+        bump_r(cpu, 3);
+        cycles += 4 + 4;
+        outer -= 1;
+        if outer == 0 {
+            cycles += 7; // jr nz не взят
             break;
         }
-        cycles += 13;
+        cycles += 12; // jr nz взят
     }
     bump_r(cpu, 1); // ret
     cycles + 10

@@ -6,7 +6,7 @@
 //!
 //! Инвариант: поведение обязано совпадать с исходной рутиной. Для каждой
 //! функции есть тест эквивалентности (см. `mod tests`), который прогоняет
-//! настоящий код из образа `zx_bin/kladov.bin` на эмуляторе и сверяет
+//! настоящий код из образа `zx_bin/kladov128.bin` на эмуляторе и сверяет
 //! результат с нативной реализацией.
 //!
 //! Полное разрешение: хук может рисовать в HD-слой `Spectrum::hd` (см.
@@ -60,8 +60,7 @@ pub fn install_text_capture(m: &mut Spectrum) {
 
 /// Регистрирует хук вместе с верхней оценкой его тактов (см. `hook_max`).
 fn install_hook(m: &mut Spectrum, addr: u16, run: Hook, max_cycles: u64) {
-    m.hooks.insert(addr, run);
-    m.hook_max.insert(addr, max_cycles);
+    m.install_hook(addr, run, max_cycles);
 }
 
 /// Эмуляция обновления регистра `R` (Memory Refresh) за заменённые инструкции.

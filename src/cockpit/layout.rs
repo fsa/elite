@@ -66,7 +66,7 @@ pub struct CockpitLayout {
     pub ecm_time: u16,
 }
 
-/// Раскладка переменных панели для версии Кладова (`kladov.bin`), +0xA2.
+/// Раскладка переменных панели для версии Кладова (`kladov128.bin`), +0xA2.
 #[allow(dead_code)] // понадобится на следующих шагах заполнения панели
 pub const KLADOV_COCKPIT: CockpitLayout = CockpitLayout {
     shield_front: 0x70E8,

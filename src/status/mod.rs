@@ -77,7 +77,7 @@ pub struct StatusLayout {
     pub galaxy: GalaxyLayout,
 }
 
-/// Раскладка версии Кладова (`zx_bin/kladov.bin`).
+/// Раскладка версии Кладова (`zx_bin/kladov128.bin`).
 pub const KLADOV_STATUS: StatusLayout = StatusLayout {
     pilot: 0xD054,
     galaxy: galaxy::KLADOV_GALAXY,

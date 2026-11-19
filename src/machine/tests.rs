@@ -1,6 +1,86 @@
-//! Тесты Spectrum: звук бипера и перехват игровых сообщений.
+//! Тесты Spectrum: звук бипера, пейджинг, перехват игровых сообщений.
 
 use super::*;
+
+#[test]
+fn paging_switches_upper_bank_and_keeps_writes() {
+    let mut m = Spectrum::new(None);
+    // В каждом банке — его номер, чтобы сразу видеть, кто отображён.
+    let image: Vec<u8> = (0..8u8).flat_map(|b| vec![b; 0x4000]).collect();
+    m.load_game_image(&image, 0x10);
+    assert_eq!(m.paged_bank, 0);
+    assert_eq!(m.mem[0xC000], 0);
+
+    // Запись в отображённую страницу попадает в её банк.
+    m.write(0xC000, 0xAA);
+    assert_eq!(m.mem[0xC000], 0xAA);
+
+    // Порт 0x7FFD переключает только окно 0xC000; уходящая страница
+    // сохраняется в своём банке.
+    m.output(0x7FFD, 0x11);
+    assert_eq!(m.ram_banks[0][0], 0xAA);
+    assert_eq!(m.paged_bank, 1);
+    assert_eq!(m.mem[0xC000], 1);
+    m.write(0xC000, 0xBB);
+    assert_eq!(m.mem[0xC000], 0xBB);
+
+    // Возврат к банку 0 сохраняет сделанную туда запись.
+    m.output(0x7FFD, 0x10);
+    assert_eq!(m.mem[0xC000], 0xAA);
+    assert_eq!(m.ram_banks[1][0], 0xBB);
+    assert_eq!(m.paging_writes, 2);
+}
+
+#[test]
+fn paging_lock_ignores_further_writes() {
+    let mut m = Spectrum::new(None);
+    let image = vec![0u8; 8 * 0x4000];
+    m.load_game_image(&image, 0x10);
+    // Бит 5 блокирует порт до следующей перезагрузки.
+    m.output(0x7FFD, 0x30);
+    assert_eq!(m.paged_bank, 0);
+    m.output(0x7FFD, 0x11);
+    assert_eq!(m.paged_bank, 0);
+    assert_eq!(m.paging_writes, 2); // записи считаются даже при блокировке
+    assert_eq!(m.paging_last, 0x11);
+}
+
+#[test]
+fn hook_bound_to_upper_bank_does_not_fire_in_other_bank() {
+    use std::sync::atomic::{AtomicU32, Ordering};
+    static CALLS: AtomicU32 = AtomicU32::new(0);
+    fn count(_: &mut Z80, _: &mut Spectrum) -> u64 {
+        CALLS.fetch_add(1, Ordering::Relaxed);
+        0
+    }
+    fn run_to_halt(m: &mut Spectrum) {
+        m.mem[0xC000] = 0xC9; // ret
+        m.mem[0xE000] = 0x34;
+        m.mem[0xE001] = 0x12; // адрес возврата 0x1234
+        m.mem[0x1234] = 0x76; // halt
+        m.cpu.sp = 0xE000;
+        m.cpu.pc = 0xC000;
+        m.cpu.iff1 = false;
+        m.run_frame();
+    }
+
+    CALLS.store(0, Ordering::Relaxed);
+    let mut m = Spectrum::new(None);
+    let image = vec![0u8; 8 * 0x4000];
+    m.load_game_image(&image, 0x10);
+    m.install_hook(0xC000, count, 0);
+
+    run_to_halt(&mut m);
+    assert_eq!(CALLS.load(Ordering::Relaxed), 1, "хук банка 0 не сработал");
+
+    m.output(0x7FFD, 0x11); // банк 1 по тому же адресу 0xC000
+    run_to_halt(&mut m);
+    assert_eq!(
+        CALLS.load(Ordering::Relaxed),
+        1,
+        "хук банка 0 сработал в банке 1"
+    );
+}
 
 #[test]
 fn beeper_edges_become_audio() {

@@ -40,7 +40,7 @@ pub struct ShopLayout {
     pub galaxy: GalaxyLayout,
 }
 
-/// Раскладка версии Кладова (`zx_bin/kladov.bin`).
+/// Раскладка версии Кладова (`zx_bin/kladov128.bin`).
 pub const KLADOV_SHOP: ShopLayout = ShopLayout {
     pilot: 0xD054,
     prices: 0x705F,

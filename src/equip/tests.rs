@@ -28,7 +28,7 @@ fn fake_kladov_mem() -> Vec<u8> {
     m[p + 48] = 0xFF; // большой грузовой отсек — установлен
     m[p + 49] = 0x7F; // E.C.M. — установлен (по-кладовски)
     m[p + OFF_TECH] = 10;
-    // Таблица цен на 0x705F (14 записей по 3 байта, как в kladov.bin).
+    // Таблица цен на 0x705F (14 записей по 3 байта, как в kladov128.bin).
     let prices: [[u8; 3]; 14] = [
         [0x00, 0x00, 0x00], // FUEL: динамическая цена в среднем байте
         [0x00, 0x2C, 0x01], // 30.0
@@ -391,15 +391,14 @@ fn layout_has_room_for_prices_and_panel() {
 fn dump_equip_to_tmp() {
     let base = env!("CARGO_MANIFEST_DIR");
     let rom = std::fs::read(format!("{base}/zx_bin/48.rom")).expect("zx_bin/48.rom");
-    let img = std::fs::read(format!("{base}/zx_bin/kladov.bin")).expect("zx_bin/kladov.bin");
-    let mut mem = vec![0u8; 0x10000];
-    mem[..rom.len()].copy_from_slice(&rom);
-    mem[0x4000..0x4000 + img.len()].copy_from_slice(&img);
+    let mut machine = crate::machine::Spectrum::new(Some(&rom));
+    crate::boot::load_kladov_image(&mut machine);
+    let mem = &machine.mem;
     let mut shop = Shop::new();
-    shop.open(&mem, KLADOV_SHOP);
+    shop.open(mem, KLADOV_SHOP);
     let font = crate::font::ZX_FONT;
     let mut f = Frame::new(1280, 720);
-    shop.draw(&mut f, font, &mem);
+    shop.draw(&mut f, font, mem);
     let mut out = Vec::with_capacity(f.width * f.height * 3 + 32);
     out.extend_from_slice(format!("P6\n{} {}\n255\n", f.width, f.height).as_bytes());
     for &p in f.pixels() {

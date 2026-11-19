@@ -1,5 +1,11 @@
-//! Sinclair ZX Spectrum 48K machine: 64K address space, ULA (border, beeper,
-//! keyboard) and a 256x192 bitmap framebuffer.
+//! Sinclair ZX Spectrum machine: 64K address space with 128K RAM paging, ULA
+//! (border, beeper, keyboard) and a 256x192 bitmap framebuffer.
+//!
+//! `mem` — это текущее окно адресного пространства: `0x4000..0x8000` всегда
+//! банк 5, `0x8000..0xC000` — банк 2, а `0xC000..0x10000` — банк из младших
+//! битов порта `0x7FFD`. При переключении банка текущая страница сохраняется
+//! в `ram_banks`, поэтому прямой доступ к `mem` (хуки, рендер, тесты) видит
+//! именно ту память, которая сейчас отображена CPU.
 
 use crate::display;
 use crate::z80::{Bus, Z80};
@@ -35,9 +41,19 @@ pub struct Spectrum {
     pub kempston: u8,
     pub border: u8,
     pub beeper: bool,
-    /// Число записей в порт пейджинга 0x7FFD (для проверки использования 128K).
+    /// Число записей в порт пейджинга 0x7FFD.
     pub paging_writes: u32,
     pub paging_last: u8,
+    /// Восемь физических банков ОЗУ по 16K. Пусто, пока не загружен 128K-образ.
+    ram_banks: Vec<Vec<u8>>,
+    /// Включён ли пейджинг (после загрузки 128K-образа).
+    paging_enabled: bool,
+    /// Текущее значение порта `0x7FFD`.
+    pub paging_reg: u8,
+    /// Порт `0x7FFD` заблокирован битом 5 последней записи.
+    paging_locked: bool,
+    /// Банк, который сейчас отображён по `0xC000`.
+    pub paged_bank: usize,
     pub frame_start: u64,
     pub frames: u64,
     pub watch: Option<(u16, u16)>,
@@ -79,6 +95,9 @@ pub struct Spectrum {
     cycle_clock: u64,
     /// Нативные замены подпрограмм: `PC` → реализация на Rust.
     pub hooks: std::collections::BTreeMap<u16, Hook>,
+    /// Для адресов из `0xC000..0x10000` — в каком банке допустим хук. Без этого
+    /// один и тот же `PC` в другом банке вызвал бы чужую нативную рутину.
+    hook_banks: std::collections::BTreeMap<u16, u8>,
     /// Верхняя оценка тактов, которые хук добавит до того, как вернёт
     /// управление (или отдаст его через [`Spectrum::hook_yield`]). Хук **не
     /// запускается**, если эта оценка не укладывается в остаток кадра: иначе
@@ -132,6 +151,11 @@ impl Spectrum {
             beeper: false,
             paging_writes: 0,
             paging_last: 0,
+            ram_banks: Vec::new(),
+            paging_enabled: false,
+            paging_reg: 0x10,
+            paging_locked: false,
+            paged_bank: 0,
             frame_start: 0,
             frames: 0,
             watch: None,
@@ -155,6 +179,7 @@ impl Spectrum {
             audio_span_cycles: CYCLES_PER_FRAME,
             cycle_clock: 0,
             hooks: std::collections::BTreeMap::new(),
+            hook_banks: std::collections::BTreeMap::new(),
             hook_max: std::collections::BTreeMap::new(),
             hook_yield: false,
             frame_target: u64::MAX,
@@ -166,6 +191,7 @@ impl Spectrum {
     }
 
     /// Load a raw block of bytes into memory at `addr`.
+    #[cfg(test)]
     pub fn load(&mut self, addr: u16, data: &[u8]) {
         let mut a = addr as usize;
         for &b in data {
@@ -173,8 +199,50 @@ impl Spectrum {
                 break;
             }
             self.mem[a] = b;
+            if self.paging_enabled && a >= 0xC000 {
+                let off = a - 0xC000;
+                self.ram_banks[self.paged_bank][off] = b;
+            }
             a += 1;
         }
+    }
+
+    /// Загрузить 128K-образ: восемь банков по 16K и начальное значение `0x7FFD`.
+    ///
+    /// Банки 5 и 2 сразу отображаются по `0x4000`/`0x8000`, остальные хранятся
+    /// в `ram_banks`; выбранный портом банк копируется в `mem[0xC000..]`.
+    pub fn load_game_image(&mut self, image: &[u8], page_reg: u8) {
+        assert_eq!(image.len(), 8 * 0x4000, "нужен 128K-образ из 8 банков");
+        let banks: Vec<Vec<u8>> = (0..8)
+            .map(|i| image[i * 0x4000..(i + 1) * 0x4000].to_vec())
+            .collect();
+        self.ram_banks = banks;
+        self.paging_enabled = true;
+        self.paging_reg = page_reg;
+        self.paging_locked = false;
+        self.paging_writes = 0;
+        self.paging_last = page_reg;
+        self.paged_bank = (page_reg & 7) as usize;
+
+        self.mem[0x4000..0x8000].copy_from_slice(&self.ram_banks[5]);
+        self.mem[0x8000..0xC000].copy_from_slice(&self.ram_banks[2]);
+        self.mem[0xC000..0x10000].copy_from_slice(&self.ram_banks[self.paged_bank]);
+    }
+
+    /// Установить хук, запомнив банк для адресов из `0xC000..0x10000`.
+    pub fn install_hook(&mut self, addr: u16, hook: Hook, max_cycles: u64) {
+        self.hooks.insert(addr, hook);
+        self.hook_max.insert(addr, max_cycles);
+        if addr >= 0xC000 {
+            self.hook_banks.insert(addr, self.paged_bank as u8);
+        }
+    }
+
+    /// Снять хук вместе с привязкой к банку.
+    pub fn remove_hook(&mut self, addr: u16) {
+        self.hooks.remove(&addr);
+        self.hook_max.remove(&addr);
+        self.hook_banks.remove(&addr);
     }
 
     pub fn set_key(&mut self, row: usize, bit: u8, pressed: bool) {
@@ -258,14 +326,21 @@ impl Spectrum {
                 self.sp_for_write = cpu.sp;
             }
             if let Some(hook) = self.hooks.get(&pc).copied() {
+                // Хук для адреса из 0xC000.. привязан к банку, в котором он
+                // установлен. В другом банке по тому же адресу лежит иной код.
+                let bank_ok = self
+                    .hook_banks
+                    .get(&pc)
+                    .map_or(true, |&bank| bank as usize == self.paged_bank);
                 // Запускаем хук только если его верхняя оценка тактов
                 // укладывается в остаток кадра. Иначе исполняем рутину на Z80:
                 // так кадровая граница попадает туда же, где без хука.
-                let fits = self
-                    .hook_max
-                    .get(&pc)
-                    .copied()
-                    .map_or(true, |max| cpu.cycles.saturating_add(max) <= target);
+                let fits = bank_ok
+                    && self
+                        .hook_max
+                        .get(&pc)
+                        .copied()
+                        .map_or(true, |max| cpu.cycles.saturating_add(max) <= target);
                 if fits {
                     self.hook_yield = false;
                     let cycles = hook(&mut cpu, self);

@@ -9,11 +9,7 @@ use std::fs;
 use winit::keyboard::KeyCode;
 
 use super::*;
-use crate::boot::{
-    KLADOV_I, KLADOV_LOAD_ADDR, KLADOV_STATE_A, KLADOV_STATE_BC, KLADOV_STATE_DE,
-    KLADOV_STATE_F, KLADOV_STATE_HL, KLADOV_STATE_IX, KLADOV_STATE_IY, KLADOV_STATE_PC,
-    KLADOV_STATE_R, KLADOV_STATE_SP,
-};
+use crate::boot::{load_kladov_image, set_kladov_cpu};
 use crate::cli::Options;
 use crate::cockpit;
 use crate::display;
@@ -37,26 +33,9 @@ use crate::world::{current_planet_color, save_layout_kladov, scene_markers};
     fn boot() -> Spectrum {
         let base = env!("CARGO_MANIFEST_DIR");
         let rom = fs::read(format!("{base}/zx_bin/48.rom")).expect("zx_bin/48.rom");
-        let game = fs::read(format!("{base}/zx_bin/kladov.bin")).expect("zx_bin/kladov.bin");
         let mut m = Spectrum::new(Some(&rom));
-        m.load(KLADOV_LOAD_ADDR, &game);
-        m.cpu.a = KLADOV_STATE_A;
-        m.cpu.f = KLADOV_STATE_F;
-        m.cpu.b = (KLADOV_STATE_BC >> 8) as u8;
-        m.cpu.c = (KLADOV_STATE_BC & 0xFF) as u8;
-        m.cpu.d = (KLADOV_STATE_DE >> 8) as u8;
-        m.cpu.e = (KLADOV_STATE_DE & 0xFF) as u8;
-        m.cpu.h = (KLADOV_STATE_HL >> 8) as u8;
-        m.cpu.l = (KLADOV_STATE_HL & 0xFF) as u8;
-        m.cpu.ix = KLADOV_STATE_IX;
-        m.cpu.iy = KLADOV_STATE_IY;
-        m.cpu.sp = KLADOV_STATE_SP;
-        m.cpu.pc = KLADOV_STATE_PC;
-        m.cpu.i = KLADOV_I;
-        m.cpu.r = KLADOV_STATE_R;
-        m.cpu.im = 2;
-        m.cpu.iff1 = true;
-        m.cpu.iff2 = true;
+        load_kladov_image(&mut m);
+        set_kladov_cpu(&mut m);
         native::install_save(&mut m, native::KLADOV_SAVE);
         m
     }
@@ -1237,27 +1216,9 @@ use crate::world::{current_planet_color, save_layout_kladov, scene_markers};
     fn boot_kladov() -> Spectrum {
         let base = env!("CARGO_MANIFEST_DIR");
         let rom = fs::read(format!("{base}/zx_bin/48.rom")).expect("zx_bin/48.rom");
-        let game = fs::read(format!("{base}/zx_bin/kladov.bin")).expect("zx_bin/kladov.bin");
         let mut m = Spectrum::new(Some(&rom));
-        m.load(KLADOV_LOAD_ADDR, &game);
-        let c = &mut m.cpu;
-        c.a = KLADOV_STATE_A;
-        c.f = KLADOV_STATE_F;
-        c.b = (KLADOV_STATE_BC >> 8) as u8;
-        c.c = (KLADOV_STATE_BC & 0xFF) as u8;
-        c.d = (KLADOV_STATE_DE >> 8) as u8;
-        c.e = (KLADOV_STATE_DE & 0xFF) as u8;
-        c.h = (KLADOV_STATE_HL >> 8) as u8;
-        c.l = (KLADOV_STATE_HL & 0xFF) as u8;
-        c.ix = KLADOV_STATE_IX;
-        c.iy = KLADOV_STATE_IY;
-        c.sp = KLADOV_STATE_SP;
-        c.pc = KLADOV_STATE_PC;
-        c.i = KLADOV_I;
-        c.r = KLADOV_STATE_R;
-        c.im = 2;
-        c.iff1 = true;
-        c.iff2 = true;
+        load_kladov_image(&mut m);
+        set_kladov_cpu(&mut m);
         native::install_save(&mut m, native::KLADOV_SAVE);
         m
     }
