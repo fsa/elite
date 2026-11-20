@@ -312,16 +312,19 @@ impl App<'_> {
             }
             return;
         }
-        // G/H на станции теперь передаются эмулятору, чтобы он сам показал
-        // родной ответ (сообщение `DOCKED` и звук) на своём экране.
+        // G/H на станции: показываем нативный DOCKED и проигрываем звук (без перехода в эмулятор).
         if !repeat
             && matches!(code, KeyCode::KeyG | KeyCode::KeyH)
             && !self.menu
             && self.station_native
             && !(self.hdmap.active && self.hdmap.is_searching())
         {
-            self.handoff_to_emulator();
-            self.pending_key = matrix_pos(code);
+            self.docked.show();
+            self.sfx.play(crate::sfx::Sfx::DockedBeep);
+            if let Some((row, bit)) = matrix_pos(code) {
+                self.matrix[row][bit as usize] = false;
+            }
+            self.pending_key = None;
             return;
         }
         // G/H в полёте под модальным нативным экраном (картой): отсчёт

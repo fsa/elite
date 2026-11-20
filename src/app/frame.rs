@@ -33,9 +33,12 @@ impl App<'_> {
         if self.audio.is_none() && self.wav_samples.is_none() && !self.sfx.is_playing() {
             return;
         }
+        let samples_count = (self.machine.audio_rate as usize) / 50;
         self.audio_buf.clear();
         if run_emulator {
             self.machine.render_audio(&mut self.audio_buf);
+        } else {
+            self.audio_buf.resize(samples_count, 0);
         }
         self.sfx.mix(&mut self.audio_buf);
         if let Some(audio) = &self.audio {
