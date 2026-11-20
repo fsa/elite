@@ -210,10 +210,6 @@ struct App<'a> {
     mouse_right: bool,
     mouse_wheel_up: bool,
     mouse_wheel_down: bool,
-    /// Нажатие `G`/`H` на станции уже обработано (заглушка `DOCKED`) и должно
-    /// игнорироваться до отпускания, чтобы не уходить в эмулятор после её закрытия.
-    docked_consumed_g: bool,
-    docked_consumed_h: bool,
     next_frame: Instant,
 }
 
@@ -280,8 +276,6 @@ impl<'a> App<'a> {
             mouse_right: false,
             mouse_wheel_up: false,
             mouse_wheel_down: false,
-            docked_consumed_g: false,
-            docked_consumed_h: false,
             next_frame: Instant::now(),
         };
         // Снапшот может сразу быть пристыкованным. Это не переход из

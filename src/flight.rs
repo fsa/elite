@@ -232,18 +232,12 @@ impl Flight {
     /// Постареть нижнее сообщение на `frames` кадров. Вызывается до
     /// [`Self::sync_game_msg`], чтобы свежее событие начинало новый отсчёт.
     pub fn advance_messages(&mut self, frames: u64) {
-        if !self.active && !self.transition.in_transition() {
-            return;
-        }
         self.messages.advance(frames.min(u32::MAX as u64) as u32);
     }
 
     /// Забрать перехваченные строки игры (см. [`crate::machine::GameMsgTap`]).
     /// Для показа берётся только нижняя строка (`0x0D`).
     pub fn sync_game_msg(&mut self, tap: &mut GameMsgTap) {
-        if !self.active && !self.transition.in_transition() {
-            return;
-        }
         self.messages.sync(tap);
     }
 
@@ -259,9 +253,6 @@ impl Flight {
     /// держит кабину, а нативный рендер показывает «Game Over»; на заставку
     /// вид закрывает приложение (см. `App::follow_flight_screen`).
     pub fn follow_z80_screen(&mut self, mem: &[u8]) {
-        if !self.active && !self.transition.in_transition() {
-            return;
-        }
         let Some(&screen) = mem.get(Z80_WHAT_ON_SCREEN) else {
             return;
         };
@@ -304,7 +295,7 @@ impl Flight {
     /// поэтому координаты слотов, `SunCrd` и `PlanetCrd` — это готовые
     /// координаты вида. Камера стоит в начале координат.
     pub fn sync_from_z80(&mut self, mem: &[u8]) {
-        if (!self.active && !self.transition.in_transition()) || mem.len() < Z80_MEM_MIN {
+        if mem.len() < Z80_MEM_MIN {
             return;
         }
 
@@ -404,9 +395,6 @@ impl Flight {
     ///
     /// Мир не двигается — его координаты приходят из [`Self::sync_from_z80`].
     pub fn tick(&mut self, dt: f32) {
-        if !self.active && !self.transition.in_transition() {
-            return;
-        }
         let dt = dt.clamp(0.0, 0.1);
         self.combat.tick(dt);
         self.explosions.tick(dt);

@@ -404,8 +404,8 @@ use crate::world::{current_planet_color, save_layout_kladov, scene_markers};
         assert_eq!(app.machine.kempston, 0);
     }
 
-    /// В полёте F8 показывает цены, но стрелки не торгуют: экран остаётся
-    /// только для просмотра, а ввод уходит эмулятору.
+    /// В полёте F8 показывает цены нативно поверх симуляции, но стрелки не
+    /// торгуют: экран остаётся только для просмотра, а ввод уходит эмулятору.
     #[test]
     fn f8_market_in_flight_is_read_only() {
         let opts = test_options();
@@ -423,14 +423,11 @@ use crate::world::{current_planet_color, save_layout_kladov, scene_markers};
 
         app.key_event(KeyCode::F8, true, false);
         assert!(app.market.native, "F8 не открыл рынок в полёте");
-        assert!(app.pending_market, "F8 не запросил переход в режим рынка");
-
-        app.apply_input();
-        app.machine.run_frame();
-        app.machine.mem[flight::Z80_WHAT_ON_SCREEN] = flight::Z80_SCREEN_MARKET;
-        app.open_pending_market();
-        assert!(app.market.native, "F8 не открыл рынок в полёте");
-        assert!(!app.pending_market, "переход в режим рынка не завершён");
+        assert!(
+            !app.pending_market,
+            "F8 в полёте не должен переключать экран Z80"
+        );
+        assert_eq!(app.pending_key, None, "F8 в полёте не должен отдавать K эмулятору");
 
         app.key_event(KeyCode::ArrowRight, true, false);
         assert_eq!(app.machine.mem[market_layout.quantities], 2);
@@ -576,7 +573,8 @@ use crate::world::{current_planet_color, save_layout_kladov, scene_markers};
         assert!(app.sysinfo.active, "повторный F7 не открыл экран");
         assert_eq!(app.pending_key, None, "F7 зря отправил P в эмулятор");
 
-        // В полёте F7 остаётся нативной отрисовкой родного экрана `P`.
+        // В полёте F7 показывает нативный экран информации о планете поверх
+        // симуляции, без переключения экрана Z80.
         let mut app = App::new(boot(), &opts);
         app.machine.mem[flight::Z80_WHAT_ON_SCREEN] = 0;
         app.machine.mem[flight::Z80_IND_DANGER] = 1;
@@ -584,9 +582,11 @@ use crate::world::{current_planet_color, save_layout_kladov, scene_markers};
         app.machine.mem[flight::Z80_FLG_JUMP_DOCKING] = 0;
         app.key_event(KeyCode::F7, true, false);
         assert!(app.sysinfo.active, "F7 не открыл экран в полёте");
-        assert!(app.pending_sysinfo, "F7 в полёте не запросил переход");
-        let (prow, pbit) = matrix_pos(KeyCode::KeyP).expect("P в матрице");
-        assert_eq!(app.pending_key, Some((prow, pbit)), "F7 не отдал игре P");
+        assert!(
+            !app.pending_sysinfo,
+            "F7 в полёте не должен переключать экран Z80"
+        );
+        assert_eq!(app.pending_key, None, "F7 в полёте не должен отдавать P эмулятору");
     }
 
     /// F9 — нативная альтернатива экрану капитана (`L`). На станции экран
@@ -658,7 +658,8 @@ use crate::world::{current_planet_color, save_layout_kladov, scene_markers};
         app.follow_native_screens();
         assert!(app.status.active, "нативный экран закрылся вместе с Z80");
 
-        // В полёте F9 открывает альтернативу и отдаёт игре L.
+        // В полёте F9 показывает нативный экран капитана поверх симуляции,
+        // без переключения экрана Z80.
         let mut app = App::new(boot(), &opts);
         app.machine.mem[flight::Z80_WHAT_ON_SCREEN] = 0;
         app.machine.mem[flight::Z80_IND_DANGER] = 1;
@@ -666,10 +667,12 @@ use crate::world::{current_planet_color, save_layout_kladov, scene_markers};
         assert!(app.flight.active);
         app.key_event(KeyCode::F9, true, false);
         assert!(app.status.active, "F9 не открыл нативный экран в полёте");
-        assert!(app.pending_status, "F9 не запросил экран капитана в полёте");
+        assert!(
+            !app.pending_status,
+            "F9 в полёте не должен переключать экран Z80"
+        );
         assert!(!app.flight.active, "нативный вид остался под экраном");
-        let (lrow, lbit) = matrix_pos(KeyCode::KeyL).expect("L в матрице");
-        assert_eq!(app.pending_key, Some((lrow, lbit)), "F9 не отдал игре L");
+        assert_eq!(app.pending_key, None, "F9 в полёте не должен отдавать L эмулятору");
     }
 
     /// F1 включает нативный экран полёта и одновременно отдаёт игре клавишу 1.
@@ -2057,33 +2060,28 @@ use crate::world::{current_planet_color, save_layout_kladov, scene_markers};
         fs::remove_file(&path).ok();
     }
 
-    /// На станции `G`/`H` при открытом нативном экране показывают заглушку
-    /// `DOCKED` примерно на секунду и воспроизводят звук нативным компонентом
-    /// эффектов. Нативный экран под заглушкой остаётся открытым и возвращается
-    /// после её закрытия.
+    /// На станции `G`/`H` теперь передаются эмулятору: нативный режим
+    /// станции снимается, а клавиша уходит в игру.
     #[test]
-    fn g_and_h_on_station_show_docked_stub_over_native_screen() {
+    fn g_and_h_on_station_handoff_to_emulator() {
         let opts = test_options();
-        let mut app = App::new(boot(), &opts);
-        app.machine.intro_seen = false;
-        app.machine.mem[flight::Z80_IND_DANGER] = 0;
-        app.key_event(KeyCode::F6, true, false);
-        assert!(app.hdmap.active, "подготовка: карта не открылась");
-
         for key in [KeyCode::KeyG, KeyCode::KeyH] {
+            let mut app = App::new(boot(), &opts);
+            app.machine.intro_seen = false;
+            app.machine.mem[flight::Z80_IND_DANGER] = 0;
+            app.key_event(KeyCode::F6, true, false);
+            assert!(app.hdmap.active, "подготовка: карта не открылась");
+
             let (row, bit) = matrix_pos(key).expect("клавиша в матрице");
             app.key_event(key, true, false);
-            assert!(app.docked.is_active(), "{key:?} не показал DOCKED");
-            assert!(app.hdmap.active, "{key:?} закрыл нативный экран");
-            assert!(app.sfx.is_playing(), "{key:?} не запустил звук");
-
-            // Клавиша не залипает в матрице.
-            assert!(!app.matrix[row][bit as usize], "{key:?} залипла в матрице");
-            assert_eq!(app.pending_key, None, "{key:?} не должна уходить в эмулятор");
-
-            // После показа заглушки возвращается прежний нативный экран.
-            app.docked.close();
-            assert!(app.hdmap.active, "после заглушки карта не вернулась");
+            assert!(
+                !app.docked.is_active(),
+                "{key:?} не должен показывать заглушку DOCKED"
+            );
+            assert!(!app.station_native, "{key:?} не снял нативный режим станции");
+            assert!(app.station_emulator, "{key:?} не передал управление эмулятору");
+            assert!(!app.hdmap.active, "{key:?} не закрыл нативный экран");
+            assert_eq!(app.pending_key, Some((row, bit)), "{key:?} не ушёл в эмулятор");
         }
     }
 

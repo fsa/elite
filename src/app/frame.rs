@@ -9,6 +9,7 @@ use winit::window::Window;
 use super::App;
 use crate::cockpit;
 use crate::display;
+use crate::flight;
 use crate::font::ZX_FONT;
 use crate::galaxy;
 use crate::state::Screen;
@@ -46,18 +47,25 @@ impl App<'_> {
     }
 
     /// Синхронизировать нативный полёт с состоянием Z80 после кадров
-    /// эмулятора. Под картой полёт не рисуется, но продолжает жить: при
-    /// закрытии карты не должно быть скачка звёзд и переходов.
+    /// эмулятора. Под нативными информационными экранами полёт не рисуется,
+    /// но продолжает жить: управление кораблём и симуляция сохраняются.
     fn sync_flight_after_frames(&mut self, frames: u64) {
-        if !self.flight.active && self.flight.transition_kind().is_none() {
+        let in_space_flight = !self.machine.intro_seen
+            && !flight::z80_is_docked(&self.machine.mem)
+            && (flight::z80_in_cockpit(&self.machine.mem)
+                || flight::z80_in_transition(&self.machine.mem));
+        if !self.flight.active && self.flight.transition_kind().is_none() && !in_space_flight {
             return;
         }
-        // Под картой игра специально находится на экране локальной карты
-        // (`SHORT RANGE CHART`), поэтому не закрываем нативный полёт по её
-        // состоянию — он должен пережить открытие и закрытие карты.
-        // Пока нативный вид скрыт (показ эмулятора во время анимации),
-        // продолжаем вести состояние перехода, но не закрываем вид по экрану.
-        if !self.hdmap.active {
+        // Под нативными информационными экранами в полёте эмулятор остаётся
+        // в режиме кабины, чтобы кораблём можно было управлять. В этом случае
+        // не закрываем нативный полёт по экрану Z80.
+        let info_overlay = self.hdmap.active
+            || self.status.active
+            || self.sysinfo.active
+            || self.market.native
+            || self.shop.active;
+        if !(info_overlay && in_space_flight) {
             self.follow_flight_screen();
         }
         self.flight.sync_from_z80(&self.machine.mem);
@@ -166,6 +174,7 @@ impl App<'_> {
         // пристыковалась и управление не отдано эмулятору явно, замораживаем
         // Z80 и открываем нативную страницу капитана.
         self.maybe_enter_native_station();
+        self.ensure_native_flight_in_space();
         // Текущее состояние до шага кадра — от него зависит ввод, эмуляция
         // и перехват сообщений.
         self.sync_state();
@@ -220,14 +229,19 @@ impl App<'_> {
             match self.state.screen {
                 Screen::GalacticMap => {
                     if !self.state.menu {
+                        let in_flight = !self.state.intro
+                            && self.state.location == crate::state::Location::Space;
                         if self.pending_station_native.is_some() {
-                            // Карту открыли из эмулятора: `L` должен дойти до Z80,
-                            // пока нативный режим ещё не заморозил его.
+                            // Карту открыли из эмулятора на станции: `L` должен
+                            // дойти до Z80, пока нативный режим ещё не заморозил его.
                             self.forward_input();
                         } else if self.pending_key.is_some() {
-                            // `G`/`H` под картой запускают отсчёт в Z80, не
-                            // открывая остальной ввод и не закрывая карту.
+                            // Разовая клавиша (например `G`/`H` для отсчёта прыжка)
+                            // должна дойти до эмулятора под открытой картой.
                             self.forward_pending_key();
+                        } else if in_flight {
+                            // В полёте карта не блокирует управление кораблём.
+                            self.apply_input();
                         } else {
                             self.machine.release_all_keys();
                             self.machine.release_joystick();
@@ -280,6 +294,7 @@ impl App<'_> {
                             self.machine.save_requested = false;
                             storage::do_save(&mut self.machine, self.opts, &mut self.last_path);
                         }
+                        self.sync_flight_after_frames(frames);
                         self.play_frame_audio(true);
                     } else {
                         self.machine.release_all_keys();
@@ -358,6 +373,7 @@ impl App<'_> {
         // Состояние могло измениться за шаг кадра (открытие/закрытие экранов,
         // новая стыковка). После него снова проверяем станционный режим.
         self.maybe_enter_native_station();
+        self.ensure_native_flight_in_space();
         self.sync_state();
 
         self.advance_hdmap_cursor();

@@ -23,6 +23,9 @@ impl App<'_> {
     /// эмулятор в несовместимые с нативным режимом экраны оригинала.
     /// `F5`-`F9` возвращают управление из эмулятора на нативный экран.
     fn function_key(&mut self, code: KeyCode) {
+        if self.menu {
+            return;
+        }
         // F5 — нативная закупка оборудования на станции. В полёте и в других
         // состояниях отдельного действия нет.
         if code == KeyCode::F5 {
@@ -34,7 +37,6 @@ impl App<'_> {
             self.close_market();
             self.pending_status = false;
             self.pending_sysinfo = false;
-            self.menu = false;
             self.pending_shop = false;
             self.pending_flight = None;
             self.pending_launch = false;
@@ -124,9 +126,9 @@ impl App<'_> {
     /// которые теперь открывают нативные экраны. Возвращает `true`, если
     /// клавиша обработана и её нельзя передавать дальше.
     ///
-    /// `G`/`H` обрабатываются отдельно как заглушка `DOCKED`, `Backquote` —
-    /// как единственный выход в эмулятор. Цифры `1`–`3` в модальном окне
-    /// крепления лазера остаются управлением самого экрана закупки.
+    /// `G`/`H` передаются эмулятору, `Backquote` — единственный выход в
+    /// эмулятор без игровой клавиши. Цифры `1`–`3` в модальном окне крепления
+    /// лазера остаются управлением самого экрана закупки.
     fn station_native_command(&mut self, code: KeyCode) -> bool {
         if self.shop.mount_open()
             && matches!(code, KeyCode::Digit1 | KeyCode::Digit2 | KeyCode::Digit3)
@@ -180,6 +182,39 @@ impl App<'_> {
         true
     }
 
+    /// Информационные клавиши в полёте: открывают нативные экраны, как на
+    /// станции, но без остановки симуляции и управления кораблём.
+    fn flight_info_command(&mut self, code: KeyCode) -> bool {
+        match code {
+            KeyCode::KeyI => self.open_hdmap_mode(hdmap::MapMode::Galaxy),
+            KeyCode::KeyO => self.open_hdmap_mode(hdmap::MapMode::Local),
+            KeyCode::KeyP => {
+                if self.sysinfo.active {
+                    self.close_sysinfo();
+                } else {
+                    self.open_planet_info();
+                }
+            }
+            KeyCode::KeyK => {
+                if self.market.native {
+                    self.close_market();
+                } else {
+                    self.open_market();
+                }
+            }
+            KeyCode::KeyL => {
+                if self.status.active {
+                    self.close_status();
+                } else {
+                    self.open_status();
+                }
+            }
+            _ => return false,
+        }
+        self.release_pressed(code);
+        true
+    }
+
     /// Обработать событие клавиши (по физической позиции, раскладка не важна).
     pub(super) fn key_event(&mut self, code: KeyCode, pressed: bool, repeat: bool) {
         if let Some((row, bit)) = matrix_pos(code) {
@@ -191,29 +226,6 @@ impl App<'_> {
         // Состояние станции могло измениться между кадрами (стыковка, вылет,
         // загрузка). Синхронизируем режим до обработки нажатия.
         self.maybe_enter_native_station();
-        // G/H на станции обрабатываются как одноразовое действие: после показа
-        // `DOCKED` удержание не должно уходить в эмулятор даже после закрытия заглушки.
-        if matches!(code, KeyCode::KeyG | KeyCode::KeyH) {
-            if !pressed {
-                match code {
-                    KeyCode::KeyG => self.docked_consumed_g = false,
-                    KeyCode::KeyH => self.docked_consumed_h = false,
-                    _ => {}
-                }
-                return;
-            }
-            let consumed = match code {
-                KeyCode::KeyG => self.docked_consumed_g,
-                KeyCode::KeyH => self.docked_consumed_h,
-                _ => false,
-            };
-            if consumed {
-                if let Some((row, bit)) = matrix_pos(code) {
-                    self.matrix[row][bit as usize] = false;
-                }
-                return;
-            }
-        }
         if !pressed {
             return;
         }
@@ -300,28 +312,16 @@ impl App<'_> {
             }
             return;
         }
-        // G/H на станции: оригинал не выполняет гиперпрыжок, а показывает
-        // экран `DOCKED` и издаёт звук. Под нативным экраном этот ответ
-        // эмулятора не виден, поэтому показываем свою заглушку и проигрываем
-        // звук нативным компонентом эффектов. Фиксируем только факт нажатия,
-        // без повтора при удержании.
+        // G/H на станции теперь передаются эмулятору, чтобы он сам показал
+        // родной ответ (сообщение `DOCKED` и звук) на своём экране.
         if !repeat
             && matches!(code, KeyCode::KeyG | KeyCode::KeyH)
             && !self.menu
             && self.station_native
             && !(self.hdmap.active && self.hdmap.is_searching())
         {
-            self.docked.show();
-            self.sfx.play(crate::sfx::Sfx::DockedBeep);
-            match code {
-                KeyCode::KeyG => self.docked_consumed_g = true,
-                KeyCode::KeyH => self.docked_consumed_h = true,
-                _ => {}
-            }
-            // Клавишу не держим в матрице, чтобы эмулятор не получал повторов.
-            if let Some((row, bit)) = matrix_pos(code) {
-                self.matrix[row][bit as usize] = false;
-            }
+            self.handoff_to_emulator();
+            self.pending_key = matrix_pos(code);
             return;
         }
         // G/H в полёте под модальным нативным экраном (картой): отсчёт
@@ -362,11 +362,23 @@ impl App<'_> {
         {
             return;
         }
+        // В полёте информационные экраны открываются нативно, как на станции,
+        // но эмулятор продолжает работать, чтобы сохранялось управление кораблём.
+        if !self.station_native
+            && !self.menu
+            && !repeat
+            && !self.machine.intro_seen
+            && !flight::z80_is_docked(&self.machine.mem)
+            && !(self.hdmap.active && self.hdmap.is_searching())
+            && self.flight_info_command(code)
+        {
+            return;
+        }
         // F6 открывает нативную карту в галактическом масштабе (`I` открывает
         // то же самое, `O` — детальный фрагмент). Повторное нажатие не закрывает
         // карту и не сбрасывает курсор: это отдельный режим.
         if code == KeyCode::F6 && !repeat {
-            if !self.hdmap.active && !self.machine.intro_seen {
+            if !self.menu && !self.hdmap.active && !self.machine.intro_seen {
                 self.close_market();
                 self.open_hdmap();
             }
@@ -379,79 +391,79 @@ impl App<'_> {
             return;
         }
         // F7 — нативная альтернатива экрану информации о планете (`P`).
-        // Данные планеты уже есть в памяти игры, поэтому экран открывается
-        // сразу, без передачи `P` в эмулятор и без ожидания кадра.
         if code == KeyCode::F7 && !repeat && !(self.hdmap.active && self.hdmap.is_searching()) {
             if !self.menu && !self.machine.intro_seen {
-                self.open_planet_info();
+                let docked = flight::z80_is_docked(&self.machine.mem);
+                if self.sysinfo.active && !docked {
+                    self.close_sysinfo();
+                } else {
+                    self.open_planet_info();
+                }
             }
             return;
         }
-        // F9 — нативная альтернатива экрану капитана (`L`). Открывается
-        // сразу по живым данным блока командира, без нажатия `L` в эмулятор.
+        // F9 — нативная альтернатива экрану капитана (`L`).
         if code == KeyCode::F9 && !repeat && !(self.hdmap.active && self.hdmap.is_searching()) {
             if !self.menu && !self.machine.intro_seen {
                 let docked = flight::z80_is_docked(&self.machine.mem);
-                let on_status = self.machine.mem[flight::Z80_WHAT_ON_SCREEN]
-                    == flight::Z80_SCREEN_PILOT_INFO;
-                self.close_hdmap();
-                self.shop.close();
-                self.close_sysinfo();
-                self.flight.close();
-                self.close_market();
-                self.pending_shop = false;
-                self.pending_flight = None;
-                self.pending_launch = false;
-                self.pending_status = false;
-                self.pending_sysinfo = false;
-                self.pending_key = None;
-                self.open_status();
-                // В полёте экран капитана — нативная отрисовка родного
-                // экрана `L`, поэтому эмулятор должен на него перейти.
-                if !docked && !on_status {
-                    self.pending_status = true;
-                    self.pending_key = matrix_pos(KeyCode::KeyL);
+                if self.status.active && !docked {
+                    self.close_status();
+                } else {
+                    let on_status = self.machine.mem[flight::Z80_WHAT_ON_SCREEN]
+                        == flight::Z80_SCREEN_PILOT_INFO;
+                    self.close_hdmap();
+                    self.shop.close();
+                    self.close_sysinfo();
+                    self.flight.close();
+                    self.close_market();
+                    self.pending_shop = false;
+                    self.pending_flight = None;
+                    self.pending_launch = false;
+                    self.pending_status = false;
+                    self.pending_sysinfo = false;
+                    self.pending_key = None;
+                    self.open_status();
+                    if !docked && !on_status && self.station_emulator {
+                        self.pending_status = true;
+                        self.pending_key = matrix_pos(KeyCode::KeyL);
+                    }
                 }
             }
             return;
         }
-        // F8 — нативный показ экрана цен (альтернатива `K`). Смотреть цены
-        // можно и в полёте, поэтому стойку не требуем. Экран открывается
-        // сразу по живым таблицам цен, без передачи `K` в эмулятор.
-        // Торговля отдельно разрешена только на станции (см. блок стрелок
-        // ниже и `Market::trade`).
+        // F8 — нативный показ экрана цен (альтернатива `K`).
         if code == KeyCode::F8 && !repeat && !(self.hdmap.active && self.hdmap.is_searching()) {
             if !self.menu && !self.machine.intro_seen {
                 let docked = flight::z80_is_docked(&self.machine.mem);
-                let on_market = self.machine.mem[flight::Z80_WHAT_ON_SCREEN]
-                    == flight::Z80_SCREEN_MARKET;
-                self.close_hdmap();
-                self.shop.close();
-                self.close_status();
-                self.close_sysinfo();
-                self.flight.close();
-                self.close_market();
-                self.pending_status = false;
-                self.pending_sysinfo = false;
-                self.pending_market = false;
-                self.pending_flight = None;
-                self.pending_launch = false;
-                self.pending_key = None;
-                self.open_market();
-                // В полёте цены остаются нативной отрисовкой родного экрана
-                // `K`; на станции эмулятор не трогаем.
-                if !docked && !on_market {
-                    self.pending_market = true;
-                    self.pending_key = matrix_pos(KeyCode::KeyK);
+                if self.market.native && !docked {
+                    self.close_market();
+                } else {
+                    let on_market = self.machine.mem[flight::Z80_WHAT_ON_SCREEN]
+                        == flight::Z80_SCREEN_MARKET;
+                    self.close_hdmap();
+                    self.shop.close();
+                    self.close_status();
+                    self.close_sysinfo();
+                    self.flight.close();
+                    self.close_market();
+                    self.pending_status = false;
+                    self.pending_sysinfo = false;
+                    self.pending_market = false;
+                    self.pending_flight = None;
+                    self.pending_launch = false;
+                    self.pending_key = None;
+                    self.open_market();
+                    if !docked && !on_market && self.station_emulator {
+                        self.pending_market = true;
+                        self.pending_key = matrix_pos(KeyCode::KeyK);
+                    }
                 }
-                return;
             }
+            return;
         }
-        // `K` — оригинальная клавиша: показать оригинальный (эмуляторный)
-        // экран рынка. Нативная альтернатива выключается, ввод уходит в игру.
-        if code == KeyCode::KeyK && !repeat {
-            self.close_market();
-        }
+        // `K` в режиме эмулятора показывает оригинальный экран рынка.
+        // В нативных режимах (станция и полёт) он открывает нативный экран цен.
+        // (Обрабатывается выше/ниже как информационная клавиша.)
         // Стрелки перехватываем только на станции: там они выбирают товар и
         // торгуют им. В полёте экран остаётся только для просмотра цен, поэтому
         // стрелки уходят эмулятору, как и все остальные клавиши.
@@ -679,6 +691,8 @@ impl App<'_> {
             return;
         }
         // Меню паузы: своё управление, в эмулятор клавиши не уходят.
+        // В нативном режиме станции меню может быть открыто поверх текущего
+        // экрана, поэтому обрабатываем его до станционных команд.
         if self.menu {
             self.menu_key(code);
             return;
@@ -850,14 +864,28 @@ impl App<'_> {
             self.pending_key = None;
             return;
         }
-        if self.menu || self.hdmap.active || self.shop.active {
+        if self.menu || self.shop.active {
             self.machine.release_all_keys();
             self.machine.release_joystick();
             return;
         }
+        if self.hdmap.active {
+            let in_flight = !self.machine.intro_seen
+                && !flight::z80_is_docked(&self.machine.mem)
+                && (flight::z80_in_cockpit(&self.machine.mem)
+                    || flight::z80_in_transition(&self.machine.mem));
+            if !in_flight {
+                self.machine.release_all_keys();
+                self.machine.release_joystick();
+                return;
+            }
+            // В полёте карта не должна блокировать управление кораблём.
+        }
         // В режиме анимации (вылет/прыжок/стыковка) эмулятор проигрывает
         // анимацию и игра не реагирует на нажатие кнопок.
         if flight::z80_in_transition(&self.machine.mem) {
+            // Во время отсчёта под картой клавиши прыжка уже переданы отдельно;
+            // остальной ввод в анимации не нужен.
             self.machine.release_all_keys();
             self.machine.release_joystick();
             return;

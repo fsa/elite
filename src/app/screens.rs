@@ -166,8 +166,10 @@ impl App<'_> {
     }
 
     /// Открыть нативную карту в заданном масштабе или переключить масштаб,
-    /// если карта уже открыта. Игра переводится в режим `SHORT RANGE CHART`,
-    /// чтобы родные сцены карты оставались в ожидаемом состоянии.
+    /// если карта уже открыта. На станции игра переводится в режим
+    /// `SHORT RANGE CHART`, чтобы родные сцены карты оставались в ожидаемом
+    /// состоянии. В полёте эмулятор остаётся в режиме кабины, чтобы сохранялось
+    /// управление кораблём.
     pub(super) fn open_hdmap_mode(&mut self, mode: hdmap::MapMode) {
         if self.hdmap.active {
             self.hdmap.set_mode(mode);
@@ -183,9 +185,13 @@ impl App<'_> {
         }
         self.hdmap
             .open_mode(&self.machine.mem, galaxy::KLADOV_GALAXY, mode);
-        let prev = self.machine.mem[flight::Z80_WHAT_ON_SCREEN];
-        self.hdmap_screen = Some(prev);
-        self.machine.mem[flight::Z80_WHAT_ON_SCREEN] = flight::Z80_SCREEN_LOCAL_MAP;
+        if flight::z80_is_docked(&self.machine.mem) || self.station_native || self.station_emulator {
+            let prev = self.machine.mem[flight::Z80_WHAT_ON_SCREEN];
+            self.hdmap_screen = Some(prev);
+            self.machine.mem[flight::Z80_WHAT_ON_SCREEN] = flight::Z80_SCREEN_LOCAL_MAP;
+        } else {
+            self.hdmap_screen = None;
+        }
         self.sync_hdmap_target();
         self.shop.close();
         self.close_status();
@@ -193,6 +199,7 @@ impl App<'_> {
         self.close_market();
         self.pending_status = false;
         self.pending_sysinfo = false;
+        self.pending_market = false;
         self.menu = false;
         self.pending_key = None;
         self.pending_flight = None;
@@ -266,9 +273,9 @@ impl App<'_> {
         }
     }
 
-    /// Включить нативную отрисовку экрана капитана (F9). Экран показывается,
-    /// только пока Z80 находится в режиме `Z80_SCREEN_PILOT_INFO`; ввод при
-    /// этом остаётся за эмулятором.
+    /// Включить нативную отрисовку экрана капитана (F9/L). На станции и в
+    /// нативном полёте экран показывается сразу по живым данным, без перевода
+    /// эмулятора на экран `L`.
     pub(super) fn open_status(&mut self) {
         self.close_hdmap();
         self.shop.close();
@@ -277,6 +284,7 @@ impl App<'_> {
         self.close_market();
         self.pending_status = false;
         self.pending_sysinfo = false;
+        self.pending_market = false;
         self.status.open(&self.machine.mem, status::KLADOV_STATUS);
         self.menu = false;
         self.pending_key = None;
@@ -383,11 +391,13 @@ impl App<'_> {
 
 
 
-    /// Открыть нативный экран информации о планете (F7/P) с учётом состояния
-    /// полёта: в полёте запрашивается переход оригинала на экран `P`.
+    /// Открыть нативный экран информации о планете (F7/P). В полёте экран
+    /// показывается нативно, а эмулятор остаётся в режиме кабины, чтобы
+    /// сохранялось управление кораблём.
     pub(super) fn open_planet_info(&mut self) {
         self.sysinfo_from_map = false;
         let docked = flight::z80_is_docked(&self.machine.mem);
+        let in_flight = !docked && !self.machine.intro_seen;
         let on_planet =
             self.machine.mem[flight::Z80_WHAT_ON_SCREEN] == flight::Z80_SCREEN_INFO_PLANET;
         self.close_hdmap();
@@ -402,10 +412,10 @@ impl App<'_> {
         self.pending_sysinfo = false;
         self.pending_key = None;
         self.open_sysinfo();
-        // На станции данные планеты уже в памяти. В полёте оригинал должен сам
-        // перейти на свой экран `P`, иначе нативная надстройка закроется на
-        // следующем кадре.
-        if !docked && !on_planet {
+        // На станции данные планеты уже в памяти. В эмуляторном режиме вне
+        // станции оригинал должен сам перейти на экран `P`; в нативном полёте
+        // экран показывается поверх симуляции без переключения экрана Z80.
+        if !in_flight && !docked && !on_planet {
             self.pending_sysinfo = true;
             self.pending_key = matrix_pos(KeyCode::KeyP);
         }
@@ -531,6 +541,14 @@ impl App<'_> {
         // В нативном режиме станции эмулятор стоит на месте, поэтому его
         // экранная переменная не является признаком закрытия нативного вида.
         if self.station_native {
+            return;
+        }
+        // В нативном полёте информационные экраны показываются поверх симуляции,
+        // а эмулятор остаётся в режиме кабины для сохранения управления кораблём.
+        if !self.machine.intro_seen
+            && !flight::z80_is_docked(&self.machine.mem)
+            && (flight::z80_in_cockpit(&self.machine.mem) || flight::z80_in_transition(&self.machine.mem))
+        {
             return;
         }
         let screen = self.machine.mem[flight::Z80_WHAT_ON_SCREEN];
@@ -685,6 +703,54 @@ impl App<'_> {
         // (`F1` на станции) ждёт, пока игра действительно начнёт переход.
         if flight::z80_is_docked(&self.machine.mem) && !self.pending_launch {
             self.pending_flight = None;
+        }
+    }
+
+    /// В полёте нативный вид — основной интерфейс. Если не открыт ни один
+    /// информационный экран, показываем нативный вид кабины и синхронизируем
+    /// направление с экраном Z80.
+    pub(super) fn ensure_native_flight_in_space(&mut self) {
+        if self.machine.intro_seen || self.station_native || self.pending_station_native.is_some() {
+            return;
+        }
+        if flight::z80_is_docked(&self.machine.mem) {
+            return;
+        }
+        // Во время анимации можно временно скрыть нативный вид клавишей `1`,
+        // чтобы увидеть ролик эмулятора.
+        if flight::z80_in_transition(&self.machine.mem)
+            && !self.flight.active
+            && self.flight.transition_kind().is_some()
+        {
+            return;
+        }
+        let in_cockpit = flight::z80_in_cockpit(&self.machine.mem);
+        let in_transition = flight::z80_in_transition(&self.machine.mem);
+        let info_screen = self.hdmap.active
+            || self.status.active
+            || self.sysinfo.active
+            || self.market.native
+            || self.shop.active;
+        if !in_cockpit && !in_transition {
+            return;
+        }
+        if !info_screen && !self.flight.active {
+            let dir = match self.machine.mem[flight::Z80_WHAT_ON_SCREEN] {
+                1 => flight::ViewDir::Back,
+                2 => flight::ViewDir::Left,
+                3 => flight::ViewDir::Right,
+                _ => flight::ViewDir::Forward,
+            };
+            self.show_flight(dir);
+        }
+        if self.flight.active && !self.flight.in_animation_mode() {
+            let dir = match self.machine.mem[flight::Z80_WHAT_ON_SCREEN] {
+                1 => flight::ViewDir::Back,
+                2 => flight::ViewDir::Left,
+                3 => flight::ViewDir::Right,
+                _ => flight::ViewDir::Forward,
+            };
+            self.flight.set_view_dir(dir);
         }
     }
 }
