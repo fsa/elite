@@ -43,6 +43,16 @@ mod screens;
 mod tests;
 mod window;
 
+/// Причина отложенного входа в нативный режим станции. Перед заморозкой Z80
+/// должен получить `L`, чтобы оригинал вышел из режима покупки.
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum StationNativePending {
+    /// Обычный вход после старта/стыковки: закрыть экраны и открыть капитана.
+    Docked,
+    /// Игрок открыл нативный экран из эмулятора: открытый экран сохраняем.
+    Screen,
+}
+
 /// Частота кадров ZX Spectrum: 50 кадров в секунду (кадр каждые 20 мс).
 const FRAME_TIME: Duration = Duration::from_micros(1_000_000 / 50);
 
@@ -91,6 +101,9 @@ struct App<'a> {
     /// После кадра эмулятора открыть нативный экран статуса: сначала игра
     /// должна обработать `L` и перейти в режим показа капитана.
     pending_status: bool,
+    /// `Space` на заставке уже поставил одноразовые хуки старта. Повторные
+    /// нажатия до выхода эмулятора в игру не должны ставить их заново.
+    start_requested: bool,
     /// Нативный экран информации о планете (F7) — альтернатива экрану `P`.
     sysinfo: sysinfo::SysInfo,
     /// После кадра эмулятора открыть нативный экран информации о планете:
@@ -98,12 +111,14 @@ struct App<'a> {
     pending_sysinfo: bool,
     /// Нативный режим станции: эмулятор заморожен, ввод и данные полностью
     /// принадлежат нативным экранам. Этот режим включается сразу после
-    /// старта игры и после возврата на станцию, пока игрок сам не передаст
-    /// управление эмулятору клавишей из `coriolis_keys.md`.
+    /// старта игры и после возврата на станцию, пока игрок не нажмёт
+    /// `Backquote` — единственную клавишу передачи управления эмулятору.
     station_native: bool,
     /// Признак того, что на станции управление передано эмулятору. Держится до
     /// вылета/новой стыковки или до открытия нативного экрана по `F`-клавише.
     station_emulator: bool,
+    /// Вход в нативный режим станции отложен до обработки `L` эмулятором.
+    pending_station_native: Option<StationNativePending>,
     /// Временная страница для клавиш паузы Кладова (`kladov_keys.md`), чьи
     /// настройки в нативном режиме ещё не реализованы.
     pause_stub: bool,
@@ -198,10 +213,12 @@ impl<'a> App<'a> {
             shop: equip::Shop::new(),
             status: status::Status::new(),
             pending_status: false,
+            start_requested: false,
             sysinfo: sysinfo::SysInfo::new(),
             pending_sysinfo: false,
             station_native: false,
             station_emulator: false,
+            pending_station_native: None,
             pause_stub: false,
             docked: docked::Docked::new(),
             market: market::Market::new(),
@@ -238,7 +255,9 @@ impl<'a> App<'a> {
             docked_consumed_h: false,
             next_frame: Instant::now(),
         };
-        app.maybe_enter_native_station();
+        // Снапшот может сразу быть пристыкованным. Это не переход из
+        // эмулятора, а начальное состояние, поэтому `L` не посылаем.
+        app.enter_native_station();
         app.sync_state();
         app
     }

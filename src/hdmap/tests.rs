@@ -248,6 +248,47 @@ fn zoom_centers_on_system_and_shows_jump_range() {
     assert_eq!(map.zoom(), ZOOM_MIN);
 }
 
+/// Режимы `I`/`O` — это два пресета зума одной карты. `O` открывает детальный
+/// фрагмент вокруг текущей системы, не пересоздавая галактику и не теряя курсор.
+#[test]
+fn modes_switch_zoom_preset_and_title() {
+    let mem = fake_mem();
+    let mut map = Map::new();
+    map.resize(1024, 768);
+    map.open(&mem, galaxy::KLADOV_GALAXY);
+    assert_eq!(map.mode(), MapMode::Galaxy);
+    assert_eq!(map.zoom(), ZOOM_MIN);
+    assert!(map.title().starts_with("GALACTIC CHART"));
+
+    map.cursor_x = 21;
+    map.cursor_y_raw = 175;
+    map.set_mode(MapMode::Local);
+    assert_eq!(map.mode(), MapMode::Local);
+    assert!((map.zoom() - map.max_zoom()).abs() < 1e-3);
+    assert!(map.zoom() > 1.0, "детальный режим должен приближать карту");
+    assert!(map.title().starts_with("SHORT RANGE CHART"));
+    assert_eq!(map.cursor(), (21, 175), "смена режима сбросила курсор");
+
+    map.set_mode(MapMode::Galaxy);
+    assert_eq!(map.mode(), MapMode::Galaxy);
+    assert_eq!(map.zoom(), ZOOM_MIN);
+    assert_eq!(map.cursor(), (21, 175));
+}
+
+/// Открытие карты сразу в детском масштабе (`O`) не требует последующего
+/// нажатия `+`: пресет применяется в [`Map::open_mode`].
+#[test]
+fn open_mode_local_starts_at_detail_scale() {
+    let mem = fake_mem();
+    let mut map = Map::new();
+    map.resize(1024, 768);
+    map.open_mode(&mem, galaxy::KLADOV_GALAXY, MapMode::Local);
+    assert!(map.active);
+    assert_eq!(map.mode(), MapMode::Local);
+    assert!((map.zoom() - map.max_zoom()).abs() < 1e-3);
+    assert!(map.zoom() > 1.0);
+}
+
 /// Планеты, чей центр вне области показа, не рисуются; на зуме 1 видна вся
 /// галактика (крайние планеты прижаты внутрь кадра и не пропадают). При
 /// сильном зуме в кадре остаются далеко не все 256 звёзд.

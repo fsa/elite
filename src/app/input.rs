@@ -5,9 +5,10 @@ use winit::window::Fullscreen;
 
 use super::App;
 use crate::flight;
+use crate::hdmap;
 use crate::keys::{
-    digit_of, function_game_key, function_view, is_game_key, kempston_bit, matrix_pos,
-    pause_settings_key, station_handoff_key,
+    digit_of, emulator_handoff_key, function_game_key, function_view, is_game_key, kempston_bit,
+    matrix_pos, pause_settings_key,
 };
 use crate::native;
 use crate::storage;
@@ -82,6 +83,7 @@ impl App<'_> {
             if code == KeyCode::F1 {
                 // Вылет возвращает управление эмулятору: он должен получить
                 // клавишу `1`, иначе Z80 останется замороженным на станции.
+                self.cancel_pending_station();
                 self.station_native = false;
                 self.station_emulator = true;
             }
@@ -116,6 +118,66 @@ impl App<'_> {
             self.pending_launch = false;
         }
         self.pending_key = matrix_pos(key);
+    }
+
+    /// Оригинальные станционные клавиши из `docs/z80/coriolis_keys.md`,
+    /// которые теперь открывают нативные экраны. Возвращает `true`, если
+    /// клавиша обработана и её нельзя передавать дальше.
+    ///
+    /// `G`/`H` обрабатываются отдельно как заглушка `DOCKED`, `Backquote` —
+    /// как единственный выход в эмулятор. Цифры `1`–`3` в модальном окне
+    /// крепления лазера остаются управлением самого экрана закупки.
+    fn station_native_command(&mut self, code: KeyCode) -> bool {
+        if self.shop.mount_open()
+            && matches!(code, KeyCode::Digit1 | KeyCode::Digit2 | KeyCode::Digit3)
+        {
+            return false;
+        }
+        match code {
+            KeyCode::Digit1 => {
+                // Клавиша `1` оригинала — вылет. Очищаем матрицу до вызова:
+                // `function_key` сам поставит `pending_key` на один кадр.
+                self.release_pressed(code);
+                self.function_key(KeyCode::F1);
+                return true;
+            }
+            KeyCode::Digit2 | KeyCode::Digit3 | KeyCode::KeyK => {
+                if !self.market.native {
+                    self.open_market();
+                }
+            }
+            KeyCode::Digit4 => {
+                if !self.shop.active {
+                    self.open_shop();
+                }
+            }
+            KeyCode::KeyI => self.open_hdmap_mode(hdmap::MapMode::Galaxy),
+            KeyCode::KeyO => self.open_hdmap_mode(hdmap::MapMode::Local),
+            KeyCode::KeyP => {
+                if !self.sysinfo.active {
+                    self.open_sysinfo();
+                }
+            }
+            KeyCode::KeyL => {
+                if !self.status.active {
+                    self.open_status();
+                }
+            }
+            KeyCode::ControlLeft => {
+                // В оригинале это CAPS SHIFT — пауза с дополнительными
+                // функциями. Нативно показываем уже существующее меню Esc.
+                self.menu = true;
+                self.menu_sel = 0;
+            }
+            KeyCode::ShiftRight => {
+                // Родная клавиша сохранения: сейв полностью нативный, З80
+                // заморожен и в этом процессе не участвует.
+                storage::do_save(&mut self.machine, self.opts, &mut self.last_path);
+            }
+            _ => return false,
+        }
+        self.release_pressed(code);
+        true
     }
 
     /// Обработать событие клавиши (по физической позиции, раскладка не важна).
@@ -242,29 +304,19 @@ impl App<'_> {
             }
             return;
         }
-        // Клавиши станции из `coriolis_keys.md` возвращают управление
-        // эмулятору. Нативный экран показывает его кадр и передаёт одно
-        // нажатие; дальше игра работает сама. `G`/`H` обработаны выше и сюда
-        // не попадают. Цифры 1-3 в модальном окне крепления лазера остаются
-        // управлением самого экрана закупки.
-        if self.station_native && !self.menu && !repeat && station_handoff_key(code) {
-            let mount_digit = self.shop.mount_open()
-                && matches!(code, KeyCode::Digit1 | KeyCode::Digit2 | KeyCode::Digit3);
-            if !mount_digit {
-                // `Left Ctrl` в оригинале соответствует CAPS SHIFT — это
-                // клавиша паузы/дополнительных функций (матрица 0,0).
-                let key = if code == KeyCode::ControlLeft {
-                    KeyCode::ShiftLeft
-                } else {
-                    code
-                };
-                self.handoff_to_emulator(key);
-                return;
-            }
+        // Единственный выход в эмулятор на станции: `Backquote` снимает
+        // заморозку Z80, но не посылает в игру ни одной клавиши. Все остальные
+        // клавиши из `coriolis_keys.md` открывают нативные экраны.
+        if self.station_native && !self.menu && !repeat && emulator_handoff_key(code) {
+            self.handoff_to_emulator();
+            return;
         }
-        // F6 — основная клавиша отдельной нативной карты галактики.
-        // Повторное нажатие не закрывает карту и не сбрасывает курсор/зум:
-        // это отдельный режим, выход из него — только переход на другой экран.
+        if self.station_native && !self.menu && !repeat && self.station_native_command(code) {
+            return;
+        }
+        // F6 открывает нативную карту в галактическом масштабе (`I` открывает
+        // то же самое, `O` — детальный фрагмент). Повторное нажатие не закрывает
+        // карту и не сбрасывает курсор: это отдельный режим.
         if code == KeyCode::F6 && !repeat {
             if !self.hdmap.active && !self.machine.intro_seen {
                 self.close_market();
@@ -640,7 +692,10 @@ impl App<'_> {
                 // Нативную страницу капитана поднимаем после кадра, когда
                 // игра действительно перешла из заставки в игру. Сам `Space`
                 // игре не отдаём: он не должен сработать как выстрел.
-                native::start_game(&mut self.machine, world::save_layout_kladov());
+                if !self.start_requested {
+                    native::start_game(&mut self.machine, world::save_layout_kladov());
+                    self.start_requested = true;
+                }
                 if let Some((row, bit)) = matrix_pos(KeyCode::Space) {
                     self.matrix[row][bit as usize] = false;
                 }

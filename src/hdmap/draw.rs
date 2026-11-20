@@ -93,7 +93,8 @@ impl Map {
         f.clear_clip();
 
         // Верхняя ячейка таблицы: красная шапка во всю ширину, отделённая
-        // белой рамкой. Заголовок — как в оригинале, «GALACTIC CHART <n>».
+        // белой рамкой. Заголовок — родной для выбранного режима: «GALACTIC
+        // CHART <n>» по `I` или «SHORT RANGE CHART <n>» по `O`.
         let inner_x = l.margin + l.frame;
         let inner_w = (f.width as i32 - 2 * inner_x).max(0);
         f.fill_rect(
@@ -103,7 +104,7 @@ impl Map {
             l.header_h.max(0) as usize,
             HEADER_BG,
         );
-        let title = format!("GALACTIC CHART {}", self.galaxy_number());
+        let title = self.title();
         let tw = title.len() as i32 * 8 * ts as i32;
         let tx0 = inner_x + ((inner_w - tw) / 2).max(0);
         f.draw_text(font, tx0, l.title_y, &title, HEADER_TEXT, ts);
@@ -140,7 +141,7 @@ impl Map {
         }
         ty += line + 2;
         let help = format!(
-            "Fn/keys: switch screen   LMB: pick   D: nearest   wheel or +/-: zoom x{:.2}",
+            "I/O: chart scale   LMB: pick   D: nearest   wheel/+/-: zoom x{:.2}",
             self.zoom()
         );
         f.draw_text(font, tx, ty, &help, TEXT_DIM, ts);

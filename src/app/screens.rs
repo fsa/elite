@@ -2,10 +2,12 @@
 
 use winit::keyboard::KeyCode;
 
-use super::App;
+use super::{App, StationNativePending};
 use crate::equip;
 use crate::flight;
 use crate::galaxy;
+use crate::hdmap;
+use crate::keys::matrix_pos;
 use crate::market;
 use crate::native;
 use crate::status;
@@ -33,21 +35,51 @@ impl App<'_> {
         self.pending_key = None;
     }
 
-    /// Запомнить, что открытый нативный экран на станции забирает управление у
-    /// эмулятора. В полёте этот вызов ничего не меняет.
-    fn native_screen_opened(&mut self) {
-        if !self.machine.intro_seen
-            && !self.flight.active
-            && flight::z80_is_docked(&self.machine.mem)
-        {
-            self.station_native = true;
-            self.station_emulator = false;
+    /// Запросить нативный режим станции, сначала отдав эмулятору `L`.
+    ///
+    /// До заморозки Z80 должен обработать клавишу: оригинал выходит из режима
+    /// покупки/продажи и уходит на экран капитана. Состояние покупки заранее не
+    /// проверяем — `L` посылается при любом переходе в нативную станцию.
+    fn request_native_station(&mut self, reason: StationNativePending) {
+        self.pending_station_native = Some(reason);
+        self.pending_key = matrix_pos(KeyCode::KeyL);
+    }
+
+    /// Сбросить отложенный переход, если он больше не актуален.
+    pub(super) fn cancel_pending_station(&mut self) {
+        if self.pending_station_native.take().is_some() {
+            self.pending_key = None;
         }
     }
 
+    /// Запомнить, что открытый нативный экран на станции забирает управление у
+    /// эмулятора. В полёте этот вызов ничего не меняет.
+    fn native_screen_opened(&mut self) {
+        if self.machine.intro_seen
+            || self.flight.active
+            || !flight::z80_is_docked(&self.machine.mem)
+            || self.station_native
+        {
+            return;
+        }
+        // Несколько экранов подряд могут открыться до того, как эмулятор
+        // обработает `L`. Открытый экран должен пережить вход в нативный режим,
+        // поэтому обычный вход повышаем до входа через экран. Клавишу тоже
+        // восстанавливаем: открытие экрана могло сбросить `pending_key`.
+        if let Some(reason) = self.pending_station_native {
+            if reason == StationNativePending::Docked {
+                self.pending_station_native = Some(StationNativePending::Screen);
+            }
+            if self.pending_key.is_none() {
+                self.pending_key = matrix_pos(KeyCode::KeyL);
+            }
+            return;
+        }
+        self.request_native_station(StationNativePending::Screen);
+    }
+
     /// Войти в нативный режим станции: эмулятор остаётся на экране капитана и
-    /// больше не исполняется, пока управление не вернут ему клавишей из
-    /// `coriolis_keys.md`.
+    /// больше не исполняется, пока управление не вернут клавишей `Backquote`.
     pub(super) fn enter_native_station(&mut self) {
         if self.machine.intro_seen
             || !flight::z80_is_docked(&self.machine.mem)
@@ -64,48 +96,94 @@ impl App<'_> {
         }
     }
 
+    /// Завершить отложенный вход после кадра, в котором `L` ушёл в Z80.
+    /// Открытый нативный экран при этом сохраняется.
+    pub(super) fn finish_pending_station_native(&mut self) {
+        let Some(reason) = self.pending_station_native.take() else {
+            return;
+        };
+        self.pending_key = None;
+        if self.machine.intro_seen
+            || !flight::z80_is_docked(&self.machine.mem)
+            || flight::z80_in_transition(&self.machine.mem)
+        {
+            return;
+        }
+        match reason {
+            StationNativePending::Docked => self.enter_native_station(),
+            StationNativePending::Screen => {
+                self.station_native = true;
+                self.station_emulator = false;
+            }
+        }
+    }
+
     /// Включить нативный режим станции, если игра оказалась пристыкованной и
-    /// управление ещё не передано эмулятору явно.
+    /// управление ещё не передано эмулятору явно. Заморозка откладывается на
+    /// один кадр: эмулятор должен получить `L`.
     pub(super) fn maybe_enter_native_station(&mut self) {
         if !flight::z80_is_docked(&self.machine.mem) {
             self.station_native = false;
             self.station_emulator = false;
+            self.cancel_pending_station();
             return;
         }
-        if self.machine.intro_seen || self.flight.active || self.station_native || self.station_emulator {
+        if self.machine.intro_seen || self.flight.active {
+            self.cancel_pending_station();
             return;
         }
         if flight::z80_in_transition(&self.machine.mem) {
+            self.cancel_pending_station();
             return;
         }
-        self.enter_native_station();
+        if self.station_native {
+            self.cancel_pending_station();
+            return;
+        }
+        // Отложенный вход из эмулятора живёт ровно до конца кадра, в котором
+        // Z80 получит `L`: `station_emulator` ещё включён, но отменять запрос
+        // нельзя.
+        if self.station_emulator || self.pending_station_native.is_some() {
+            return;
+        }
+        self.request_native_station(StationNativePending::Docked);
     }
 
     /// Нативный экран передаёт управление эмулятору: скрываем все нативные
-    /// экраны, показываем кадр Z80 и подаём одну клавишу в матрицу.
-    pub(super) fn handoff_to_emulator(&mut self, key: KeyCode) {
+    /// экраны и показываем кадр Z80 без дополнительных клавиш.
+    pub(super) fn handoff_to_emulator(&mut self) {
         self.close_all_native();
+        self.cancel_pending_station();
         self.station_native = false;
         self.station_emulator = true;
         self.menu = false;
-        // Клавишу держим в pending_key только один кадр: она должна сработать
-        // один раз, даже если пользователь её ещё не отпустил.
-        if let Some((row, bit)) = crate::keys::matrix_pos(key) {
-            self.matrix[row][bit as usize] = false;
-            self.pending_key = Some((row, bit));
-        }
+        // `Backquote` отсутствует в матрице ZX, поэтому в игру не уходит ни
+        // одна клавиша: эмулятор просто снимается с паузы.
     }
 
-    /// Открыть нативную карту галактики и перевести игру в режим
-    /// `SHORT RANGE CHART`: Z80 продолжает работать, но считает, что на
-    /// экране локальная карта.
+    /// Открыть нативную карту в галактическом масштабе (клавиша `F6` или `I`).
     pub(super) fn open_hdmap(&mut self) {
-        self.hdmap.open(&self.machine.mem, galaxy::KLADOV_GALAXY);
+        self.open_hdmap_mode(hdmap::MapMode::Galaxy);
+    }
+
+    /// Открыть нативную карту в заданном масштабе или переключить масштаб,
+    /// если карта уже открыта. Игра переводится в режим `SHORT RANGE CHART`,
+    /// чтобы родные сцены карты оставались в ожидаемом состоянии.
+    pub(super) fn open_hdmap_mode(&mut self, mode: hdmap::MapMode) {
+        if self.hdmap.active {
+            self.hdmap.set_mode(mode);
+            self.sync_hdmap_target();
+            return;
+        }
+        // Пресет `Local` зависит от размера окна, поэтому сначала сообщаем
+        // карте геометрию, и только потом читаем из неё масштаб.
         if let Some(w) = &self.window {
             let size = w.inner_size();
             let (gw, gh) = self.game_size(size.width, size.height);
             self.hdmap.resize(gw, gh);
         }
+        self.hdmap
+            .open_mode(&self.machine.mem, galaxy::KLADOV_GALAXY, mode);
         let prev = self.machine.mem[flight::Z80_WHAT_ON_SCREEN];
         self.hdmap_screen = Some(prev);
         self.machine.mem[flight::Z80_WHAT_ON_SCREEN] = flight::Z80_SCREEN_LOCAL_MAP;
@@ -311,6 +389,16 @@ impl App<'_> {
 
     /// Включить нативный экран информации о планете с текущим именем из состояния.
     pub(super) fn open_sysinfo(&mut self) {
+        self.close_hdmap();
+        self.shop.close();
+        self.flight.close();
+        self.close_status();
+        self.close_market();
+        self.pending_status = false;
+        self.pending_market = false;
+        self.pending_flight = None;
+        self.pending_launch = false;
+        self.pending_key = None;
         self.refresh_selected_planet();
         let name = self.state.planet.clone();
         self.sysinfo
@@ -330,6 +418,11 @@ impl App<'_> {
     /// собственного интерактива (F7/F8/F9). Когда оригинал уходит с экрана,
     /// нативная надстройка закрывается; пока режим тот же — остаётся.
     pub(super) fn follow_native_screens(&mut self) {
+        // Пока эмулятор обрабатывает `L`, его экранная переменная ещё может
+        // смениться; закрывать только что открытый нативный экран нельзя.
+        if self.pending_station_native.is_some() {
+            return;
+        }
         // В нативном режиме станции эмулятор стоит на месте, поэтому его
         // экранная переменная не является признаком закрытия нативного вида.
         if self.station_native {

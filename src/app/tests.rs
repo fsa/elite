@@ -508,9 +508,18 @@ use crate::world::{current_planet_color, save_layout_kladov, scene_markers};
 
         app.key_event(KeyCode::F7, true, false);
         assert!(app.sysinfo.active, "F7 не открыл нативный экран");
-        assert!(app.station_native, "F7 не забрал управление у эмулятора");
         assert!(!app.pending_sysinfo, "F7 оставил отложенный переход");
-        assert_eq!(app.pending_key, None, "F7 отправил P в эмулятор");
+        // Первый вход на станцию из эмулятора отложен до клавиши `L`.
+        assert!(app.pending_station_native.is_some());
+        assert_eq!(app.pending_key, matrix_pos(KeyCode::KeyL));
+        app.forward_input();
+        let (lrow, lbit) = matrix_pos(KeyCode::KeyL).expect("L в матрице");
+        assert_eq!(app.machine.keyboard[lrow] & (1 << lbit), 0);
+        app.machine.run_frame();
+        app.machine.mem[flight::Z80_WHAT_ON_SCREEN] = flight::Z80_SCREEN_PILOT_INFO;
+        app.finish_pending_station_native();
+        assert!(app.station_native, "F7 не забрал управление у эмулятора");
+        assert_eq!(app.pending_key, None, "F7 оставил отложенную клавишу");
         assert!(!app.sysinfo.info.name.is_empty(), "данные планеты не прочитаны");
         assert_eq!(
             app.game_state().planet,
@@ -585,7 +594,16 @@ use crate::world::{current_planet_color, save_layout_kladov, scene_markers};
         app.key_event(KeyCode::F9, true, false);
         assert!(app.status.active, "F9 не открыл нативный экран");
         assert!(!app.pending_status, "F9 оставил отложенный переход");
-        assert_eq!(app.pending_key, None, "F9 отправил L в эмулятор");
+        // Возврат в нативный режим начинается с `L` в эмулятор.
+        assert!(app.pending_station_native.is_some());
+        assert_eq!(app.pending_key, matrix_pos(KeyCode::KeyL));
+        app.forward_input();
+        let (lrow, lbit) = matrix_pos(KeyCode::KeyL).expect("L в матрице");
+        assert_eq!(app.machine.keyboard[lrow] & (1 << lbit), 0);
+        app.machine.run_frame();
+        app.machine.mem[flight::Z80_WHAT_ON_SCREEN] = flight::Z80_SCREEN_PILOT_INFO;
+        app.finish_pending_station_native();
+        assert_eq!(app.pending_key, None, "F9 оставил отложенную клавишу");
         assert!(app.station_native, "F9 не забрал управление");
 
         // Ввод больше не перехватывается эмулятором.
@@ -1423,6 +1441,83 @@ use crate::world::{current_planet_color, save_layout_kladov, scene_markers};
         assert!(cleared, "SPACE не запустил игру");
     }
 
+    /// Холодный старт: снапшот уже имеет `IndDanger = 0`, но игра должна
+    /// начинаться на заставке. Нативный режим станции включается только после
+    /// `Space` и выхода Z80 из заставки. Конфигурация сохранения ставится до
+    /// запуска игры, чтобы на станции можно было сразу сохраниться.
+    #[test]
+    fn cold_start_shows_intro_and_space_enters_station() {
+        let opts = test_options();
+        let mut app = App::new(crate::boot::machine(&opts), &opts);
+        let layout = save_layout_kladov();
+        assert!(
+            app.machine.hooks.contains_key(&layout.menu_save_load),
+            "конфигурация сохранения должна быть установлена до старта"
+        );
+        assert!(
+            app.machine.intro_seen,
+            "холодный старт должен находиться в режиме заставки"
+        );
+        assert!(
+            !app.station_native,
+            "станция не должна захватывать управление до заставки"
+        );
+        assert_eq!(app.game_state().screen, Screen::Intro);
+
+        // Без `Space` игра остаётся на заставке, сколько её ни прогоняй.
+        for _ in 0..120 {
+            app.machine.run_frame();
+        }
+        app.maybe_enter_native_station();
+        app.sync_state();
+        assert!(app.machine.intro_seen, "заставка самовольно закончилась");
+        assert_eq!(app.game_state().screen, Screen::Intro);
+        assert!(!app.station_native);
+
+        // `Space` уводит Z80 на ветку старта; после `GameMain` станция сама
+        // переходит в нативный режим.
+        app.key_event(KeyCode::Space, true, false);
+        let mut started = false;
+        for _ in 0..5000 {
+            app.machine.run_frame();
+            if !app.machine.intro_seen {
+                started = true;
+                break;
+            }
+        }
+        assert!(started, "`Space` не запустил игру");
+        app.maybe_enter_native_station();
+        assert!(
+            app.pending_station_native.is_some(),
+            "перед заморозкой Z80 должен быть запрос на `L`"
+        );
+        assert_eq!(
+            app.pending_key,
+            matrix_pos(KeyCode::KeyL),
+            "в эмулятор должна уйти клавиша `L`"
+        );
+        // как кадр с `L` делает `frame()`: сначала ввод в матрицу, затем Z80
+        app.forward_input();
+        let (row, bit) = matrix_pos(KeyCode::KeyL).expect("L в матрице");
+        assert_eq!(
+            app.machine.keyboard[row] & (1 << bit),
+            0,
+            "`L` не дошёл до эмулятора"
+        );
+        app.machine.run_frame();
+        app.open_pending_status();
+        app.finish_pending_station_native();
+        app.sync_state();
+        assert!(
+            app.station_native,
+            "после `Space` станция должна стать нативной"
+        );
+        assert!(
+            app.status.active || app.market.native || app.hdmap.active || app.shop.active,
+            "на станции должен быть открыт нативный экран"
+        );
+    }
+
     /// Нативная заставка рисуется в HD-слой во всё окно: непрозрачный фон,
     /// заголовок и подсказки, вращающаяся фигура. `ELITE_DUMP_SPLASH=<file>`
     /// сохраняет слой в PPM для визуальной проверки.
@@ -1735,12 +1830,12 @@ use crate::world::{current_planet_color, save_layout_kladov, scene_markers};
         );
     }
 
-    /// В нативном режиме станции клавиши из `coriolis_keys.md` возвращают
-    /// управление эмулятору, а остальные игровые клавиши не попадают в
-    /// замороженный Z80. Управляющие клавиши нативных экранов продолжают
-    /// работать локально.
+    /// В нативном режиме станции оригинальные клавиши открывают нативные
+    /// экраны, а единственный выход в эмулятор — `Backquote`. Клавиши вне
+    /// станционного списка не попадают в замороженный Z80, а управление
+    /// нативных экранов продолжает работать локально.
     #[test]
-    fn game_key_closes_native_screen_and_forwards() {
+    fn station_keys_open_native_screens_and_backquote_leaves_emulator() {
         let opts = test_options();
         let mut app = App::new(boot(), &opts);
         app.machine.intro_seen = false;
@@ -1763,6 +1858,7 @@ use crate::world::{current_planet_color, save_layout_kladov, scene_markers};
             0,
             "не-станционная клавиша ушла в замороженный эмулятор"
         );
+        app.key_event(KeyCode::KeyT, false, false);
 
         // Управляющие клавиши карты продолжают работать.
         app.key_event(KeyCode::ArrowRight, true, false);
@@ -1782,45 +1878,152 @@ use crate::world::{current_planet_color, save_layout_kladov, scene_markers};
             "автоповтор Space не должен закрывать карту"
         );
 
-        // `L` — клавиша станции из coriolis_keys.md: карта закрывается,
-        // управление и одна клавиша передаются эмулятору.
+        // `L` — нативная альтернатива экрана капитана: карта закрывается,
+        // управление остаётся у нативного режима станции.
         app.key_event(KeyCode::KeyL, true, false);
-        assert!(!app.hdmap.active, "клавиша станции не закрыла карту");
-        assert!(!app.station_native, "клавиша станции не отключила нативный режим");
-        assert!(app.station_emulator, "клавиша станции не включила эмулятор");
-        app.apply_input();
+        assert!(!app.hdmap.active, "L не закрыл карту");
+        assert!(app.status.active, "L не открыл экран капитана");
+        assert!(app.station_native, "L отдал управление эмулятору");
+        assert!(!app.station_emulator, "L включил эмулятор");
+        assert_eq!(app.pending_key, None, "L оставил отложенную клавишу");
+
+        // `O` — тот же нативный экран карты в детальном масштабе.
+        app.key_event(KeyCode::KeyO, true, false);
+        assert!(app.hdmap.active, "O не открыл карту");
+        assert!(!app.status.active, "O не закрыл экран капитана");
+        assert_eq!(app.hdmap.mode(), hdmap::MapMode::Local);
+        assert!(app.station_native, "O отдал управление эмулятору");
+
+        // `Backquote` — единственный выход: все нативные экраны закрываются,
+        // эмулятор снимается с паузы без единой игровой клавиши.
+        app.key_event(KeyCode::Backquote, true, false);
+        assert!(!app.hdmap.active, "Backquote не закрыл карту");
+        assert!(!app.station_native, "Backquote не снял нативный режим");
+        assert!(app.station_emulator, "Backquote не включил эмулятор");
+        assert_eq!(app.pending_key, None, "Backquote отправил клавишу в игру");
+    }
+
+    /// Открытие нативного экрана из эмулятора сначала посылает оригиналу `L`.
+    /// Только после этого Z80 замораживается, а только что открытый экран
+    /// остаётся активным.
+    #[test]
+    fn opening_native_station_screen_sends_l_first() {
+        let opts = test_options();
+        let mut app = App::new(boot(), &opts);
+        app.machine.intro_seen = false;
+        app.machine.mem[flight::Z80_IND_DANGER] = 0;
+        // Имитируем режим покупки: `L` должен вывести оригинал отсюда.
+        app.machine.mem[flight::Z80_WHAT_ON_SCREEN] = 4;
+        app.handoff_to_emulator();
+        assert!(app.station_emulator);
+        assert!(!app.station_native);
+
+        app.key_event(KeyCode::F8, true, false);
+        assert!(app.market.native, "F8 не открыл нативный рынок");
+        assert!(
+            !app.station_native,
+            "нативный режим не должен замораживать Z80 до `L`"
+        );
+        assert!(app.pending_station_native.is_some());
+        assert_eq!(
+            app.pending_key,
+            matrix_pos(KeyCode::KeyL),
+            "в эмулятор должна уйти клавиша `L`"
+        );
+
+        app.forward_input();
         let (row, bit) = matrix_pos(KeyCode::KeyL).expect("L в матрице");
         assert_eq!(
             app.machine.keyboard[row] & (1 << bit),
             0,
-            "нажатие L не передано игре"
+            "`L` не дошёл до эмулятора"
         );
+        app.machine.run_frame();
+        app.machine.mem[flight::Z80_WHAT_ON_SCREEN] = flight::Z80_SCREEN_PILOT_INFO;
+        // Пока `L` не обработан, смена экрана Z80 не должна закрыть экран.
+        app.follow_native_screens();
+        assert!(app.market.native, "рынок закрылся до входа в нативный режим");
 
-        // Возвращаем нативный режим и проверяем закупку.
-        app.enter_native_station();
-        app.open_shop();
-        assert!(app.shop.active);
-        app.key_event(KeyCode::Escape, true, false);
-        assert!(app.menu, "Esc не открыл меню паузы");
-        assert!(app.shop.active, "Esc не должен закрывать закупку");
-        app.key_event(KeyCode::Escape, true, false);
-        assert!(!app.menu, "повторный Esc не закрыл меню");
-        app.key_event(KeyCode::F5, true, false);
-        assert!(app.shop.active, "F5 не должен закрывать закупку");
+        app.finish_pending_station_native();
+        assert!(app.station_native, "нативный режим не включился после `L`");
+        assert!(!app.station_emulator);
+        assert!(app.market.native, "вход в станцию закрыл открытый экран");
+        assert_eq!(app.pending_key, None);
+    }
 
-        // `O` — клавиша станции: закрывает закупку и передаёт управление
-        // эмулятору с одной клавишей `O`.
+    /// Оригинальные станционные цифры и буквы открывают те же нативные
+    /// экраны, что и F-клавиши, и не передают ничего в эмулятор.
+    #[test]
+    fn station_keys_map_to_native_screens() {
+        let opts = test_options();
+        let mut app = App::new(boot(), &opts);
+        app.machine.intro_seen = false;
+        app.machine.mem[flight::Z80_IND_DANGER] = 0;
+        app.machine.mem[flight::Z80_WHAT_ON_SCREEN] = 0x0B;
+
+        for code in [KeyCode::Digit2, KeyCode::Digit3, KeyCode::KeyK] {
+            app.key_event(code, true, false);
+            assert!(app.market.native, "{code:?} не открыл рынок");
+            assert!(app.station_native, "{code:?} отдал управление эмулятору");
+            assert_eq!(app.pending_key, None, "{code:?} отправил клавишу в игру");
+            app.key_event(code, false, false);
+        }
+
+        app.key_event(KeyCode::Digit4, true, false);
+        assert!(app.shop.active, "4 не открыл закупку");
+        assert!(!app.market.native, "4 не закрыл рынок");
+        assert!(app.station_native, "4 отдал управление эмулятору");
+        app.key_event(KeyCode::Digit4, false, false);
+
+        app.key_event(KeyCode::KeyP, true, false);
+        assert!(app.sysinfo.active, "P не открыл данные о планете");
+        assert!(!app.shop.active, "P не закрыл закупку");
+        app.key_event(KeyCode::KeyP, false, false);
+
+        app.key_event(KeyCode::KeyI, true, false);
+        assert!(app.hdmap.active, "I не открыл карту");
+        assert_eq!(app.hdmap.mode(), hdmap::MapMode::Galaxy);
+        assert!(!app.sysinfo.active, "I не закрыл данные о планете");
+        app.key_event(KeyCode::KeyI, false, false);
+
         app.key_event(KeyCode::KeyO, true, false);
-        assert!(!app.shop.active, "клавиша станции не закрыла закупку");
-        assert!(!app.station_native, "клавиша станции не отключила нативный режим");
-        assert!(app.station_emulator, "клавиша станции не включила эмулятор");
-        app.apply_input();
-        let (row, bit) = matrix_pos(KeyCode::KeyO).expect("O в матрице");
         assert_eq!(
-            app.machine.keyboard[row] & (1 << bit),
-            0,
-            "нажатие O не передано игре"
+            app.hdmap.mode(),
+            hdmap::MapMode::Local,
+            "O не переключил масштаб карты"
         );
+        app.key_event(KeyCode::KeyO, false, false);
+
+        // `Left Ctrl` — родная клавиша паузы: открывается нативное меню.
+        app.key_event(KeyCode::ControlLeft, true, false);
+        assert!(app.menu, "Left Ctrl не открыл меню паузы");
+        assert!(app.station_native, "Left Ctrl отдал управление эмулятору");
+        app.key_event(KeyCode::Escape, true, false);
+        assert!(!app.menu, "Esc не закрыл меню");
+    }
+
+    /// Right Shift сохраняет блок командира нативно: эмулятор остаётся
+    /// замороженным, а файл появляется без передачи клавиши в Z80.
+    #[test]
+    fn right_shift_saves_natively_on_station() {
+        let path = env::temp_dir().join("elite-station-save-test.zxelite");
+        let _ = fs::remove_file(&path);
+        let mut opts = test_options();
+        opts.save = Some(path.to_string_lossy().into_owned());
+
+        let mut app = App::new(boot(), &opts);
+        app.machine.intro_seen = false;
+        app.machine.mem[flight::Z80_IND_DANGER] = 0;
+        app.machine.mem[flight::Z80_WHAT_ON_SCREEN] = 0x0B;
+        app.maybe_enter_native_station();
+        assert!(app.station_native, "подготовка: станция не в нативном режиме");
+
+        app.key_event(KeyCode::ShiftRight, true, false);
+        assert!(path.exists(), "Right Shift не создал файл сохранения");
+        assert!(app.station_native, "Right Shift отдал управление эмулятору");
+        assert!(!app.station_emulator, "Right Shift включил эмулятор");
+        assert_eq!(app.pending_key, None, "Right Shift отправил клавишу в игру");
+        fs::remove_file(&path).ok();
     }
 
     /// На станции `G`/`H` при открытом нативном экране показывают заглушку

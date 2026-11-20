@@ -114,6 +114,7 @@ impl App<'_> {
         let layout = self.zx_layout(size.width, size.height);
         let (game_w, game_h) = self.game_size(size.width, size.height);
         let is_alt_screen = self.station_native
+            || self.pending_station_native.is_some()
             || self.pause_stub
             || self.docked.is_active()
             || !matches!(self.state.screen, Screen::Emulator(_));
@@ -130,6 +131,7 @@ impl App<'_> {
         // Эмуляция и ввод зависят от текущего экрана. В нативном режиме
         // станции эмулятор стоит на экране капитана и больше не исполняется:
         // все данные уже доступны нативным экранам, ввод в Z80 не уходит.
+        let mut emulator_ran = false;
         if self.station_native {
             self.machine.release_all_keys();
             self.machine.release_joystick();
@@ -145,32 +147,57 @@ impl App<'_> {
             if !self.state.menu {
                 let frames = self.emulation_frames();
                 self.machine.run_frames(frames);
+                emulator_ran = true;
                 self.play_frame_audio(true);
             }
         } else {
             match self.state.screen {
                 Screen::GalacticMap => {
-                    self.machine.release_all_keys();
-                    self.machine.release_joystick();
                     if !self.state.menu {
+                        if self.pending_station_native.is_some() {
+                            // Карту открыли из эмулятора: `L` должен дойти до Z80,
+                            // пока нативный режим ещё не заморозил его.
+                            self.forward_input();
+                        } else {
+                            self.machine.release_all_keys();
+                            self.machine.release_joystick();
+                        }
                         let frames = self.emulation_frames();
                         self.machine.run_frames(frames);
+                        emulator_ran = true;
                         self.open_pending_status();
                         self.open_pending_sysinfo();
                         self.open_pending_market();
                         self.sync_flight_after_frames(frames);
                         self.play_frame_audio(true);
+                    } else {
+                        self.machine.release_all_keys();
+                        self.machine.release_joystick();
                     }
                 }
                 Screen::EquipShop => {
-                    self.machine.release_all_keys();
-                    self.machine.release_joystick();
+                    if !self.state.menu {
+                        if self.pending_station_native.is_some() {
+                            self.forward_input();
+                            let frames = self.emulation_frames();
+                            self.machine.run_frames(frames);
+                            emulator_ran = true;
+                            self.play_frame_audio(true);
+                        } else {
+                            self.machine.release_all_keys();
+                            self.machine.release_joystick();
+                        }
+                    } else {
+                        self.machine.release_all_keys();
+                        self.machine.release_joystick();
+                    }
                 }
                 Screen::PilotStatus | Screen::PlanetInfo | Screen::Market => {
                     if !self.state.menu {
                         self.apply_input();
                         let frames = self.emulation_frames();
                         self.machine.run_frames(frames);
+                        emulator_ran = true;
                         self.open_pending_status();
                         self.open_pending_sysinfo();
                         self.open_pending_market();
@@ -192,6 +219,7 @@ impl App<'_> {
                         let frames = self.emulation_frames();
                         self.forward_input();
                         self.machine.run_frames(frames);
+                        emulator_ran = true;
                         self.sync_flight_after_frames(frames);
                         self.play_frame_audio(true);
                     } else {
@@ -205,6 +233,7 @@ impl App<'_> {
                     self.machine.release_joystick();
                     if !self.state.menu {
                         self.machine.run_frames(self.emulation_frames());
+                        emulator_ran = true;
                         // `Space` запустил игру: эмулятор уже перешёл в режим
                         // капитана своей веткой старта. Проверяем это по состоянию
                         // Z80 и только после этого показываем нативный экран —
@@ -219,6 +248,7 @@ impl App<'_> {
                     } else {
                         self.apply_input();
                         self.machine.run_frames(self.emulation_frames());
+                        emulator_ran = true;
                         self.open_pending_status();
                         self.open_pending_sysinfo();
                         self.open_pending_market();
@@ -233,6 +263,18 @@ impl App<'_> {
                     }
                 }
             }
+        }
+
+        // `L` был выставлен в матрицу на этом кадре: пора заморозить Z80 и
+        // передать управление нативному экрану станции.
+        if emulator_ran {
+            self.finish_pending_station_native();
+        }
+
+        // Хуки старта одноразовые: как только Z80 вошёл в игру, повторное
+        // нажатие `Space` на вернувшейся заставке должно ставить их заново.
+        if !self.machine.intro_seen {
+            self.start_requested = false;
         }
 
         self.mouse_wheel_up = false;
