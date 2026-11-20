@@ -11,6 +11,7 @@ use crate::keys::{
     matrix_pos,
 };
 use crate::native;
+use crate::state::OriginalScreen;
 use crate::storage;
 use crate::world;
 
@@ -215,6 +216,59 @@ impl App<'_> {
         true
     }
 
+    /// Нативный экран по повторному нажатию оригинальной клавиши в режиме
+    /// эмулятора.
+    ///
+    /// Первое нажатие уходит в игру: оригинал сам переходит на свой экран.
+    /// Повторное — когда игра уже показывает этот экран — забираем себе и
+    /// открываем нативный экран. Ещё одно нажатие снимает нативную надстройку
+    /// и снова отдаёт клавишу игре, чтобы она сама ушла со своего экрана.
+    /// Fn-клавиши открывают натив сразу и обрабатываются отдельно.
+    ///
+    /// Возвращает `true`, если клавиша поглощена нативным экраном.
+    fn emulator_screen_key(&mut self, code: KeyCode) -> bool {
+        if !self.station_emulator && !self.flight_emulator {
+            return false;
+        }
+        let screen = self.state.screen.original();
+        // Если нативная надстройка уже открыта, клавиша возвращается игре —
+        // иначе она застряла бы на своём экране без возможности выйти.
+        match code {
+            KeyCode::KeyL if self.status.active => {
+                self.close_status();
+                return false;
+            }
+            KeyCode::KeyP if self.sysinfo.active => {
+                self.close_sysinfo();
+                return false;
+            }
+            KeyCode::KeyK if self.market.native => {
+                self.close_market();
+                return false;
+            }
+            KeyCode::KeyL if screen == Some(OriginalScreen::CommanderStatus) => self.open_status(),
+            KeyCode::KeyP if screen == Some(OriginalScreen::PlanetInfo) => self.open_planet_info(),
+            KeyCode::KeyK if screen == Some(OriginalScreen::MarketPrices) => self.open_market(),
+            KeyCode::KeyI | KeyCode::KeyO
+                if self.hdmap.active
+                    || matches!(
+                        screen,
+                        Some(OriginalScreen::GalacticChart | OriginalScreen::LocalChart)
+                    ) =>
+            {
+                let mode = if code == KeyCode::KeyI {
+                    hdmap::MapMode::Galaxy
+                } else {
+                    hdmap::MapMode::Local
+                };
+                self.open_hdmap_mode(mode);
+            }
+            _ => return false,
+        }
+        self.release_pressed(code);
+        true
+    }
+
     /// Обработать событие клавиши (по физической позиции, раскладка не важна).
     pub(super) fn key_event(&mut self, code: KeyCode, pressed: bool, repeat: bool) {
         if let Some((row, bit)) = matrix_pos(code) {
@@ -379,6 +433,15 @@ impl App<'_> {
             self.release_pressed(code);
             return;
         }
+        // В режиме эмулятора буквенная клавиша сначала уходит в игру: нативный
+        // экран открывает только повторное нажатие. Fn-клавиши работают сразу.
+        if !self.menu
+            && !repeat
+            && !(self.hdmap.active && self.hdmap.is_searching())
+            && self.emulator_screen_key(code)
+        {
+            return;
+        }
         if self.station_native
             && !self.menu
             && !repeat
@@ -389,7 +452,9 @@ impl App<'_> {
         }
         // В полёте информационные экраны открываются нативно, как на станции,
         // но эмулятор продолжает работать, чтобы сохранялось управление кораблём.
+        // Пока экран эмулятора активен, буквенные клавиши принадлежат игре.
         if !self.station_native
+            && !self.flight_emulator
             && !self.menu
             && !repeat
             && !self.machine.intro_seen

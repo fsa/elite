@@ -755,6 +755,103 @@ use crate::world::{current_planet_color, save_layout_kladov, scene_markers};
         );
     }
 
+    /// В режиме эмулятора полёта буквенные клавиши уходят в игру. Нативный
+    /// экран открывает только повторное нажатие, когда оригинал уже показывает
+    /// этот экран; Fn-клавиши продолжают работать сразу.
+    #[test]
+    fn flight_emulator_letters_go_to_game_until_repeated() {
+        let opts = test_options();
+        let mut app = App::new(boot(), &opts);
+        app.machine.intro_seen = false;
+        app.machine.mem[flight::Z80_IND_DANGER] = 1;
+        app.machine.mem[flight::Z80_WHAT_ON_SCREEN] = 0;
+        app.machine.mem[flight::Z80_JUMP_DOCKING] = 0;
+        app.machine.mem[flight::Z80_FLG_JUMP_DOCKING] = 0;
+        app.sync_state();
+
+        app.key_event(KeyCode::F1, true, false);
+        assert!(app.flight.active, "подготовка: нативный полёт не открылся");
+        app.key_event(KeyCode::Backquote, true, false);
+        assert!(!app.flight.active, "Backquote не скрыл нативный полёт");
+        assert!(app.flight_emulator, "Backquote не включил экран эмулятора");
+        app.sync_state();
+        let (row, bit) = matrix_pos(KeyCode::KeyL).expect("L в матрице");
+
+        // Первое нажатие уходит в игру и не открывает нативный экран.
+        app.key_event(KeyCode::KeyL, true, false);
+        assert!(!app.status.active, "L сразу открыл нативный экран");
+        app.apply_input();
+        assert_eq!(
+            app.machine.keyboard[row] & (1 << bit),
+            0,
+            "L не дошёл до эмулятора"
+        );
+        app.key_event(KeyCode::KeyL, false, false);
+
+        // Оригинал сам перешёл на экран капитана; повторное L берём себе.
+        app.machine.mem[flight::Z80_WHAT_ON_SCREEN] = flight::Z80_SCREEN_PILOT_INFO;
+        app.sync_state();
+        app.key_event(KeyCode::KeyL, true, false);
+        assert!(app.status.active, "повторный L не открыл нативный экран");
+        app.apply_input();
+        assert_ne!(
+            app.machine.keyboard[row] & (1 << bit),
+            0,
+            "L ушёл в игру при открытии нативного экрана"
+        );
+        app.key_event(KeyCode::KeyL, false, false);
+
+        // Следующее нажатие снимает надстройку и снова отдаётся игре.
+        app.key_event(KeyCode::KeyL, true, false);
+        assert!(!app.status.active, "L не закрыл нативный экран");
+        app.apply_input();
+        assert_eq!(
+            app.machine.keyboard[row] & (1 << bit),
+            0,
+            "L не ушёл в игру после закрытия нативного экрана"
+        );
+        app.key_event(KeyCode::KeyL, false, false);
+
+        // Fn-клавиша открывает натив сразу, без ожидания повторного нажатия.
+        app.key_event(KeyCode::F9, true, false);
+        assert!(app.status.active, "F9 не открыл нативный экран из эмулятора");
+    }
+
+    /// На станции в режиме эмулятора оригинальные клавиши ведут себя так же:
+    /// сначала уходят в игру, а нативный экран открывает повторное нажатие.
+    #[test]
+    fn station_emulator_letters_open_native_on_repeat() {
+        let opts = test_options();
+        let mut app = App::new(boot(), &opts);
+        app.machine.intro_seen = false;
+        app.machine.mem[flight::Z80_IND_DANGER] = 0;
+        app.machine.mem[flight::Z80_WHAT_ON_SCREEN] = 0;
+        app.sync_state();
+        app.handoff_to_emulator();
+        assert!(app.station_emulator, "подготовка: эмулятор не включён");
+        app.sync_state();
+
+        app.key_event(KeyCode::KeyL, true, false);
+        assert!(!app.status.active, "L сразу открыл нативный экран");
+        app.apply_input();
+        let (row, bit) = matrix_pos(KeyCode::KeyL).expect("L в матрице");
+        assert_eq!(
+            app.machine.keyboard[row] & (1 << bit),
+            0,
+            "L не дошёл до эмулятора станции"
+        );
+        app.key_event(KeyCode::KeyL, false, false);
+
+        app.machine.mem[flight::Z80_WHAT_ON_SCREEN] = flight::Z80_SCREEN_PILOT_INFO;
+        app.sync_state();
+        app.key_event(KeyCode::KeyL, true, false);
+        assert!(app.status.active, "повторный L не открыл нативный экран");
+        assert!(
+            app.pending_station_native.is_some(),
+            "вход в нативный режим станции не отложен до кадра"
+        );
+    }
+
     /// На станции F1 отдаёт эмулятору вылет (клавиша 1), а F5 открывает
     /// нативную закупку сразу, без передачи клавиш Z80. F2-F4 остаются
     /// пустыми: их цифры не уходят в эмулятор.
