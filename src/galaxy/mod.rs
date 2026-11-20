@@ -36,10 +36,10 @@ mod math;
 mod model;
 mod name;
 
-pub use math::{distance_to_cursor_ly, jump_radius, nearest};
+pub use math::{distance_to_cursor_ly, fuel_to_cursor, jump_radius, nearest};
 
 #[cfg(test)]
-pub use math::{distance2, fuel_for_distance, fuel_to_cursor, game_sqrt};
+pub use math::{distance2, fuel_for_distance, game_sqrt};
 pub use model::{GalaxyLayout, KLADOV_GALAXY, Metric, Planet, planets};
 pub use name::{color, name};
 

@@ -548,10 +548,13 @@ use crate::world::{current_planet_color, save_layout_kladov, scene_markers};
         app.finish_pending_station_native();
         assert!(app.station_native, "F7 не забрал управление у эмулятора");
         assert_eq!(app.pending_key, None, "F7 оставил отложенную клавишу");
-        assert!(!app.sysinfo.info.name.is_empty(), "данные планеты не прочитаны");
+        assert!(
+            !app.sysinfo.selected.name.is_empty(),
+            "данные планеты не прочитаны"
+        );
         assert_eq!(
             app.game_state().planet,
-            app.sysinfo.info.name,
+            app.sysinfo.selected.name,
             "имя планеты должно приходить из состояния игры"
         );
 

@@ -383,28 +383,7 @@ impl App<'_> {
         // сразу, без передачи `P` в эмулятор и без ожидания кадра.
         if code == KeyCode::F7 && !repeat && !(self.hdmap.active && self.hdmap.is_searching()) {
             if !self.menu && !self.machine.intro_seen {
-                let docked = flight::z80_is_docked(&self.machine.mem);
-                let on_planet = self.machine.mem[flight::Z80_WHAT_ON_SCREEN]
-                    == flight::Z80_SCREEN_INFO_PLANET;
-                self.close_hdmap();
-                self.shop.close();
-                self.close_status();
-                self.flight.close();
-                self.close_market();
-                self.pending_shop = false;
-                self.pending_flight = None;
-                self.pending_launch = false;
-                self.pending_status = false;
-                self.pending_sysinfo = false;
-                self.pending_key = None;
-                self.open_sysinfo();
-                // На станции данные планеты уже в памяти. В полёте оригинал
-                // должен сам перейти на свой экран `P`, иначе нативная
-                // надстройка закроется на следующем кадре.
-                if !docked && !on_planet {
-                    self.pending_sysinfo = true;
-                    self.pending_key = matrix_pos(KeyCode::KeyP);
-                }
+                self.open_planet_info();
             }
             return;
         }

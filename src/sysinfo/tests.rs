@@ -18,7 +18,7 @@ fn fake_mem() -> Vec<u8> {
 }
 
 #[test]
-fn reads_planet_info() {
+fn reads_planet_info_from_prepared_memory() {
     let info = read_info(&fake_mem(), "Lave");
     assert_eq!(info.name, "Lave");
     assert_eq!(info.distance_tenths, 5);
@@ -70,12 +70,11 @@ fn formatting_helpers() {
 
 #[test]
 fn open_close_draw_smoke() {
-    let mem = fake_mem();
+    let mem = vec![0u8; 0x10000];
     let mut s = SysInfo::new();
     assert!(!s.active);
-    s.open(&mem, KLADOV_SYSINFO, "Lave");
+    s.open(&mem, galaxy::KLADOV_GALAXY);
     assert!(s.active);
-    assert_eq!(s.info.name, "Lave");
     let mut hd = Frame::new(640, 480);
     s.draw(&mut hd, crate::font::ZX_FONT);
     assert!(hd.pixels().iter().any(|&p| p != 0));

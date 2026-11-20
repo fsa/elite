@@ -11,7 +11,6 @@ use crate::keys::matrix_pos;
 use crate::market;
 use crate::native;
 use crate::status;
-use crate::sysinfo;
 use crate::world;
 
 impl App<'_> {
@@ -365,7 +364,9 @@ impl App<'_> {
         }
         self.pending_sysinfo = false;
         if self.sysinfo.active {
-            self.refresh_selected_planet();
+            self.sysinfo
+                .refresh(&self.machine.mem, galaxy::KLADOV_GALAXY);
+            self.state.planet = self.sysinfo.selected.name.clone();
         } else {
             self.close_hdmap();
             self.shop.close();
@@ -380,14 +381,36 @@ impl App<'_> {
         }
     }
 
-    /// Обновить в состоянии имя планеты, выбранной для показа. Оригинал
-    /// заполняет `PlanetName` при обработке `P`, до очередной синхронизации
-    /// состояния об этом нужно знать сразу.
-    fn refresh_selected_planet(&mut self) {
-        self.state.planet = world::selected_planet_name(&self.machine.mem);
+
+
+    /// Открыть нативный экран информации о планете (F7/P) с учётом состояния
+    /// полёта: в полёте запрашивается переход оригинала на экран `P`.
+    pub(super) fn open_planet_info(&mut self) {
+        let docked = flight::z80_is_docked(&self.machine.mem);
+        let on_planet =
+            self.machine.mem[flight::Z80_WHAT_ON_SCREEN] == flight::Z80_SCREEN_INFO_PLANET;
+        self.close_hdmap();
+        self.shop.close();
+        self.close_status();
+        self.flight.close();
+        self.close_market();
+        self.pending_shop = false;
+        self.pending_flight = None;
+        self.pending_launch = false;
+        self.pending_status = false;
+        self.pending_sysinfo = false;
+        self.pending_key = None;
+        self.open_sysinfo();
+        // На станции данные планеты уже в памяти. В полёте оригинал должен сам
+        // перейти на свой экран `P`, иначе нативная надстройка закроется на
+        // следующем кадре.
+        if !docked && !on_planet {
+            self.pending_sysinfo = true;
+            self.pending_key = matrix_pos(KeyCode::KeyP);
+        }
     }
 
-    /// Включить нативный экран информации о планете с текущим именем из состояния.
+    /// Включить нативный экран информации о планете.
     pub(super) fn open_sysinfo(&mut self) {
         self.close_hdmap();
         self.shop.close();
@@ -399,10 +422,8 @@ impl App<'_> {
         self.pending_flight = None;
         self.pending_launch = false;
         self.pending_key = None;
-        self.refresh_selected_planet();
-        let name = self.state.planet.clone();
-        self.sysinfo
-            .open(&self.machine.mem, sysinfo::KLADOV_SYSINFO, &name);
+        self.sysinfo.open(&self.machine.mem, galaxy::KLADOV_GALAXY);
+        self.state.planet = self.sysinfo.selected.name.clone();
         self.native_screen_opened();
     }
 

@@ -10,6 +10,7 @@ use super::App;
 use crate::cockpit;
 use crate::display;
 use crate::font::ZX_FONT;
+use crate::galaxy;
 use crate::state::Screen;
 use crate::storage;
 use crate::ui::menu::draw_pause_menu;
@@ -425,7 +426,7 @@ impl App<'_> {
                     }
                 }
                 Screen::PlanetInfo => {
-                    self.sysinfo.refresh(&self.machine.mem, &self.state.planet);
+                    self.sysinfo.refresh(&self.machine.mem, galaxy::KLADOV_GALAXY);
                     self.sysinfo.draw(&mut self.machine.hd, ZX_FONT);
                     self.draw_danger_half();
                     if self.state.menu {

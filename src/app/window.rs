@@ -212,13 +212,28 @@ impl ApplicationHandler for App<'_> {
                     }
                 }
                 // При открытой карте ЛКМ перепрыгивает курсором на звезду под
-                // указателем и передаёт выбор в эмулятор.
+                // указателем, ПКМ делает то же и открывает информацию о системе.
                 if self.hdmap.active {
-                    if button == MouseButton::Left && pressed {
-                        self.hdmap.click();
-                        self.sync_hdmap_target();
-                        if self.hdmap.is_searching() {
-                            self.hdmap.cancel_search();
+                    if pressed {
+                        match button {
+                            MouseButton::Left => {
+                                self.hdmap.click();
+                                self.sync_hdmap_target();
+                                if self.hdmap.is_searching() {
+                                    self.hdmap.cancel_search();
+                                }
+                            }
+                            MouseButton::Right => {
+                                self.hdmap.click();
+                                self.sync_hdmap_target();
+                                if self.hdmap.is_searching() {
+                                    self.hdmap.cancel_search();
+                                }
+                                if !self.menu && !self.machine.intro_seen {
+                                    self.open_planet_info();
+                                }
+                            }
+                            _ => {}
                         }
                     }
                     return;
