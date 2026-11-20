@@ -286,6 +286,46 @@ impl App<'_> {
         self.maybe_enter_native_station();
         self.sync_state();
 
+        // Плавное перемещение курсора карты по удерживаемым клавишам направления
+        // с постепенным наращиванием скорости.
+        if self.hdmap.active
+            && !self.menu
+            && !self.docked.is_active()
+            && !self.hdmap.is_searching()
+        {
+            let left = self.kempston[1] || self.matrix[7][3];
+            let right = self.kempston[0] || self.matrix[7][2];
+            let up = self.kempston[3] || self.matrix[1][1];
+            let down = self.kempston[2] || self.matrix[0][2];
+            let dx_dir = (if right { 1.0 } else { 0.0 }) - (if left { 1.0 } else { 0.0 });
+            let dy_dir = (if down { 1.0 } else { 0.0 }) - (if up { 1.0 } else { 0.0 });
+            if dx_dir != 0.0 || dy_dir != 0.0 {
+                if self.hdmap_move_speed <= 0.0 {
+                    self.hdmap_move_speed = 0.25;
+                } else {
+                    self.hdmap_move_speed = (self.hdmap_move_speed + 0.06).min(2.0);
+                }
+                self.hdmap_move_rem_x += dx_dir * self.hdmap_move_speed;
+                self.hdmap_move_rem_y += dy_dir * self.hdmap_move_speed;
+                let dx = self.hdmap_move_rem_x.trunc() as i32;
+                let dy = self.hdmap_move_rem_y.trunc() as i32;
+                if dx != 0 || dy != 0 {
+                    self.hdmap_move_rem_x -= dx as f32;
+                    self.hdmap_move_rem_y -= dy as f32;
+                    self.hdmap.move_by(dx, dy);
+                    self.sync_hdmap_target();
+                }
+            } else {
+                self.hdmap_move_speed = 0.0;
+                self.hdmap_move_rem_x = 0.0;
+                self.hdmap_move_rem_y = 0.0;
+            }
+        } else {
+            self.hdmap_move_speed = 0.0;
+            self.hdmap_move_rem_x = 0.0;
+            self.hdmap_move_rem_y = 0.0;
+        }
+
         // Отрисовка зависит от текущего экрана. Заглушка `DOCKED` временно
         // перекрывает нативный экран, который был открыт до неё.
         if self.docked.is_active() {

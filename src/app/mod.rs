@@ -94,6 +94,12 @@ struct App<'a> {
     /// Значение `WhatOnScreen` до открытия карты, чтобы вернуть его при
     /// закрытии. Пока карта открыта, игра работает как `SHORT RANGE CHART`.
     hdmap_screen: Option<u8>,
+    /// Текущая скорость перемещения курсора карты (единиц поля за кадр).
+    hdmap_move_speed: f32,
+    /// Дробный остаток смещения курсора карты по горизонтали.
+    hdmap_move_rem_x: f32,
+    /// Дробный остаток смещения курсора карты по вертикали.
+    hdmap_move_rem_y: f32,
     /// Нативный экран закупки оборудования (F5) — заменяет экран игры.
     shop: equip::Shop,
     /// Нативный экран статуса пилота (F9) — альтернатива экрану `L`.
@@ -210,6 +216,9 @@ impl<'a> App<'a> {
             menu: false,
             hdmap: hdmap::Map::new(),
             hdmap_screen: None,
+            hdmap_move_speed: 0.0,
+            hdmap_move_rem_x: 0.0,
+            hdmap_move_rem_y: 0.0,
             shop: equip::Shop::new(),
             status: status::Status::new(),
             pending_status: false,

@@ -223,6 +223,11 @@ impl App<'_> {
             self.accelerated = !self.accelerated;
             return;
         }
+        // F11 / Alt+Enter — переключение полноэкранного режима во всех режимах.
+        if (code == KeyCode::F11 || (code == KeyCode::Enter && self.alt)) && !repeat {
+            self.toggle_fullscreen();
+            return;
+        }
         // F10 — пустая клавиша: ни карту не открывает, ни в эмулятор
         // ничего не уходит (в матрице ZX её нет, но обработку всё равно
         // завершаем явно, чтобы она не задела другие режимы).
@@ -501,21 +506,16 @@ impl App<'_> {
                 return;
             }
             match code {
-                KeyCode::ArrowLeft | KeyCode::KeyN => {
-                    self.hdmap.move_by(-4, 0);
-                    self.sync_hdmap_target();
-                }
-                KeyCode::ArrowRight | KeyCode::KeyM => {
-                    self.hdmap.move_by(4, 0);
-                    self.sync_hdmap_target();
-                }
-                KeyCode::ArrowUp | KeyCode::KeyS => {
-                    self.hdmap.move_by(0, -4);
-                    self.sync_hdmap_target();
-                }
-                KeyCode::ArrowDown | KeyCode::KeyX => {
-                    self.hdmap.move_by(0, 4);
-                    self.sync_hdmap_target();
+                KeyCode::ArrowLeft
+                | KeyCode::ArrowRight
+                | KeyCode::ArrowUp
+                | KeyCode::ArrowDown
+                | KeyCode::KeyN
+                | KeyCode::KeyM
+                | KeyCode::KeyS
+                | KeyCode::KeyX => {
+                    // Перемещение курсора обрабатывается плавно каждый кадр по
+                    // удерживаемым клавишам направления.
                 }
                 KeyCode::Enter | KeyCode::Space => {
                     // На автоповторе не подтверждаем выбор повторно.
@@ -665,11 +665,6 @@ impl App<'_> {
         // Ctrl+Q — выход из игры.
         if code == KeyCode::KeyQ && self.ctrl {
             self.quit = true;
-            return;
-        }
-        // F11 / Alt+Enter — переключение полноэкранного режима.
-        if code == KeyCode::F11 || (code == KeyCode::Enter && self.alt) {
-            self.toggle_fullscreen();
             return;
         }
         // Меню паузы: своё управление, в эмулятор клавиши не уходят.
