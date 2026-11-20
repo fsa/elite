@@ -8,7 +8,7 @@ use crate::flight;
 use crate::hdmap;
 use crate::keys::{
     digit_of, emulator_handoff_key, function_game_key, function_view, is_game_key, kempston_bit,
-    matrix_pos,
+    matrix_pos, SHIP_CONTROL_KEYS,
 };
 use crate::native;
 use crate::state::OriginalScreen;
@@ -964,7 +964,8 @@ impl App<'_> {
                 self.machine.release_joystick();
                 return;
             }
-            // В полёте карта не должна блокировать управление кораблём.
+            // Под картой эмулятор продолжает работать, но управление кораблём
+            // отфильтровывается в `forward_input`.
         }
         // В режиме анимации (вылет/прыжок/стыковка) эмулятор проигрывает
         // анимацию и игра не реагирует на нажатие кнопок.
@@ -997,9 +998,10 @@ impl App<'_> {
         }
     }
 
-    /// Передать матрицу клавиш и джойстик в эмулятор без проверки нативных
-    /// экранов. Нужно экрану полёта: под нативным рендером продолжает
-    /// работать эмулятор, и ему требуется живой ввод.
+    /// Передать матрицу клавиш и джойстик в эмулятор. Управление кораблём
+    /// уходит в игру только из нативного вида полёта (`F1`–`F4` / `1`–`4`).
+    /// Под информационными экранами и на экране эмулятора стрельба, тангаж и
+    /// крен не должны попадать в эмулятор.
     pub(super) fn forward_input(&mut self) {
         self.machine.release_all_keys();
         self.machine.release_joystick();
@@ -1008,9 +1010,10 @@ impl App<'_> {
             self.pending_key = None;
             return;
         }
+        let controls = self.ship_controls_allowed();
         for (row, bits) in self.matrix.iter().enumerate() {
             for (bit, &down) in bits.iter().enumerate() {
-                if down {
+                if down && (controls || !SHIP_CONTROL_KEYS.contains(&(row, bit as u8))) {
                     self.machine.set_key(row, bit as u8, true);
                 }
             }
@@ -1021,7 +1024,12 @@ impl App<'_> {
             self.machine.set_key(row, bit, true);
         }
         for (bit, &down) in self.kempston.iter().enumerate() {
-            self.machine.set_kempston(bit as u8, down);
+            if controls {
+                self.machine.set_kempston(bit as u8, down);
+            }
+        }
+        if !controls {
+            return;
         }
         // Дублируем джойстик на те же клавиши, чтобы стрелки и RightCtrl работали.
         if self.kempston[0] {
@@ -1039,6 +1047,18 @@ impl App<'_> {
         if self.kempston[4] {
             self.machine.set_key(1, 0, true); // огонь
         }
+    }
+
+    /// Разрешено ли управление кораблём: только нативный вид полёта без
+    /// наложенных информационных экранов.
+    fn ship_controls_allowed(&self) -> bool {
+        self.flight.active
+            && !self.hdmap.active
+            && !self.shop.active
+            && !self.status.active
+            && !self.sysinfo.active
+            && !self.market.native
+            && !self.docked.is_active()
     }
 }
 

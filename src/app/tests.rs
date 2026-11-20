@@ -438,9 +438,10 @@ use crate::world::{current_planet_color, save_layout_kladov, scene_markers};
             1000
         );
 
-        // Стрелка в полёте остаётся обычным вводом для игры.
+        // Под нативным экраном цен стрелка — это управление кораблём, и в
+        // эмулятор она не уходит.
         app.apply_input();
-        assert_eq!(app.machine.kempston, 1, "стрелка не дошла до эмулятора");
+        assert_eq!(app.machine.kempston, 0, "стрелка дошла до эмулятора");
     }
 
     /// F12 переключает ускорение эмуляции Z80 вдвое. Автоповтор не должен
@@ -849,6 +850,96 @@ use crate::world::{current_planet_color, save_layout_kladov, scene_markers};
         assert!(
             app.pending_station_native.is_some(),
             "вход в нативный режим станции не отложен до кадра"
+        );
+    }
+
+    /// Кнопки управления кораблём уходят в эмулятор только из нативного вида
+    /// полёта. Под нативной картой Z80 продолжает работать, но стрельба и
+    /// движение корабля должны быть остановлены.
+    #[test]
+    fn ship_controls_reach_emulator_only_in_native_flight() {
+        let opts = test_options();
+        let mut app = App::new(boot(), &opts);
+        app.machine.intro_seen = false;
+        app.machine.mem[flight::Z80_IND_DANGER] = 1;
+        app.machine.mem[flight::Z80_WHAT_ON_SCREEN] = 0;
+        app.machine.mem[flight::Z80_JUMP_DOCKING] = 0;
+        app.machine.mem[flight::Z80_FLG_JUMP_DOCKING] = 0;
+        app.sync_state();
+
+        let (fire_row, fire_bit) = matrix_pos(KeyCode::Space).expect("Space в матрице");
+        let (pitch_row, pitch_bit) = matrix_pos(KeyCode::KeyS).expect("S в матрице");
+
+        // Нативный полёт: управление идёт в игру.
+        app.key_event(KeyCode::F1, true, false);
+        app.key_event(KeyCode::Space, true, false);
+        app.key_event(KeyCode::KeyS, true, false);
+        app.apply_input();
+        assert_eq!(app.machine.keyboard[fire_row] & (1 << fire_bit), 0);
+        assert_eq!(app.machine.keyboard[pitch_row] & (1 << pitch_bit), 0);
+        app.key_event(KeyCode::Space, false, false);
+        app.key_event(KeyCode::KeyS, false, false);
+
+        // Нативная карта поверх полёта: кнопки управления в игру не идут.
+        app.key_event(KeyCode::F6, true, false);
+        assert!(app.hdmap.active, "подготовка: карта не открылась");
+        app.key_event(KeyCode::Space, true, false);
+        app.key_event(KeyCode::ArrowUp, true, false);
+        app.apply_input();
+        assert_ne!(
+            app.machine.keyboard[fire_row] & (1 << fire_bit),
+            0,
+            "огонь ушёл в эмулятор под картой"
+        );
+        assert_eq!(
+            app.machine.kempston, 0,
+            "джойстик ушёл в эмулятор под картой"
+        );
+        assert!(
+            app.matrix[fire_row][fire_bit as usize],
+            "карта должна сама видеть удержанный Space"
+        );
+    }
+
+    /// Экран эмулятора в полёте не является экраном управления кораблём:
+    /// стрельба и джойстик в игру не уходят, а буквенные клавиши уходят.
+    #[test]
+    fn emulator_screen_blocks_ship_controls() {
+        let opts = test_options();
+        let mut app = App::new(boot(), &opts);
+        app.machine.intro_seen = false;
+        app.machine.mem[flight::Z80_IND_DANGER] = 1;
+        app.machine.mem[flight::Z80_WHAT_ON_SCREEN] = 0;
+        app.machine.mem[flight::Z80_JUMP_DOCKING] = 0;
+        app.machine.mem[flight::Z80_FLG_JUMP_DOCKING] = 0;
+        app.sync_state();
+        app.key_event(KeyCode::F1, true, false);
+        app.key_event(KeyCode::Backquote, true, false);
+        assert!(
+            app.flight_emulator && !app.flight.active,
+            "подготовка: экран эмулятора не включён"
+        );
+        app.sync_state();
+
+        app.key_event(KeyCode::Space, true, false);
+        app.key_event(KeyCode::ArrowUp, true, false);
+        app.apply_input();
+        let (row, bit) = matrix_pos(KeyCode::Space).expect("Space в матрице");
+        assert_ne!(
+            app.machine.keyboard[row] & (1 << bit),
+            0,
+            "огонь ушёл в эмулятор"
+        );
+        assert_eq!(app.machine.kempston, 0, "джойстик ушёл в эмулятор");
+
+        // Обычная игровая клавиша продолжает доходить до Z80.
+        app.key_event(KeyCode::KeyL, true, false);
+        app.apply_input();
+        let (row, bit) = matrix_pos(KeyCode::KeyL).expect("L в матрице");
+        assert_eq!(
+            app.machine.keyboard[row] & (1 << bit),
+            0,
+            "L не дошёл до эмулятора"
         );
     }
 
