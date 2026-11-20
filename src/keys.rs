@@ -128,25 +128,3 @@ pub(crate) fn is_game_key(code: KeyCode) -> bool {
 pub(crate) fn emulator_handoff_key(code: KeyCode) -> bool {
     code == KeyCode::Backquote
 }
-
-/// Клавиши режима паузы Кладова из `docs/z80/kladov_keys.md`.
-///
-/// В нативном режиме станции их действие ещё не реализовано, поэтому они
-/// открывают временную страницу с сообщением. Когда управление принадлежит
-/// эмулятору, эти клавиши работают по-родному и сюда не попадают. `L` тоже
-/// перечислена в документе, но в нативном режиме её раньше перехватывает
-/// команда показа информации о капитане (сейчас — нативный экран `F9`).
-pub(crate) fn pause_settings_key(code: KeyCode) -> bool {
-    matches!(
-        code,
-        KeyCode::KeyY
-            | KeyCode::KeyB
-            | KeyCode::KeyC
-            | KeyCode::KeyL
-            | KeyCode::KeyR
-            | KeyCode::KeyF
-            | KeyCode::KeyQ
-            | KeyCode::KeyS
-            | KeyCode::Space
-    )
-}

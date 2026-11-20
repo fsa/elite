@@ -8,7 +8,7 @@ use crate::flight;
 use crate::hdmap;
 use crate::keys::{
     digit_of, emulator_handoff_key, function_game_key, function_view, is_game_key, kempston_bit,
-    matrix_pos, pause_settings_key,
+    matrix_pos,
 };
 use crate::native;
 use crate::storage;
@@ -690,16 +690,13 @@ impl App<'_> {
             }
             return;
         }
-        // Клавиши паузы Кладова в нативном режиме станции пока не делают
-        // ничего: вместо их родного действия показывается временная страница.
-        // В эмуляторе (после handoff) они работают по-прежнему. `Ctrl+Q`
+        // Left Shift в оригинале Кладова включает паузу, в которой остальные
+        // клавиши меняют настройки. В нативном режиме станции вместо будущего
+        // меню настроек показывается заглушка, и открывает её только сама
+        // паузная клавиша — остальные клавиши настроек пока ничего не делают.
+        // В эмуляторе (после handoff) Shift работает по-родному. `Ctrl+Q`
         // остаётся глобальной командой выхода.
-        if self.station_native
-            && !self.menu
-            && !repeat
-            && pause_settings_key(code)
-            && !(code == KeyCode::KeyQ && self.ctrl)
-        {
+        if self.station_native && !self.menu && !repeat && code == KeyCode::ShiftLeft {
             self.pause_stub = true;
             self.release_pressed(code);
             return;

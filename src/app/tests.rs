@@ -2085,11 +2085,12 @@ use crate::world::{current_planet_color, save_layout_kladov, scene_markers};
         }
     }
 
-    /// В нативном режиме станции клавиши паузы Кладова показывают временную
-    /// заглушку и не передаются эмулятору. Следующее нажатие закрывает
-    /// заглушку и обрабатывается обычным путём.
+    /// В нативном режиме станции только Left Shift (в оригинале — вход в
+    /// паузу) показывает временную заглушку. Клавиши настроек из
+    /// `kladov_keys.md` сами по себе заглушку не открывают и в эмулятор не
+    /// уходят. Следующее нажатие закрывает заглушку и обрабатывается штатно.
     #[test]
-    fn pause_settings_key_shows_stub_on_station() {
+    fn pause_key_shows_stub_on_station() {
         let opts = test_options();
         let mut app = App::new(boot(), &opts);
         app.machine.intro_seen = false;
@@ -2102,28 +2103,44 @@ use crate::world::{current_planet_color, save_layout_kladov, scene_markers};
         assert!(app.station_native, "подготовка: станция не в нативном режиме");
         assert!(!app.pause_stub, "заглушка паузы уже показана");
 
-        // `Y` — клавиша из `kladov_keys.md`, нативно ещё не реализована.
-        app.key_event(KeyCode::KeyY, true, false);
-        assert!(app.pause_stub, "клавиша паузы не показала заглушку");
+        // Клавиши настроек из `kladov_keys.md` больше не реагируют на заглушку.
+        for key in [
+            KeyCode::KeyY,
+            KeyCode::KeyB,
+            KeyCode::KeyC,
+            KeyCode::KeyR,
+            KeyCode::KeyF,
+            KeyCode::KeyQ,
+            KeyCode::KeyS,
+            KeyCode::Space,
+        ] {
+            app.key_event(key, true, false);
+            assert!(!app.pause_stub, "{key:?} открыл заглушку паузы");
+            assert!(app.station_native, "{key:?} отдал управление эмулятору");
+        }
+
+        // Left Shift включает паузу в оригинале — он один открывает заглушку.
+        app.key_event(KeyCode::ShiftLeft, true, false);
+        assert!(app.pause_stub, "Shift не показал заглушку паузы");
         assert!(app.station_native, "заглушка паузы отдала управление эмулятору");
         assert!(!app.station_emulator, "заглушка паузы включила эмулятор");
         app.apply_input();
-        let (row, bit) = matrix_pos(KeyCode::KeyY).expect("Y в матрице");
+        let (row, bit) = matrix_pos(KeyCode::ShiftLeft).expect("Shift в матрице");
         assert_ne!(
             app.machine.keyboard[row] & (1 << bit),
             0,
-            "клавиша паузы ушла в замороженный эмулятор"
+            "Shift ушёл в замороженный эмулятор"
         );
-        assert_eq!(app.pending_key, None, "клавиша паузы оставила pending_key");
+        assert_eq!(app.pending_key, None, "Shift оставил pending_key");
 
         // Следующее нажатие закрывает заглушку и обрабатывается штатно.
-        app.key_event(KeyCode::ArrowRight, true, false);
+        app.key_event(KeyCode::KeyY, true, false);
         assert!(!app.pause_stub, "следующее нажатие не закрыло заглушку");
         assert!(app.station_native, "следующее нажатие отдало управление");
 
-        // Повторная паузная клавиша снова показывает заглушку.
-        app.key_event(KeyCode::KeyB, true, false);
-        assert!(app.pause_stub, "повторная клавиша паузы не показала заглушку");
+        // Повторный Shift снова показывает заглушку.
+        app.key_event(KeyCode::ShiftLeft, true, false);
+        assert!(app.pause_stub, "повторный Shift не показал заглушку");
     }
 
     /// В нативном режиме станции эмулятор заморожен: ввод не передаётся,
