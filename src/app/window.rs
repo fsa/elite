@@ -85,7 +85,7 @@ impl App<'_> {
             0.0
         };
         let attrs = Window::default_attributes()
-            .with_title("Elite")
+            .with_title("Elite: Kladov Revisited")
             .with_inner_size(LogicalSize::new(
                 4.0 * SRC_W as f64 + debug_w,
                 4.0 * SRC_H as f64,

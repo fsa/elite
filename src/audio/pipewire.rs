@@ -37,7 +37,7 @@ fn run(shared: Arc<Mutex<Shared>>, ready: mpsc::Sender<Result<(), String>>) -> R
 
     let stream = pw::stream::StreamBox::new(
         &core,
-        "elite",
+        "Elite: Kladov Revisited",
         properties! {
             *pw::keys::MEDIA_TYPE => "Audio",
             *pw::keys::MEDIA_ROLE => "Game",
