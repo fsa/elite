@@ -386,6 +386,7 @@ impl App<'_> {
     /// Открыть нативный экран информации о планете (F7/P) с учётом состояния
     /// полёта: в полёте запрашивается переход оригинала на экран `P`.
     pub(super) fn open_planet_info(&mut self) {
+        self.sysinfo_from_map = false;
         let docked = flight::z80_is_docked(&self.machine.mem);
         let on_planet =
             self.machine.mem[flight::Z80_WHAT_ON_SCREEN] == flight::Z80_SCREEN_INFO_PLANET;
@@ -412,6 +413,7 @@ impl App<'_> {
 
     /// Включить нативный экран информации о планете.
     pub(super) fn open_sysinfo(&mut self) {
+        self.sysinfo_from_map = false;
         self.close_hdmap();
         self.shop.close();
         self.flight.close();
@@ -427,12 +429,43 @@ impl App<'_> {
         self.native_screen_opened();
     }
 
+    /// Вернуться с экрана информации о планете на карту в прежнем состоянии.
+    /// Используется, если экран был открыт по ПКМ на карте.
+    pub(super) fn return_from_sysinfo_to_map(&mut self) {
+        if !self.sysinfo.active || !self.sysinfo_from_map || self.hdmap.planet_count() == 0 {
+            return;
+        }
+        self.sysinfo_from_map = false;
+        self.close_sysinfo();
+        self.shop.close();
+        self.close_status();
+        self.close_market();
+        self.pending_status = false;
+        self.pending_market = false;
+        self.menu = false;
+        self.pending_key = None;
+        self.pending_flight = None;
+        self.pending_launch = false;
+        if let Some(w) = &self.window {
+            let size = w.inner_size();
+            let (gw, gh) = self.game_size(size.width, size.height);
+            self.hdmap.resize(gw, gh);
+        }
+        let prev = self.machine.mem[flight::Z80_WHAT_ON_SCREEN];
+        self.hdmap_screen = Some(prev);
+        self.machine.mem[flight::Z80_WHAT_ON_SCREEN] = flight::Z80_SCREEN_LOCAL_MAP;
+        self.hdmap.active = true;
+        self.sync_hdmap_target();
+        self.native_screen_opened();
+    }
+
     /// Выключить нативную отрисовку экрана информации о планете. Экранная
     /// переменная Z80 не трогается.
     pub(super) fn close_sysinfo(&mut self) {
         self.sysinfo.close();
         self.pending_sysinfo = false;
         self.pending_key = None;
+        self.sysinfo_from_map = false;
     }
 
     /// Запомнить, что в текущем переходе Z80 вёл отсчёт гиперпрыжка.

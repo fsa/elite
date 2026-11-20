@@ -231,6 +231,7 @@ impl ApplicationHandler for App<'_> {
                                 }
                                 if !self.menu && !self.machine.intro_seen {
                                     self.open_planet_info();
+                                    self.sysinfo_from_map = true;
                                 }
                             }
                             _ => {}
@@ -243,6 +244,16 @@ impl ApplicationHandler for App<'_> {
                     if button == MouseButton::Left && pressed {
                         self.shop.click(&mut self.machine.mem);
                     }
+                    return;
+                }
+                // Экран информации о системе, открытый по ПКМ с карты, по ПКМ
+                // возвращает на карту в прежнем состоянии.
+                if self.sysinfo.active
+                    && self.sysinfo_from_map
+                    && button == MouseButton::Right
+                    && pressed
+                {
+                    self.return_from_sysinfo_to_map();
                     return;
                 }
                 // В полёте ЛКМ по овалу радара переключает вид локатора.
