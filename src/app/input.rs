@@ -290,6 +290,7 @@ impl App<'_> {
             && matches!(code, KeyCode::KeyG | KeyCode::KeyH)
             && !self.menu
             && self.station_native
+            && !(self.hdmap.active && self.hdmap.is_searching())
         {
             self.docked.show();
             self.sfx.play(crate::sfx::Sfx::DockedBeep);
@@ -307,11 +308,21 @@ impl App<'_> {
         // Единственный выход в эмулятор на станции: `Backquote` снимает
         // заморозку Z80, но не посылает в игру ни одной клавиши. Все остальные
         // клавиши из `coriolis_keys.md` открывают нативные экраны.
-        if self.station_native && !self.menu && !repeat && emulator_handoff_key(code) {
+        if self.station_native
+            && !self.menu
+            && !repeat
+            && emulator_handoff_key(code)
+            && !(self.hdmap.active && self.hdmap.is_searching())
+        {
             self.handoff_to_emulator();
             return;
         }
-        if self.station_native && !self.menu && !repeat && self.station_native_command(code) {
+        if self.station_native
+            && !self.menu
+            && !repeat
+            && !(self.hdmap.active && self.hdmap.is_searching())
+            && self.station_native_command(code)
+        {
             return;
         }
         // F6 открывает нативную карту в галактическом масштабе (`I` открывает
@@ -333,7 +344,7 @@ impl App<'_> {
         // F7 — нативная альтернатива экрану информации о планете (`P`).
         // Данные планеты уже есть в памяти игры, поэтому экран открывается
         // сразу, без передачи `P` в эмулятор и без ожидания кадра.
-        if code == KeyCode::F7 && !repeat {
+        if code == KeyCode::F7 && !repeat && !(self.hdmap.active && self.hdmap.is_searching()) {
             if !self.menu && !self.machine.intro_seen {
                 let docked = flight::z80_is_docked(&self.machine.mem);
                 let on_planet = self.machine.mem[flight::Z80_WHAT_ON_SCREEN]
@@ -362,7 +373,7 @@ impl App<'_> {
         }
         // F9 — нативная альтернатива экрану капитана (`L`). Открывается
         // сразу по живым данным блока командира, без нажатия `L` в эмулятор.
-        if code == KeyCode::F9 && !repeat {
+        if code == KeyCode::F9 && !repeat && !(self.hdmap.active && self.hdmap.is_searching()) {
             if !self.menu && !self.machine.intro_seen {
                 let docked = flight::z80_is_docked(&self.machine.mem);
                 let on_status = self.machine.mem[flight::Z80_WHAT_ON_SCREEN]
@@ -393,7 +404,7 @@ impl App<'_> {
         // сразу по живым таблицам цен, без передачи `K` в эмулятор.
         // Торговля отдельно разрешена только на станции (см. блок стрелок
         // ниже и `Market::trade`).
-        if code == KeyCode::F8 && !repeat {
+        if code == KeyCode::F8 && !repeat && !(self.hdmap.active && self.hdmap.is_searching()) {
             if !self.menu && !self.machine.intro_seen {
                 let docked = flight::z80_is_docked(&self.machine.mem);
                 let on_market = self.machine.mem[flight::Z80_WHAT_ON_SCREEN]
@@ -465,6 +476,30 @@ impl App<'_> {
                 self.menu_key(code);
                 return;
             }
+            if self.hdmap.is_searching() {
+                match code {
+                    KeyCode::Escape if !repeat => {
+                        self.hdmap.cancel_search();
+                    }
+                    KeyCode::Enter if !repeat => {
+                        self.hdmap.confirm_search();
+                        self.sync_hdmap_target();
+                    }
+                    KeyCode::Backspace => {
+                        self.hdmap.search_backspace();
+                        self.sync_hdmap_target();
+                    }
+                    _ => {
+                        if !repeat {
+                            if let Some(ch) = letter_of(code) {
+                                self.hdmap.search_push(ch);
+                                self.sync_hdmap_target();
+                            }
+                        }
+                    }
+                }
+                return;
+            }
             match code {
                 KeyCode::ArrowLeft | KeyCode::KeyN => {
                     self.hdmap.move_by(-4, 0);
@@ -495,6 +530,15 @@ impl App<'_> {
                         self.hdmap.snap_to_nearest();
                         self.sync_hdmap_target();
                     }
+                }
+                // `B` — вернуть курсор на текущую планету.
+                KeyCode::KeyB if !repeat => {
+                    self.hdmap.cursor_to_current_system();
+                    self.sync_hdmap_target();
+                }
+                // `R` — включить поиск планеты по имени.
+                KeyCode::KeyR if !repeat => {
+                    self.hdmap.start_search();
                 }
                 // Ctrl+F1 — временный чит: телепорт «на станцию» выбранной
                 // планеты. Пишем координаты системы и уходим в родную ветку
@@ -863,4 +907,37 @@ impl App<'_> {
             self.machine.set_key(1, 0, true); // огонь
         }
     }
+}
+
+/// Буква физической клавиши A-Z (для ввода в поиске на карте).
+fn letter_of(code: KeyCode) -> Option<char> {
+    Some(match code {
+        KeyCode::KeyA => 'A',
+        KeyCode::KeyB => 'B',
+        KeyCode::KeyC => 'C',
+        KeyCode::KeyD => 'D',
+        KeyCode::KeyE => 'E',
+        KeyCode::KeyF => 'F',
+        KeyCode::KeyG => 'G',
+        KeyCode::KeyH => 'H',
+        KeyCode::KeyI => 'I',
+        KeyCode::KeyJ => 'J',
+        KeyCode::KeyK => 'K',
+        KeyCode::KeyL => 'L',
+        KeyCode::KeyM => 'M',
+        KeyCode::KeyN => 'N',
+        KeyCode::KeyO => 'O',
+        KeyCode::KeyP => 'P',
+        KeyCode::KeyQ => 'Q',
+        KeyCode::KeyR => 'R',
+        KeyCode::KeyS => 'S',
+        KeyCode::KeyT => 'T',
+        KeyCode::KeyU => 'U',
+        KeyCode::KeyV => 'V',
+        KeyCode::KeyW => 'W',
+        KeyCode::KeyX => 'X',
+        KeyCode::KeyY => 'Y',
+        KeyCode::KeyZ => 'Z',
+        _ => return None,
+    })
 }

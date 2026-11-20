@@ -117,11 +117,13 @@ impl Map {
         f.fill_rect(inner_x, py, inner_w as usize, panel_h.max(0) as usize, BG);
         let tx = inner_x + 8 * ts as i32;
         let mut ty = py + 4 * ts as i32;
+        // Текущая планета (система, где находится корабль).
         if let Some(i) = sys {
-            let s = format!("SYSTEM   {:<8}", self.name_of(i));
+            let s = format!("CURRENT  {:<8}", self.name_of(i));
             f.draw_text(font, tx, ty, &s, SYS_RING, ts);
         }
         ty += line + 2;
+        // Планета назначения (цель курсора/гиперпрыжка).
         if let Some(i) = near {
             let p = &self.planets[i];
             // Цветной маркер планеты рядом с именем.
@@ -133,18 +135,23 @@ impl Map {
                 galaxy::color(p.state),
             );
             let s = format!(
-                "SELECTED {:<8} {:>4.1} LY",
+                "DEST     {:<8} {:>4.1} LY",
                 self.name_of(i),
                 self.distance_to_cursor()
             );
             f.draw_text(font, tx + 8 * ts as i32, ty, &s, NEAR_RING, ts);
         }
         ty += line + 2;
-        let help = format!(
-            "I/O: chart scale   LMB: pick   D: nearest   wheel/+/-: zoom x{:.2}",
-            self.zoom()
-        );
-        f.draw_text(font, tx, ty, &help, TEXT_DIM, ts);
+        if self.searching {
+            let s = format!("FIND: {}_", self.search_query());
+            f.draw_text(font, tx, ty, &s, CURSOR, ts);
+        } else {
+            let help = format!(
+                "B: current  R: find  D: nearest  I/O: scale  +/-: zoom x{:.2}",
+                self.zoom()
+            );
+            f.draw_text(font, tx, ty, &help, TEXT_DIM, ts);
+        }
 
         // Белая рамка вокруг всего экрана и разделитель под шапкой. Рисуется
         // последней, чтобы линии не перекрывались содержимым.

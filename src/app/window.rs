@@ -151,6 +151,9 @@ impl ApplicationHandler for App<'_> {
                     if button == MouseButton::Left && pressed {
                         self.hdmap.click();
                         self.sync_hdmap_target();
+                        if self.hdmap.is_searching() {
+                            self.hdmap.cancel_search();
+                        }
                     }
                     return;
                 }

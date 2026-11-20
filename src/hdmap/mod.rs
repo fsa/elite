@@ -73,6 +73,10 @@ pub struct Map {
     /// когда карта закрыта, чтобы первый же клик после открытия попал в цель.
     /// Само движение мыши курсор карты не двигает — позиция нужна только ЛКМ.
     pointer: Option<(f64, f64)>,
+    /// Активен ли режим поиска планеты по имени (клавиша `R`).
+    searching: bool,
+    /// Текст запроса поиска планеты.
+    search_query: String,
 }
 
 impl Map {
@@ -93,6 +97,8 @@ impl Map {
             win_w: 0,
             win_h: 0,
             pointer: None,
+            searching: false,
+            search_query: String::new(),
         }
     }
 
@@ -123,6 +129,8 @@ impl Map {
         self.fuel = mem[layout.fuel];
         self.cursor_x = mem[layout.target_x] as i32;
         self.cursor_y_raw = mem[layout.target_y] as i32;
+        self.searching = false;
+        self.search_query.clear();
         self.active = true;
         self.set_mode(mode);
     }
@@ -156,6 +164,8 @@ impl Map {
     /// Закрыть карту (возврат к экрану игры).
     pub fn close(&mut self) {
         self.active = false;
+        self.searching = false;
+        self.search_query.clear();
     }
 
     /// Запомнить размер окна (до первого кадра), чтобы попадание мышью и
@@ -361,6 +371,88 @@ impl Map {
             self.cursor_y_raw = p.y_raw;
         }
         self.clamp_cursor_to_view();
+    }
+
+    /// Вернуть курсор на текущую планету (клавиша `B`).
+    pub fn cursor_to_current_system(&mut self) {
+        self.cursor_x = self.sys_x;
+        self.cursor_y_raw = self.sys_y_raw;
+        self.snap_to_nearest();
+    }
+
+    /// Активен ли режим поиска планеты.
+    pub fn is_searching(&self) -> bool {
+        self.searching
+    }
+
+    /// Текущий текст запроса поиска.
+    pub fn search_query(&self) -> &str {
+        &self.search_query
+    }
+
+    /// Включить поиск планеты (клавиша `R`).
+    pub fn start_search(&mut self) {
+        self.searching = true;
+        self.search_query.clear();
+    }
+
+    /// Отменить поиск без изменения курсора.
+    pub fn cancel_search(&mut self) {
+        self.searching = false;
+        self.search_query.clear();
+    }
+
+    /// Подтвердить поиск: выйти из режима, оставив курсор на найденной планете.
+    pub fn confirm_search(&mut self) {
+        self.searching = false;
+        self.search_query.clear();
+    }
+
+    /// Добавить символ в запрос поиска и перейти к совпадению.
+    pub fn search_push(&mut self, ch: char) {
+        self.search_query.push(ch);
+        self.apply_search();
+    }
+
+    /// Удалить последний символ запроса поиска.
+    pub fn search_backspace(&mut self) {
+        self.search_query.pop();
+        if !self.search_query.is_empty() {
+            self.apply_search();
+        }
+    }
+
+    /// Найти планету по запросу: точное имя, затем префикс, затем вхождение.
+    fn find_planet(&self, query: &str) -> Option<usize> {
+        if query.is_empty() {
+            return None;
+        }
+        let q = query.to_ascii_uppercase();
+        let mut prefix = None;
+        let mut contains = None;
+        for p in &self.planets {
+            let name = galaxy::name(p.state, &self.digraphs);
+            if name == q {
+                return Some(p.index);
+            }
+            if prefix.is_none() && name.starts_with(&q) {
+                prefix = Some(p.index);
+            }
+            if contains.is_none() && name.contains(&q) {
+                contains = Some(p.index);
+            }
+        }
+        prefix.or(contains)
+    }
+
+    /// Переместить курсор на планету, совпадающую с текущим запросом.
+    fn apply_search(&mut self) {
+        if let Some(i) = self.find_planet(&self.search_query) {
+            let p = &self.planets[i];
+            self.cursor_x = p.x;
+            self.cursor_y_raw = p.y_raw;
+            self.clamp_cursor_to_view();
+        }
     }
 
     /// Удержать курсор в видимой части поля.
