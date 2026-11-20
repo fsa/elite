@@ -184,6 +184,10 @@ struct App<'a> {
     /// Запрос пришёл с `F1` на станции: открыть нативный вид сразу с
     /// анимацией вылета, а не ждать, пока Z80 закончит переход.
     pending_launch: bool,
+    /// В полёте пользователь явно выбрал показ экрана эмулятора вместо
+    /// нативного вида кабины. Автооткрытие нативного вида при этом
+    /// подавляется до явного возврата по `F1`-`F4`.
+    flight_emulator: bool,
     /// Состояние джойстика Kempston (5 бит).
     kempston: [bool; 5],
     ctrl: bool,
@@ -261,6 +265,7 @@ impl<'a> App<'a> {
             saw_jump_countdown: false,
             pending_flight: None,
             pending_launch: false,
+            flight_emulator: false,
             kempston: [false; 5],
             ctrl: false,
             alt: false,

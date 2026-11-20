@@ -253,9 +253,9 @@ impl App<'_> {
         }
 
         // В режиме анимации (вылет, гиперпереход, стыковка) переключение
-        // экранов недоступно: работает только переход между F1 и 1 (нативная
-        // отрисовка или эмулятор) и пауза. Эмулятор в это время проигрывает
-        // анимацию и игра не реагирует на кнопки.
+        // экранов недоступно: работает только переход между нативной
+        // отрисовкой (F1) и экраном эмулятора (Backquote), а также пауза.
+        // Эмулятор в это время проигрывает анимацию и игра не реагирует на кнопки.
         if !self.machine.intro_seen && !self.menu && flight::z80_in_transition(&self.machine.mem) {
             if repeat {
                 return;
@@ -263,7 +263,7 @@ impl App<'_> {
             if code == KeyCode::F1 {
                 // Показать нативную отрисовку текущей анимации.
                 if self.flight.in_transition() {
-                    // Анимация уже идёт (в том числе скрытая клавишей `1`) —
+                    // Анимация уже идёт (в том числе скрытая Backquote) —
                     // просто снова показываем нативный вид без сброса состояния.
                     self.flight.active = true;
                     self.flight.set_view_dir(flight::ViewDir::Forward);
@@ -287,7 +287,7 @@ impl App<'_> {
                     };
                     self.flight.start_transition_kind(kind, countdown);
                 }
-            } else if code == KeyCode::Digit1 {
+            } else if emulator_handoff_key(code) {
                 // Показать анимацию, которую рисует эмулятор. Состояние
                 // перехода сохраняем, чтобы F1 мог вернуться к той же анимации.
                 self.flight.active = false;
@@ -352,6 +352,28 @@ impl App<'_> {
             && !(self.hdmap.active && self.hdmap.is_searching())
         {
             self.handoff_to_emulator();
+            return;
+        }
+        // В полёте `Backquote` включает показ экрана эмулятора вместо
+        // нативного вида кабины (симметрично выходу в эмулятор на станции).
+        if !self.station_native
+            && !self.menu
+            && !repeat
+            && emulator_handoff_key(code)
+            && !self.machine.intro_seen
+            && !flight::z80_is_docked(&self.machine.mem)
+            && !(self.hdmap.active && self.hdmap.is_searching())
+        {
+            self.flight_emulator = true;
+            self.pending_flight = None;
+            self.pending_launch = false;
+            if self.flight.active && !self.flight.in_animation_mode() {
+                self.flight.close();
+            } else if self.flight.active {
+                // В анимации скрываем нативный вид, сохраняя состояние перехода.
+                self.flight.active = false;
+            }
+            self.release_pressed(code);
             return;
         }
         if self.station_native
@@ -709,7 +731,7 @@ impl App<'_> {
                 if code == KeyCode::F1 {
                     // Оставляем нативный вид активным (уже открыт).
                     self.flight.set_view_dir(flight::ViewDir::Forward);
-                } else if code == KeyCode::Digit1 {
+                } else if emulator_handoff_key(code) {
                     // Показать анимацию, которую рисует эмулятор. Состояние
                     // перехода сохраняем, чтобы F1 мог вернуться к ней.
                     self.flight.active = false;
@@ -737,8 +759,6 @@ impl App<'_> {
                 } else {
                     function_game_key(code).and_then(matrix_pos)
                 };
-            } else if code == KeyCode::Digit1 {
-                self.flight.close();
             } else if code == KeyCode::Escape {
                 self.menu = true;
                 self.menu_sel = 0;

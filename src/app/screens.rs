@@ -89,6 +89,7 @@ impl App<'_> {
         self.close_all_native();
         self.station_native = true;
         self.station_emulator = false;
+        self.flight_emulator = false;
         self.menu = false;
         if !self.status.active {
             self.status.open(&self.machine.mem, status::KLADOV_STATUS);
@@ -497,7 +498,7 @@ impl App<'_> {
     /// кадром): экран не закрывается до нуля, а сам прыжок уже показывается
     /// нативной анимацией, как по `F1`.
     pub(super) fn switch_to_flight_on_jump(&mut self) {
-        if !self.saw_jump_countdown || self.flight.active {
+        if !self.saw_jump_countdown || self.flight.active || self.flight_emulator {
             return;
         }
         let in_transition = flight::z80_in_transition(&self.machine.mem);
@@ -624,6 +625,7 @@ impl App<'_> {
 
     /// Открыть нативный экран полёта поверх текущего состояния игры.
     fn open_flight(&mut self, dir: flight::ViewDir) {
+        self.flight_emulator = false;
         let planet_color = world::current_planet_color(&self.machine.mem);
         self.flight.open(planet_color);
         self.flight.set_view_dir(dir);
@@ -644,6 +646,7 @@ impl App<'_> {
     /// Показать нативный вид: уже открытый экран только меняет направление,
     /// чтобы не сбрасывать звёздное поле и начатый переход.
     pub(super) fn show_flight(&mut self, dir: flight::ViewDir) {
+        self.flight_emulator = false;
         if self.flight.active {
             self.flight.set_view_dir(dir);
             self.pending_flight = None;
@@ -671,6 +674,7 @@ impl App<'_> {
             self.flight.close();
             self.pending_flight = None;
             self.pending_launch = false;
+            self.flight_emulator = false;
             return;
         }
         self.flight.follow_z80_screen(&self.machine.mem);
@@ -734,7 +738,7 @@ impl App<'_> {
         if !in_cockpit && !in_transition {
             return;
         }
-        if !info_screen && !self.flight.active {
+        if !info_screen && !self.flight.active && !self.flight_emulator {
             let dir = match self.machine.mem[flight::Z80_WHAT_ON_SCREEN] {
                 1 => flight::ViewDir::Back,
                 2 => flight::ViewDir::Left,

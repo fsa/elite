@@ -741,9 +741,9 @@ use crate::world::{current_planet_color, save_layout_kladov, scene_markers};
         app.key_event(KeyCode::Escape, true, false);
         assert!(!app.menu && app.flight.active, "Esc не вернул в полёт");
 
-        // Клавиша 1 — назад к Z80-кадру.
-        app.key_event(KeyCode::Digit1, true, false);
-        assert!(!app.flight.active, "1 не закрыла экран полёта");
+        // `Backquote` — назад к Z80-кадру.
+        app.key_event(KeyCode::Backquote, true, false);
+        assert!(!app.flight.active, "Backquote не закрыл экран полёта");
 
         // F1 снова включает экран полёта (и остаётся включённым).
         app.key_event(KeyCode::F1, true, false);
