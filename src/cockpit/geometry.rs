@@ -67,6 +67,11 @@ impl Rect {
     pub fn is_empty(&self) -> bool {
         self.w <= 0 || self.h <= 0
     }
+
+    /// Содержит ли прямоугольник точку.
+    pub fn contains(&self, x: i32, y: i32) -> bool {
+        x >= self.x && x < self.x + self.w && y >= self.y && y < self.y + self.h
+    }
 }
 
 /// Геометрия кокпита для текущего окна.
@@ -409,6 +414,25 @@ impl CockpitGeom {
         }
     }
 
+    /// Клетка индикатора множителя эмуляции слева от радара.
+    ///
+    /// Зеркальна паре `ES` относительно центральной клетки: та же высота и
+    /// ширина в два глифа, но в левом нижнем углу. Благодаря этому `x2` и
+    /// `ES` читаются как симметричная пара над нижней частью радара.
+    pub fn speed_cell(&self) -> Rect {
+        let center = self.center_cell();
+        let pair = self.status_pair();
+        if center.is_empty() || pair.is_empty() {
+            return pair;
+        }
+        Rect {
+            x: center.x + center.w - (pair.x - center.x) - pair.w,
+            y: pair.y,
+            w: pair.w,
+            h: pair.h,
+        }
+    }
+
     /// Зазор вокруг радара.
     fn radar_gap(&self) -> i32 {
         (self.side_row(0).h / 3).max(LINE)
@@ -426,6 +450,26 @@ impl CockpitGeom {
             inner.x + inner.w - lw - LINE,
         ]
     }
+}
+
+/// Попадает ли точка (в пикселях HD-слоя) в овал радара.
+///
+/// Клик принимается по видимому контуру, а не по всей прямоугольной клетке:
+/// иначе переключение вида срабатывало бы в пустых углах между овалом и
+/// кружками компаса. Небольшой запас по краю нужен, чтобы цель попадалась
+/// и при неточном наведении мыши.
+pub fn oval_radar_hit(g: &CockpitGeom, x: i32, y: i32) -> bool {
+    let cell = g.oval_radar_cell();
+    if !cell.contains(x, y) {
+        return false;
+    }
+    let cx = cell.x + cell.w / 2;
+    let cy = cell.y + cell.h / 2;
+    let rx = ((cell.w - 1) / 2 + 2).max(1) as f32;
+    let ry = ((cell.h - 1) / 2 + 2).max(1) as f32;
+    let dx = (x - cx) as f32 / rx;
+    let dy = (y - cy) as f32 / ry;
+    dx * dx + dy * dy <= 1.0
 }
 
 /// Вписать прямоугольник с соотношением сторон `num/den` в клетку по центру.

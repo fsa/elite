@@ -312,3 +312,41 @@ fn draw_in_flight_has_no_selection_or_trade_hints() {
     let flying_labels = flying_px.iter().filter(|&&p| p == label).count();
     assert!(docked_labels > flying_labels);
 }
+
+/// Нижняя строка не должна выходить за правую рамку на крупном масштабе:
+/// ширина шрифта считается только от высоты окна, поэтому длинная подсказка
+/// торговли может оказаться шире внутренней области экрана.
+#[test]
+fn market_status_stays_inside_frame_at_large_scale() {
+    let mut mem = vec![0u8; 0x10000];
+    set_cash(&mut mem, 1000);
+    let mut market = Market::new();
+    market.enable(&mem, KLADOV_MARKET, true, "Lave");
+
+    let font = [0xFFu8; crate::font::ZX_FONT_LEN];
+    let (w, h) = (1280usize, 960usize);
+    let mut hd = Frame::new(w, h);
+    market.draw(&mut hd, &font);
+
+    let l = draw::layout(w, h);
+    // Правая линия рамки заканчивается на `w - margin`, всё правее — за экраном.
+    let outside_frame = w as i32 - l.margin;
+    let table_bottom = h as i32 - l.margin - l.frame;
+    let status_y = table_bottom - 3 * l.line;
+    let px = hd.pixels();
+    let is_text = |p| p == 0xFFD7_D7D7 || p == 0xFF00_D7D7;
+
+    assert!(
+        (0..w)
+            .any(|x| is_text(px[status_y as usize * w + x])),
+        "нижняя строка не нарисована"
+    );
+    for y in status_y..status_y + l.line {
+        for x in outside_frame..w as i32 {
+            assert!(
+                !is_text(px[y as usize * w + x as usize]),
+                "нижняя строка вышла за рамку в ({x}, {y})"
+            );
+        }
+    }
+}

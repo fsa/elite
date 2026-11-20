@@ -66,6 +66,29 @@ impl App<'_> {
         self.flight.tick(frames as f32 / 50.0);
     }
 
+    /// Индикатор ускорения эмуляции (`F12`) слева от радара.
+    ///
+    /// Множитель рисуется тем же шрифтом ПЗУ, что подписи панели, в клетке,
+    /// зеркальной паре `ES` (`x2` слева, `ES` справа). Обычно множитель равен
+    /// единице и ничего не рисуется, чтобы не засорять кадр.
+    pub(super) fn draw_speed_indicator(&mut self) {
+        if !self.accelerated {
+            return;
+        }
+        let (w, h) = (self.machine.hd.width as u32, self.machine.hd.height as u32);
+        let g = cockpit::panel_geometry(w, h);
+        let cell = g.speed_cell();
+        if cell.is_empty() {
+            return;
+        }
+        let scale = (cell.h / 8).min(cell.w / 16).max(1) as usize;
+        let x = cell.x + (cell.w - 16 * scale as i32) / 2;
+        let y = cell.y + (cell.h - 8 * scale as i32) / 2;
+        self.machine
+            .hd
+            .draw_text(ZX_FONT, x, y, "x2", cockpit::FRAME_COLOR, scale);
+    }
+
     /// Полукруг индикатора опасности в правом верхнем углу вспомогательного
     /// экрана (не вид из кабины). В оригинале он есть только в полёте: на
     /// станции индикатор погашен.
@@ -77,6 +100,48 @@ impl App<'_> {
         let (w, h) = (self.machine.hd.width as u32, self.machine.hd.height as u32);
         let margin = cockpit::panel_geometry(w, h).margin;
         cockpit::draw_danger_half(&mut self.machine.hd, mem, margin, cockpit::LINE);
+    }
+
+    /// Шаг плавного перемещения курсора карты по удерживаемым клавишам
+    /// направления с постепенным наращиванием скорости.
+    pub(super) fn advance_hdmap_cursor(&mut self) {
+        if self.hdmap.active
+            && !self.menu
+            && !self.docked.is_active()
+            && !self.hdmap.is_searching()
+        {
+            let left = self.kempston[1] || self.matrix[7][3];
+            let right = self.kempston[0] || self.matrix[7][2];
+            let up = self.kempston[3] || self.matrix[1][1];
+            let down = self.kempston[2] || self.matrix[0][2];
+            let dx_dir = (if right { 1.0 } else { 0.0 }) - (if left { 1.0 } else { 0.0 });
+            let dy_dir = (if down { 1.0 } else { 0.0 }) - (if up { 1.0 } else { 0.0 });
+            if dx_dir != 0.0 || dy_dir != 0.0 {
+                if self.hdmap_move_speed <= 0.0 {
+                    self.hdmap_move_speed = 0.25;
+                } else {
+                    self.hdmap_move_speed = (self.hdmap_move_speed + 0.06).min(2.0);
+                }
+                self.hdmap_move_rem_x += dx_dir * self.hdmap_move_speed;
+                self.hdmap_move_rem_y += dy_dir * self.hdmap_move_speed;
+                let dx = self.hdmap_move_rem_x.trunc() as i32;
+                let dy = self.hdmap_move_rem_y.trunc() as i32;
+                if dx != 0 || dy != 0 {
+                    self.hdmap_move_rem_x -= dx as f32;
+                    self.hdmap_move_rem_y -= dy as f32;
+                    self.hdmap.move_by(dx, dy);
+                    self.sync_hdmap_target();
+                }
+            } else {
+                self.hdmap_move_speed = 0.0;
+                self.hdmap_move_rem_x = 0.0;
+                self.hdmap_move_rem_y = 0.0;
+            }
+        } else {
+            self.hdmap_move_speed = 0.0;
+            self.hdmap_move_rem_x = 0.0;
+            self.hdmap_move_rem_y = 0.0;
+        }
     }
 
     /// Один кадр: ввод, эмуляция, звук, отрисовка и показ.
@@ -158,6 +223,10 @@ impl App<'_> {
                             // Карту открыли из эмулятора: `L` должен дойти до Z80,
                             // пока нативный режим ещё не заморозил его.
                             self.forward_input();
+                        } else if self.pending_key.is_some() {
+                            // `G`/`H` под картой запускают отсчёт в Z80, не
+                            // открывая остальной ввод и не закрывая карту.
+                            self.forward_pending_key();
                         } else {
                             self.machine.release_all_keys();
                             self.machine.release_joystick();
@@ -165,6 +234,7 @@ impl App<'_> {
                         let frames = self.emulation_frames();
                         self.machine.run_frames(frames);
                         emulator_ran = true;
+                        self.switch_to_flight_on_jump();
                         self.open_pending_status();
                         self.open_pending_sysinfo();
                         self.open_pending_market();
@@ -198,6 +268,7 @@ impl App<'_> {
                         let frames = self.emulation_frames();
                         self.machine.run_frames(frames);
                         emulator_ran = true;
+                        self.switch_to_flight_on_jump();
                         self.open_pending_status();
                         self.open_pending_sysinfo();
                         self.open_pending_market();
@@ -249,6 +320,7 @@ impl App<'_> {
                         self.apply_input();
                         self.machine.run_frames(self.emulation_frames());
                         emulator_ran = true;
+                        self.switch_to_flight_on_jump();
                         self.open_pending_status();
                         self.open_pending_sysinfo();
                         self.open_pending_market();
@@ -269,6 +341,7 @@ impl App<'_> {
         // передать управление нативному экрану станции.
         if emulator_ran {
             self.finish_pending_station_native();
+            self.track_jump_countdown();
         }
 
         // Хуки старта одноразовые: как только Z80 вошёл в игру, повторное
@@ -286,45 +359,7 @@ impl App<'_> {
         self.maybe_enter_native_station();
         self.sync_state();
 
-        // Плавное перемещение курсора карты по удерживаемым клавишам направления
-        // с постепенным наращиванием скорости.
-        if self.hdmap.active
-            && !self.menu
-            && !self.docked.is_active()
-            && !self.hdmap.is_searching()
-        {
-            let left = self.kempston[1] || self.matrix[7][3];
-            let right = self.kempston[0] || self.matrix[7][2];
-            let up = self.kempston[3] || self.matrix[1][1];
-            let down = self.kempston[2] || self.matrix[0][2];
-            let dx_dir = (if right { 1.0 } else { 0.0 }) - (if left { 1.0 } else { 0.0 });
-            let dy_dir = (if down { 1.0 } else { 0.0 }) - (if up { 1.0 } else { 0.0 });
-            if dx_dir != 0.0 || dy_dir != 0.0 {
-                if self.hdmap_move_speed <= 0.0 {
-                    self.hdmap_move_speed = 0.25;
-                } else {
-                    self.hdmap_move_speed = (self.hdmap_move_speed + 0.06).min(2.0);
-                }
-                self.hdmap_move_rem_x += dx_dir * self.hdmap_move_speed;
-                self.hdmap_move_rem_y += dy_dir * self.hdmap_move_speed;
-                let dx = self.hdmap_move_rem_x.trunc() as i32;
-                let dy = self.hdmap_move_rem_y.trunc() as i32;
-                if dx != 0 || dy != 0 {
-                    self.hdmap_move_rem_x -= dx as f32;
-                    self.hdmap_move_rem_y -= dy as f32;
-                    self.hdmap.move_by(dx, dy);
-                    self.sync_hdmap_target();
-                }
-            } else {
-                self.hdmap_move_speed = 0.0;
-                self.hdmap_move_rem_x = 0.0;
-                self.hdmap_move_rem_y = 0.0;
-            }
-        } else {
-            self.hdmap_move_speed = 0.0;
-            self.hdmap_move_rem_x = 0.0;
-            self.hdmap_move_rem_y = 0.0;
-        }
+        self.advance_hdmap_cursor();
 
         // Отрисовка зависит от текущего экрана. Заглушка `DOCKED` временно
         // перекрывает нативный экран, который был открыт до неё.
@@ -361,12 +396,13 @@ impl App<'_> {
                         line: self.flight.cockpit_color(),
                         bar: self.flight.cockpit_bar_color(),
                     };
-                    self.cockpit.draw_with_geom(
+                    self.cockpit.draw_with_geom_radar(
                         &mut self.machine.hd,
                         &g,
                         ZX_FONT,
                         style,
                         &values,
+                        self.radar_view,
                     );
                     if self.state.menu {
                         draw_pause_menu(&mut self.machine.hd, ZX_FONT, self.menu_sel, false);
@@ -433,6 +469,7 @@ impl App<'_> {
                 }
             }
         }
+        self.draw_speed_indicator();
         // Временная страница клавиш паузы перекрывает нативный экран станции.
         if !self.docked.is_active() && self.pause_stub {
             crate::ui::message::draw(&mut self.machine.hd, ZX_FONT, "AVAILABLE LATER");

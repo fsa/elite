@@ -102,6 +102,9 @@ struct App<'a> {
     hdmap_move_rem_y: f32,
     /// Нативный экран закупки оборудования (F5) — заменяет экран игры.
     shop: equip::Shop,
+    /// Вид радара в нативном кокпите: классический сканер или локатор Кладова.
+    /// Переключается кликом по овалу радара.
+    radar_view: cockpit::RadarView,
     /// Нативный экран статуса пилота (F9) — альтернатива экрану `L`.
     status: status::Status,
     /// После кадра эмулятора открыть нативный экран статуса: сначала игра
@@ -167,6 +170,10 @@ struct App<'a> {
     /// сначала оригинал должен перейти в режим `4` (equip), и только потом
     /// нативный экран встаёт на паузу.
     pending_shop: bool,
+    /// Отсчёт гиперпрыжка был замечен в памяти Z80 в текущем переходе.
+    /// Позволяет отличить прыжок от стыковки после того, как счётчик обнулился:
+    /// в этот момент `JumpDocking` у обоих переходов одинаков.
+    saw_jump_countdown: bool,
     /// Нативный вид, который нужно включить, как только Z80 окажется в
     /// полёте или начнёт переход. Нужен для `F1` на станции и во время
     /// прыжка/стыковки.
@@ -188,6 +195,11 @@ struct App<'a> {
     /// Позиция указателя в координатах окна — для кнопок отладочной полосы.
     cursor_x: f64,
     cursor_y: f64,
+    /// Видимость системного курсора. В полноэкранном режиме он прячется через
+    /// несколько секунд без движения мыши и возвращается при первом движении.
+    cursor_visible: bool,
+    /// Момент последнего события мыши — для тайм-аута курсора.
+    last_mouse_activity: Instant,
     /// Позиция мыши в координатах экрана игры (0..255, 0..191)
     mouse_x: i32,
     mouse_y: i32,
@@ -220,6 +232,7 @@ impl<'a> App<'a> {
             hdmap_move_rem_x: 0.0,
             hdmap_move_rem_y: 0.0,
             shop: equip::Shop::new(),
+            radar_view: cockpit::RadarView::Classic,
             status: status::Status::new(),
             pending_status: false,
             start_requested: false,
@@ -245,6 +258,7 @@ impl<'a> App<'a> {
             matrix: [[false; 5]; 8],
             pending_key: None,
             pending_shop: false,
+            saw_jump_countdown: false,
             pending_flight: None,
             pending_launch: false,
             kempston: [false; 5],
@@ -254,6 +268,8 @@ impl<'a> App<'a> {
             debug_view: DebugView::default(),
             cursor_x: 0.0,
             cursor_y: 0.0,
+            cursor_visible: true,
+            last_mouse_activity: Instant::now(),
             mouse_x: -1,
             mouse_y: -1,
             mouse_left: false,

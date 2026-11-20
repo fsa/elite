@@ -8,7 +8,10 @@
 //! `+Z` вперёд). Сканер оригинала отображает `X` по горизонтали, `Z` по
 //! вертикали, а `Y` — длиной вертикального штриха.
 //!
-//! Альтернативный радар Кладова временно отключён: его нужно переделать.
+//! Альтернативный локатор Кладова («новый локатор» из Elite 2/3) рисуется в
+//! той же клетке, но вместо классической разметки показывает кольца
+//! дальности и квадратные метки контактов. Он дополняет старый сканер и
+//! переключается кликом по овалу.
 
 use crate::display::Frame;
 
@@ -16,9 +19,19 @@ use super::geometry::{CockpitGeom, Rect};
 use super::palette::CockpitStyle;
 use super::values::{CockpitValues, RadarContact};
 
+mod kladov;
 mod oval;
 #[cfg(test)]
 mod tests;
+
+/// Вид радара в нативном кокпите.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum RadarView {
+    /// Классический овальный сканер оригинальной Elite.
+    Classic,
+    /// Новый локатор Кладова.
+    Kladov,
+}
 
 /// Дальность радара в единицах координат игры.
 ///
@@ -34,9 +47,19 @@ pub(super) struct ContactPlot {
     pub height: i32,
 }
 
-/// Нарисовать радар в свободной области центральной клетки.
-pub(super) fn draw(f: &mut Frame, g: &CockpitGeom, style: CockpitStyle, values: &CockpitValues) {
-    oval::draw(f, g.oval_radar_cell(), style, values);
+/// Нарисовать выбранный вид радара.
+pub(super) fn draw_view(
+    f: &mut Frame,
+    g: &CockpitGeom,
+    style: CockpitStyle,
+    values: &CockpitValues,
+    view: RadarView,
+) {
+    let cell = g.oval_radar_cell();
+    match view {
+        RadarView::Classic => oval::draw(f, cell, style, values),
+        RadarView::Kladov => kladov::draw(f, cell, style, values),
+    }
 }
 
 /// Перевести контакт в пиксели внутри эллипса радара.

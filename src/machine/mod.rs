@@ -86,6 +86,10 @@ pub struct Spectrum {
     beeper_edges: Vec<(u64, bool)>,
     /// Уровень бипера на начало текущего кадра.
     beeper_frame_start: bool,
+    /// Сглаженный уровень бипера между вызовами [`Spectrum::render_audio`].
+    /// Резкий переход 1/0 даёт щелчок в динамике, поэтому Front всё же
+    /// доходит до нужного уровня, но за несколько сэмплов.
+    beeper_filter: f64,
     /// Такт CPU на начало текущего кадра (или серии кадров при ускорении).
     audio_cycle_base: u64,
     /// Длительность серии кадров, для которой собран звук: `CYCLES_PER_FRAME`
@@ -175,6 +179,7 @@ impl Spectrum {
             audio_rate: crate::audio::SAMPLE_RATE,
             beeper_edges: Vec::new(),
             beeper_frame_start: false,
+            beeper_filter: 0.0,
             audio_cycle_base: 0,
             audio_span_cycles: CYCLES_PER_FRAME,
             cycle_clock: 0,

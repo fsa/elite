@@ -259,7 +259,21 @@ impl App<'_> {
                     self.pending_launch = false;
                 } else {
                     self.show_flight(flight::ViewDir::Forward);
-                    self.flight.start_transition(false, &self.machine.mem);
+                    // После отсчёта `JumpDocking` у прыжка и стыковки
+                    // одинаков, поэтому вид берём из замеченного отсчёта.
+                    let countdown = self
+                        .machine
+                        .mem
+                        .get(flight::Z80_JUMP_COUNTDOWN)
+                        .copied()
+                        .unwrap_or(0);
+                    let intergalactic = self.machine.mem[flight::Z80_JUMP_DOCKING] == 2;
+                    let kind = if self.saw_jump_countdown || countdown > 0 || intergalactic {
+                        flight::TransitionKind::Hyperspace
+                    } else {
+                        flight::TransitionKind::Docking
+                    };
+                    self.flight.start_transition_kind(kind, countdown);
                 }
             } else if code == KeyCode::Digit1 {
                 // Показать анимацию, которую рисует эмулятор. Состояние
@@ -305,6 +319,24 @@ impl App<'_> {
                 _ => {}
             }
             // Клавишу не держим в матрице, чтобы эмулятор не получал повторов.
+            if let Some((row, bit)) = matrix_pos(code) {
+                self.matrix[row][bit as usize] = false;
+            }
+            return;
+        }
+        // G/H в полёте под модальным нативным экраном (картой): отсчёт
+        // гиперпрыжка ведёт Z80, поэтому клавиша должна дойти до него, но
+        // закрывать экран не нужно — к тоннелю приложение само откроет F1.
+        if matches!(code, KeyCode::KeyG | KeyCode::KeyH)
+            && !repeat
+            && !self.machine.intro_seen
+            && !self.menu
+            && !flight::z80_is_docked(&self.machine.mem)
+            && !flight::z80_in_transition(&self.machine.mem)
+            && self.hdmap.active
+            && !self.hdmap.is_searching()
+        {
+            self.pending_key = matrix_pos(code);
             if let Some((row, bit)) = matrix_pos(code) {
                 self.matrix[row][bit as usize] = false;
             }
@@ -826,6 +858,9 @@ impl App<'_> {
         } else {
             window.set_fullscreen(Some(Fullscreen::Borderless(None)));
         }
+        // Возврат из полного экрана сразу показывает курсор, а вход отсчитывает
+        // тайм-аут заново — успеем подвигать указатель до скрытия.
+        self.note_mouse_activity();
     }
 
     /// Перенести состояние клавиатуры и джойстика в эмулятор.
@@ -857,6 +892,17 @@ impl App<'_> {
             }
         }
         self.forward_input();
+    }
+
+    /// Передать в эмулятор только одну отложенную клавишу. Используется
+    /// модальными нативными экранами, которые иначе не пускают ввод в игру:
+    /// так `G`/`H` запускает отсчёт гиперпрыжка под картой.
+    pub(super) fn forward_pending_key(&mut self) {
+        self.machine.release_all_keys();
+        self.machine.release_joystick();
+        if let Some((row, bit)) = self.pending_key.take() {
+            self.machine.set_key(row, bit, true);
+        }
     }
 
     /// Передать матрицу клавиш и джойстик в эмулятор без проверки нативных

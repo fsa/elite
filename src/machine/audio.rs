@@ -9,6 +9,9 @@ impl Spectrum {
     /// display frame so fast-forward keeps audio in sync without buffering.
     pub fn render_audio(&mut self, out: &mut Vec<i16>) {
         const AMP: i16 = 4000;
+        // Постоянная времени ~2 сэмпла: фронт 1/0 всё ещё слышен как переход,
+        // но сглаживается за несколько сэмплов и не даёт резкого щелчка.
+        const ALPHA: f64 = 0.6;
         let samples = (self.audio_rate as usize) / 50;
         out.clear();
         out.reserve(samples);
@@ -24,7 +27,9 @@ impl Spectrum {
                 level = self.beeper_edges[idx].1;
                 idx += 1;
             }
-            out.push(if level { AMP } else { -AMP });
+            let target = if level { AMP as f64 } else { -(AMP as f64) };
+            self.beeper_filter += (target - self.beeper_filter) * ALPHA;
+            out.push(self.beeper_filter.round() as i16);
         }
     }
 }

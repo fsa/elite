@@ -414,6 +414,44 @@ impl App<'_> {
         self.pending_key = None;
     }
 
+    /// Запомнить, что в текущем переходе Z80 вёл отсчёт гиперпрыжка.
+    ///
+    /// После обнуления `JumpCountdown` память уже не позволяет отличить прыжок
+    /// от стыковки, поэтому признак снимается только по окончании перехода.
+    pub(super) fn track_jump_countdown(&mut self) {
+        let mem = &self.machine.mem;
+        if mem.get(flight::Z80_JUMP_COUNTDOWN).copied().unwrap_or(0) > 0 {
+            self.saw_jump_countdown = true;
+        } else if !flight::z80_in_transition(mem) {
+            self.saw_jump_countdown = false;
+        }
+    }
+
+    /// В момент начала тоннеля гиперпрыжка открыть нативный вид F1.
+    ///
+    /// Отсчёт может идти под любым нативным экраном (или под эмуляторным
+    /// кадром): экран не закрывается до нуля, а сам прыжок уже показывается
+    /// нативной анимацией, как по `F1`.
+    pub(super) fn switch_to_flight_on_jump(&mut self) {
+        if !self.saw_jump_countdown || self.flight.active {
+            return;
+        }
+        let in_transition = flight::z80_in_transition(&self.machine.mem);
+        let countdown = self
+            .machine
+            .mem
+            .get(flight::Z80_JUMP_COUNTDOWN)
+            .copied()
+            .unwrap_or(0);
+        if !in_transition || countdown != 0 {
+            return;
+        }
+        self.show_flight(flight::ViewDir::Forward);
+        self.flight
+            .start_transition_kind(flight::TransitionKind::Hyperspace, countdown);
+        self.saw_jump_countdown = false;
+    }
+
     /// Следить за экранными режимами Z80 под нативными экранами без
     /// собственного интерактива (F7/F8/F9). Когда оригинал уходит с экрана,
     /// нативная надстройка закрывается; пока режим тот же — остаётся.
@@ -421,6 +459,19 @@ impl App<'_> {
         // Пока эмулятор обрабатывает `L`, его экранная переменная ещё может
         // смениться; закрывать только что открытый нативный экран нельзя.
         if self.pending_station_native.is_some() {
+            return;
+        }
+        // Во время отсчёта гиперпрыжка нативный экран остаётся на месте:
+        // переход к тоннелю сам откроет вид F1 (см. `switch_to_flight_on_jump`).
+        if flight::z80_in_transition(&self.machine.mem)
+            && self
+                .machine
+                .mem
+                .get(flight::Z80_JUMP_COUNTDOWN)
+                .copied()
+                .unwrap_or(0)
+                > 0
+        {
             return;
         }
         // В нативном режиме станции эмулятор стоит на месте, поэтому его

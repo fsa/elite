@@ -73,9 +73,6 @@ impl TransitionState {
     /// не отличить (оба взводят `JumpDocking = 1`), а вид должен знать, что
     /// показывать — уход станции или тоннель.
     pub(super) fn start(&mut self, launch: bool, mem: &[u8]) {
-        if self.current.is_some() {
-            return;
-        }
         let countdown = mem.get(Z80_JUMP_COUNTDOWN).copied().unwrap_or(0);
         let intergalactic = mem.get(Z80_JUMP_DOCKING).copied() == Some(2);
         let kind = if launch {
@@ -85,6 +82,16 @@ impl TransitionState {
         } else {
             TransitionKind::Docking
         };
+        self.start_kind(kind, countdown);
+    }
+
+    /// Начать анимацию с явно известным видом. Нужно, когда приложение
+    /// наблюдало отсчёт гиперпрыжка: после его окончания память уже не
+    /// отличает прыжок от стыковки.
+    pub(super) fn start_kind(&mut self, kind: TransitionKind, countdown: u8) {
+        if self.current.is_some() {
+            return;
+        }
         self.current = Some(Transition::new(kind, countdown));
     }
 

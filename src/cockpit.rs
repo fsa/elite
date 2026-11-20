@@ -51,16 +51,17 @@
 //! - [`indicators`] — шкалы, отклонения и запас ракет;
 //! - [`danger`] — индикатор опасности;
 //! - [`compass`] — кольцо и указатель компаса;
-//! - [`radar`] — классический овальный сканер (радар Кладова временно отключён);
+//! - [`radar`] — классический овальный сканер и альтернативный локатор Кладова;
 //! - [`status`] — символы `E` (ECM) и `S` (близость станции).
 
 use crate::display::Frame;
 
-pub use self::geometry::{CockpitGeom, LINE, Rect, panel_geometry};
+pub use self::geometry::{CockpitGeom, LINE, Rect, oval_radar_hit, panel_geometry};
 pub use self::layout::KLADOV_COCKPIT;
 pub use self::palette::{
     BACKGROUND, BAR_MAGENTA, BAR_RED, CockpitStyle, DANGER_COLOR, FRAME_COLOR,
 };
+pub use self::radar::RadarView;
 pub use self::values::{CockpitValues, Compass, RadarContacts};
 
 // Элементы ниже нужны только тестам модуля: боевой код обращается к
@@ -136,6 +137,19 @@ impl Cockpit {
         style: CockpitStyle,
         values: &CockpitValues,
     ) {
+        self.draw_with_geom_radar(f, g, font, style, values, RadarView::Classic);
+    }
+
+    /// То же, но с явным выбором вида радара.
+    pub fn draw_with_geom_radar(
+        &self,
+        f: &mut Frame,
+        g: &CockpitGeom,
+        font: &[u8],
+        style: CockpitStyle,
+        values: &CockpitValues,
+        radar_view: RadarView,
+    ) {
         // Нижняя часть непрозрачна и закрывает всё, что под ней.
         if g.panel_h > 0 && g.width > 0 {
             f.fill_rect(
@@ -154,7 +168,7 @@ impl Cockpit {
         indicators::draw(f, g, style, values);
         danger::draw(f, g, values);
         compass::draw(f, g, style, values);
-        radar::draw(f, g, style, values);
+        radar::draw_view(f, g, style, values, radar_view);
         status::draw(f, g, style, values);
     }
 }

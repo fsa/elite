@@ -2,10 +2,10 @@
 
 use crate::display::Frame;
 
-use super::super::geometry::{Rect, panel_geometry};
+use super::super::geometry::{Rect, oval_radar_hit, panel_geometry};
 use super::super::palette::{CockpitStyle, FRAME_COLOR};
 use super::super::values::{CockpitValues, RadarContact, RadarContactKind, RadarContacts};
-use super::{draw, oval, plot_contact, RADAR_RANGE};
+use super::{RadarView, draw_view, oval, plot_contact, RADAR_RANGE};
 
 const W: usize = 1280;
 const H: usize = 960;
@@ -35,11 +35,15 @@ fn values(contacts: &[RadarContact]) -> CockpitValues {
 }
 
 /// Нарисовать радар и вернуть кадр с его клеткой.
-fn draw_radar(contacts: &[RadarContact]) -> (Frame, Rect) {
+fn draw_radar_view(contacts: &[RadarContact], view: RadarView) -> (Frame, Rect) {
     let mut f = Frame::new(W, H);
     let g = panel_geometry(W as u32, H as u32);
-    draw(&mut f, &g, CockpitStyle::COBRA_MK3, &values(contacts));
+    draw_view(&mut f, &g, CockpitStyle::COBRA_MK3, &values(contacts), view);
     (f, g.oval_radar_cell())
+}
+
+fn draw_radar(contacts: &[RadarContact]) -> (Frame, Rect) {
+    draw_radar_view(contacts, RadarView::Classic)
 }
 
 fn px(f: &Frame, x: i32, y: i32) -> u32 {
@@ -405,6 +409,62 @@ fn tiny_cells_are_skipped() {
     ] {
         oval::draw(&mut f, cell, CockpitStyle::COBRA_MK3, &v);
     }
+}
+
+/// Альтернативный локатор рисуется в той же клетке, но своей разметкой.
+#[test]
+fn kladov_radar_differs_from_classic_and_stays_in_cell() {
+    let (classic, cell) = draw_radar(&[]);
+    let (kladov, kladov_cell) = draw_radar_view(&[], RadarView::Kladov);
+    assert_eq!(cell, kladov_cell);
+    assert!(lit_in(&kladov, cell) > 0, "локатор ничего не нарисовал");
+    assert_ne!(classic.pixels(), kladov.pixels(), "виды радара не различаются");
+    assert_only_in(&kladov, cell);
+}
+
+/// Кольца дальности видны между внешним овалом и крестом.
+#[test]
+fn kladov_radar_has_range_rings() {
+    let (f, cell) = draw_radar_view(&[], RadarView::Kladov);
+    let (cx, cy, rx, ry) = ellipse_params(cell);
+
+    // Точки на 45° внутренних колец (1/3 и 2/3 радиуса). Проверяем с запасом,
+    // потому что кольца рисуются по точкам, а не сплошной кривой.
+    let inner_x = cx + (rx as f32 / 3.0 * 0.866).round() as i32;
+    let inner_y = cy + ry / 6;
+    let outer_x = cx + (rx as f32 * 2.0 / 3.0 * 0.866).round() as i32;
+    let outer_y = cy + ry / 3;
+    for (name, x, y) in [("внутреннее кольцо", inner_x, inner_y), ("внешнее кольцо", outer_x, outer_y)] {
+        let lit = (x - 3..=x + 3).any(|px_| px(&f, px_, y) == ink());
+        assert!(lit, "нет {name} в точке ({x},{y})");
+    }
+}
+
+/// Контакты меняют и альтернативный локатор.
+#[test]
+fn kladov_radar_draws_contacts() {
+    let c = contact(RADAR_RANGE as i32 / 2, 0, 0);
+    let (empty, cell) = draw_radar_view(&[], RadarView::Kladov);
+    let (full, _) = draw_radar_view(&[c], RadarView::Kladov);
+    assert!(
+        lit_in(&full, cell) > lit_in(&empty, cell),
+        "локатор не показал контакт"
+    );
+}
+
+/// Клик переключает вид только по видимому овалу, не по углам клетки.
+#[test]
+fn radar_hit_covers_oval_not_bounding_box() {
+    let g = panel_geometry(W as u32, H as u32);
+    let cell = g.oval_radar_cell();
+    let (cx, cy, rx, ry) = ellipse_params(cell);
+
+    assert!(oval_radar_hit(&g, cx, cy), "центр овала не реагирует");
+    assert!(oval_radar_hit(&g, cx + rx - 1, cy), "правый край не реагирует");
+    assert!(oval_radar_hit(&g, cx, cy + ry - 1), "нижний край не реагирует");
+    assert!(!oval_radar_hit(&g, cell.x, cell.y), "клик в углу клетки сработал");
+    assert!(!oval_radar_hit(&g, cell.x - 1, cy), "клик вне клетки сработал");
+    assert!(!oval_radar_hit(&g, cx + rx + 3, cy), "клик за овалом сработал");
 }
 
 

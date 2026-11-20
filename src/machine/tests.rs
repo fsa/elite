@@ -97,6 +97,13 @@ fn beeper_edges_become_audio() {
     assert_eq!(out.len(), m.audio_rate as usize / 50);
     assert!(out.iter().any(|&s| s > 0), "no beeper-high samples");
     assert!(out.iter().any(|&s| s < 0), "no beeper-low samples");
+    // Фронт бипера не должен давать скачок на полную амплитуду (щелчок).
+    let max_step = out
+        .windows(2)
+        .map(|w| (w[1] as i32 - w[0] as i32).abs())
+        .max()
+        .unwrap_or(0);
+    assert!(max_step <= 5000, "слишком резкий фронт: {max_step}");
 }
 
 #[test]

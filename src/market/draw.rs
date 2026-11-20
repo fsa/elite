@@ -149,18 +149,30 @@ pub(super) fn draw(hd: &mut Frame, font: &[u8; crate::font::ZX_FONT_LEN], market
 
     // Одна нижняя строка: деньги и, на станции, подсказки управления.
     // Ниже её больше ничего не выводится. Между параметрами — два пробела,
-    // независимо от длины суммы.
-    let status_y = table_bottom - 3 * l.line;
-    let mut x = x_name;
-    for (i, field) in status_fields(info.cash_tenths, market.docked)
+    // независимо от длины суммы. Масштаб шрифта считается от высоты окна,
+    // поэтому длинная подсказка может не поместиться в рамку: в этом случае
+    // уменьшаем только нижнюю строку, сохраняя её нижнюю границу.
+    let fields = status_fields(info.cash_tenths, market.docked);
+    let chars: i32 = fields
         .iter()
-        .enumerate()
-    {
+        .map(|f| (f.name.chars().count() + f.value.chars().count() + 2) as i32)
+        .sum::<i32>()
+        + 2 * fields.len().saturating_sub(1) as i32;
+    let status_ts = ts
+        .min((inner_w / (chars * 8).max(1)).max(1) as usize)
+        .max(1);
+    let status_cell = 8 * status_ts as i32;
+    let status_h = 8 * status_ts as i32;
+    let status_y = table_bottom - 2 * l.line - status_h;
+    hd.set_clip(inner_x, status_y, inner_w.max(0) as usize, status_h as usize);
+    let mut x = inner_x + status_cell;
+    for (i, field) in fields.iter().enumerate() {
         if i > 0 {
-            x += 2 * ch;
+            x += 2 * status_cell;
         }
-        x = draw_field(hd, font, x, status_y, field, ts);
+        x = draw_field(hd, font, x, status_y, field, status_ts);
     }
+    hd.clear_clip();
 
     draw_screen_frame(hd, &l);
 }

@@ -150,6 +150,30 @@ use crate::world::{current_planet_color, save_layout_kladov, scene_markers};
         }
     }
 
+    /// Клик по овалу радара переключает вид локатора только в полёте.
+    #[test]
+    fn radar_click_toggles_view_only_in_flight() {
+        let opts = test_options();
+        let mut app = App::new(boot(), &opts);
+        let (w, h) = (1280u32, 960u32);
+        let cell = cockpit::panel_geometry(w, h).oval_radar_cell();
+        let x = cell.x + cell.w / 2;
+        let y = cell.y + cell.h / 2;
+
+        assert_eq!(app.radar_view, cockpit::RadarView::Classic);
+        app.state.screen = Screen::Flight;
+        assert!(app.toggle_radar_at(x, y, w, h), "клик по овалу не сработал");
+        assert_eq!(app.radar_view, cockpit::RadarView::Kladov);
+        assert!(app.toggle_radar_at(x, y, w, h), "повторный клик не сработал");
+        assert_eq!(app.radar_view, cockpit::RadarView::Classic);
+        assert!(!app.toggle_radar_at(0, 0, w, h), "клик вне овала сработал");
+        assert_eq!(app.radar_view, cockpit::RadarView::Classic);
+
+        app.state.screen = Screen::Intro;
+        assert!(!app.toggle_radar_at(x, y, w, h), "клик на заставке сработал");
+        assert_eq!(app.radar_view, cockpit::RadarView::Classic);
+    }
+
     /// В игре показывается полный ZX-кадр: нижние 64 строки (родная растровая
     /// панель оригинала) не обрезаются — нативная панель `src/cockpit.rs` в
     /// игре не рисуется, она осталась только на заставке.
@@ -285,7 +309,11 @@ use crate::world::{current_planet_color, save_layout_kladov, scene_markers};
         assert_eq!(app.machine.mem[live + native::CRD_X_TARGET_OFF], sys_x as u8);
         assert_eq!(app.machine.mem[live + native::CRD_Y_TARGET_OFF], sys_y as u8);
         // Стрелка двигает курсор карты, а не корабль, и обновляет цель.
+        // Движение ускоренное: за один кадр смещения может ещё не быть.
         app.key_event(KeyCode::ArrowRight, true, false);
+        for _ in 0..9 {
+            app.advance_hdmap_cursor();
+        }
         let moved_x = (sys_x + 4).min(255);
         assert_eq!(app.hdmap.cursor().0, moved_x);
         assert_eq!(app.machine.mem[live + native::CRD_X_TARGET_OFF], moved_x as u8);
@@ -2130,4 +2158,147 @@ use crate::world::{current_planet_color, save_layout_kladov, scene_markers};
         assert_eq!(app.machine.frames, frames, "кадры Z80 изменились без прогона");
         assert_eq!(app.machine.cpu.pc, pc, "PC изменился без прогона Z80");
         assert_eq!(app.machine.cpu.sp, sp, "SP изменился без прогона Z80");
+    }
+
+    /// Гиперпрыжок, начатый под нативным экраном: отсчёт идёт в эмуляторе,
+    /// экран не закрывается, а к началу тоннеля включается вид F1 с нативной
+    /// анимацией прыжка.
+    #[test]
+    fn jump_countdown_under_native_screen_switches_to_f1() {
+        let opts = test_options();
+        let mut app = App::new(boot(), &opts);
+        app.machine.intro_seen = false;
+        app.machine.mem[flight::Z80_IND_DANGER] = 1;
+        app.machine.mem[flight::Z80_WHAT_ON_SCREEN] = flight::Z80_SCREEN_MARKET;
+        app.machine.mem[flight::Z80_JUMP_DOCKING] = 0;
+        app.machine.mem[flight::Z80_FLG_JUMP_DOCKING] = 0;
+        app.key_event(KeyCode::F8, true, false);
+        assert!(app.market.native);
+
+        // Z80 начал отсчёт, но его экранная переменная уже ушла в кабину.
+        app.machine.mem[flight::Z80_JUMP_DOCKING] = 1;
+        app.machine.mem[flight::Z80_FLG_JUMP_DOCKING] = 1;
+        app.machine.mem[flight::Z80_JUMP_COUNTDOWN] = 0x15;
+        app.track_jump_countdown();
+        assert!(app.saw_jump_countdown);
+        app.machine.mem[flight::Z80_WHAT_ON_SCREEN] = 0;
+        app.follow_native_screens();
+        app.switch_to_flight_on_jump();
+        assert!(app.market.native, "рынок закрылся во время отсчёта");
+        assert!(!app.flight.active, "вид F1 открылся до конца отсчёта");
+
+        // Счётчик обнулился — пора переключаться на анимацию гиперпрыжка.
+        app.machine.mem[flight::Z80_JUMP_COUNTDOWN] = 0;
+        app.switch_to_flight_on_jump();
+        assert!(app.flight.active, "не открылся нативный вид F1");
+        assert!(!app.market.native, "рынок остался поверх полёта");
+        assert_eq!(
+            app.flight.transition_kind(),
+            Some(flight::TransitionKind::Hyperspace),
+            "переход показан не как гиперпрыжок"
+        );
+    }
+
+    /// `F1` после окончания отсчёта не должен принимать прыжок за вылет/стыковку:
+    /// после обнуления `JumpCountdown` флаги Z80 у них одинаковые.
+    #[test]
+    fn f1_after_jump_countdown_keeps_hyperspace_kind() {
+        let opts = test_options();
+        let mut app = App::new(boot(), &opts);
+        app.machine.intro_seen = false;
+        app.machine.mem[flight::Z80_IND_DANGER] = 1;
+        app.machine.mem[flight::Z80_WHAT_ON_SCREEN] = 0;
+        app.machine.mem[flight::Z80_JUMP_DOCKING] = 1;
+        app.machine.mem[flight::Z80_FLG_JUMP_DOCKING] = 1;
+        app.machine.mem[flight::Z80_JUMP_COUNTDOWN] = 0x15;
+        app.track_jump_countdown();
+
+        app.machine.mem[flight::Z80_JUMP_COUNTDOWN] = 0;
+        app.key_event(KeyCode::F1, true, false);
+        assert!(app.flight.active);
+        assert_eq!(
+            app.flight.transition_kind(),
+            Some(flight::TransitionKind::Hyperspace),
+            "гиперпрыжок перепутан со стыковкой"
+        );
+    }
+
+    /// Под картой `G` доходит до эмулятора одной клавишей, не закрывая карту;
+    /// сам тоннель переключит экран на `F1`.
+    #[test]
+    fn jump_key_under_map_keeps_map_open() {
+        let opts = test_options();
+        let mut app = App::new(boot(), &opts);
+        app.machine.intro_seen = false;
+        app.machine.mem[flight::Z80_IND_DANGER] = 1;
+        app.machine.mem[flight::Z80_WHAT_ON_SCREEN] = 0;
+        app.machine.mem[flight::Z80_JUMP_DOCKING] = 0;
+        app.machine.mem[flight::Z80_FLG_JUMP_DOCKING] = 0;
+        app.key_event(KeyCode::F6, true, false);
+        assert!(app.hdmap.active);
+
+        app.key_event(KeyCode::KeyG, true, false);
+        assert!(app.hdmap.active, "карта закрылась при нажатии G");
+        let (row, bit) = matrix_pos(KeyCode::KeyG).expect("G в матрице");
+        assert_eq!(app.pending_key, Some((row, bit)), "G не дошёл до эмулятора");
+        app.forward_pending_key();
+        assert_eq!(app.machine.keyboard[row] & (1 << bit), 0);
+        assert_eq!(app.pending_key, None);
+    }
+
+    /// Индикатор ускорения эмуляции появляется только при `F12` и занимает
+    /// клетку слева от радара, зеркальную паре `ES` справа.
+    #[test]
+    fn speed_indicator_shows_only_when_accelerated() {
+        let opts = test_options();
+        let mut app = App::new(boot(), &opts);
+        let (w, h) = (1024usize, 768usize);
+        app.machine.hd.resize(w, h);
+        app.machine.hd.clear(display::TRANSPARENT);
+        app.draw_speed_indicator();
+        assert!(
+            app.machine.hd.pixels().iter().all(|&p| p == display::TRANSPARENT),
+            "индикатор нарисован без ускорения"
+        );
+
+        app.accelerated = true;
+        app.draw_speed_indicator();
+        let g = cockpit::panel_geometry(w as u32, h as u32);
+        let speed = g.speed_cell();
+        let e = g.ecm_cell();
+        let s = g.station_cell();
+        let es = cockpit::Rect {
+            x: e.x,
+            y: e.y,
+            w: s.x + s.w - e.x,
+            h: e.h,
+        };
+        assert!(
+            es.x > g.center_cell().x + g.center_cell().w / 2,
+            "подготовка: пара ES не справа от центра"
+        );
+        assert!(
+            speed.x + speed.w <= g.center_cell().x + g.center_cell().w / 2,
+            "индикатор скорости не слева от радара"
+        );
+        assert_eq!(speed.y, es.y, "индикатор скорости не симметричен ES по высоте");
+        assert_eq!(speed.h, es.h, "размер индикатора скорости отличается от ES");
+        let lit_in = |r: cockpit::Rect| {
+            app.machine.hd.pixels().iter().enumerate().any(|(i, &p)| {
+                let (x, y) = (i % w, i / w);
+                p != display::TRANSPARENT
+                    && x >= r.x.max(0) as usize
+                    && x < (r.x + r.w).max(0) as usize
+                    && y >= r.y.max(0) as usize
+                    && y < (r.y + r.h).max(0) as usize
+            })
+        };
+        assert!(lit_in(speed), "индикатор x2 не нарисован в своей клетке");
+        let top = cockpit::Rect {
+            x: 0,
+            y: 0,
+            w: w as i32,
+            h: (g.panel_y - g.margin).max(0),
+        };
+        assert!(!lit_in(top), "индикатор ушёл в верхнюю часть экрана");
     }

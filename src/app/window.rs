@@ -2,7 +2,7 @@
 
 use std::process::exit;
 use std::rc::Rc;
-use std::time::Instant;
+use std::time::{Duration, Instant};
 
 use softbuffer::{Context, Surface};
 use winit::application::ApplicationHandler;
@@ -13,10 +13,68 @@ use winit::keyboard::{ModifiersState, PhysicalKey};
 use winit::window::{Fullscreen, Window, WindowId};
 
 use super::{App, FRAME_TIME};
+use crate::cockpit;
 use crate::display;
+use crate::state::Screen;
 use crate::ui::present::{SRC_H, SRC_W, debug_button_at};
 
+/// Через сколько времени без движения мыши прячем курсор в полном экране.
+const CURSOR_IDLE: Duration = Duration::from_secs(3);
+
 impl App<'_> {
+    /// Любое событие мыши возвращает курсор и отсчитывает тайм-аут заново.
+    pub(super) fn note_mouse_activity(&mut self) {
+        self.last_mouse_activity = Instant::now();
+        if !self.cursor_visible {
+            if let Some(w) = &self.window {
+                w.set_cursor_visible(true);
+            }
+            self.cursor_visible = true;
+        }
+    }
+
+    /// Спрятать курсор в полном экране после паузы; в обычном окне он всегда
+    /// остаётся видимым.
+    fn update_cursor_visibility(&mut self) {
+        let Some(w) = &self.window else {
+            return;
+        };
+        let hide = cursor_hidden_by_idle(w.fullscreen().is_some(), self.last_mouse_activity.elapsed());
+        if hide == !self.cursor_visible {
+            return;
+        }
+        w.set_cursor_visible(!hide);
+        self.cursor_visible = !hide;
+    }
+
+    /// Клик по овалу радара в нативном кокпите переключает вид сканера.
+    ///
+    /// Координаты приходят в пикселях окна. Нативный кокпит рисуется в HD-слое
+    /// 1:1 в игровой области (слева от отладочной полосы), поэтому перевод в
+    /// координаты HD-слоя — это просто вычитание начала игровой области; здесь
+    /// она начинается в (0,0). Клик по радару поглощается, чтобы он не
+    /// срабатывал одновременно как выстрел.
+    pub(super) fn toggle_radar_at(&mut self, x: i32, y: i32, win_w: u32, win_h: u32) -> bool {
+        if self.menu
+            || self.docked.is_active()
+            || !matches!(self.state.screen, Screen::Flight | Screen::Animation(_))
+        {
+            return false;
+        }
+        let (game_w, game_h) = self.game_size(win_w, win_h);
+        if x < 0 || y < 0 || x >= game_w as i32 || y >= game_h as i32 {
+            return false;
+        }
+        if !cockpit::oval_radar_hit(&cockpit::panel_geometry(game_w, game_h), x, y) {
+            return false;
+        }
+        self.radar_view = match self.radar_view {
+            cockpit::RadarView::Classic => cockpit::RadarView::Kladov,
+            cockpit::RadarView::Kladov => cockpit::RadarView::Classic,
+        };
+        true
+    }
+
     fn create_window(&mut self, event_loop: &ActiveEventLoop) {
         if self.window.is_some() {
             return;
@@ -63,6 +121,12 @@ impl App<'_> {
     }
 }
 
+/// Чистая часть решения о скрытии курсора — вынесена из метода окна, чтобы
+/// тайм-аут можно было проверить без настоящего `Window`.
+fn cursor_hidden_by_idle(fullscreen: bool, idle: Duration) -> bool {
+    fullscreen && idle >= CURSOR_IDLE
+}
+
 impl ApplicationHandler for App<'_> {
     fn resumed(&mut self, event_loop: &ActiveEventLoop) {
         self.create_window(event_loop);
@@ -94,6 +158,7 @@ impl ApplicationHandler for App<'_> {
                 }
             }
             WindowEvent::CursorMoved { position, .. } => {
+                self.note_mouse_activity();
                 self.cursor_x = position.x;
                 self.cursor_y = position.y;
                 // Позиция мыши нужна карте для ЛКМ; храним её и когда карта
@@ -129,6 +194,7 @@ impl ApplicationHandler for App<'_> {
                 }
             }
             WindowEvent::MouseInput { state, button, .. } => {
+                self.note_mouse_activity();
                 let pressed = state == ElementState::Pressed;
                 // Кнопки отладочной полосы переключают вид под миниатюрой и
                 // не попадают в игру.
@@ -164,6 +230,20 @@ impl ApplicationHandler for App<'_> {
                     }
                     return;
                 }
+                // В полёте ЛКМ по овалу радара переключает вид локатора.
+                if button == MouseButton::Left && pressed {
+                    if let Some(w) = &self.window {
+                        let size = w.inner_size();
+                        if self.toggle_radar_at(
+                            self.cursor_x as i32,
+                            self.cursor_y as i32,
+                            size.width,
+                            size.height,
+                        ) {
+                            return;
+                        }
+                    }
+                }
                 match button {
                     MouseButton::Left => self.mouse_left = pressed,
                     MouseButton::Right => self.mouse_right = pressed,
@@ -171,6 +251,7 @@ impl ApplicationHandler for App<'_> {
                 }
             }
             WindowEvent::MouseWheel { delta, .. } => {
+                self.note_mouse_activity();
                 let dy = match delta {
                     MouseScrollDelta::LineDelta(_, y) => y,
                     MouseScrollDelta::PixelDelta(p) => p.y as f32,
@@ -201,6 +282,7 @@ impl ApplicationHandler for App<'_> {
             return;
         }
         let now = Instant::now();
+        self.update_cursor_visibility();
         if now >= self.next_frame {
             self.frame();
             self.next_frame += FRAME_TIME;
@@ -210,5 +292,18 @@ impl ApplicationHandler for App<'_> {
             }
         }
         event_loop.set_control_flow(ControlFlow::WaitUntil(self.next_frame));
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn cursor_hides_only_after_idle_in_fullscreen() {
+        assert!(!cursor_hidden_by_idle(false, CURSOR_IDLE * 2));
+        assert!(!cursor_hidden_by_idle(true, CURSOR_IDLE - Duration::from_millis(1)));
+        assert!(cursor_hidden_by_idle(true, CURSOR_IDLE));
+        assert!(cursor_hidden_by_idle(true, CURSOR_IDLE * 2));
     }
 }

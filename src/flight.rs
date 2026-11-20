@@ -179,6 +179,13 @@ impl Flight {
         self.explosions.reset();
     }
 
+    /// Начать анимацию перехода с заранее известным видом (например,
+    /// гиперпрыжка, отсчёт которого уже закончился к моменту открытия F1).
+    pub fn start_transition_kind(&mut self, kind: TransitionKind, countdown: u8) {
+        self.transition.start_kind(kind, countdown);
+        self.explosions.reset();
+    }
+
     /// Идёт ли сейчас нативный переход (вылет, прыжок или стыковка).
     ///
     /// Используется тестами; боевой код смотрит на состояние перехода напрямую.
