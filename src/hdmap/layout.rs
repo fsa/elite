@@ -74,9 +74,10 @@ pub(super) fn view(w: u32, h: u32) -> View {
     // кокпитом и картой внешняя рамка остаётся на месте.
     let frame = crate::cockpit::LINE.max(1);
     let margin = crate::cockpit::panel_geometry(w, h).margin;
-    // Верхняя ячейка таблицы: две текстовые строки в высоту, как красная
-    // шапка карты в оригинале.
-    let header_h = 2 * line;
+    // Верхняя ячейка таблицы: три текстовые строки в высоту. Заголовок
+    // центрируется в ней и начинается на второй строке — как на других
+    // нативных информационных экранах и на одной линии с отсчётом гиперпрыжка.
+    let header_h = 3 * line;
     let header_y = margin + frame;
     let inner_x = margin + frame;
     let inner_w = (w as i32 - 2 * inner_x).max(1);

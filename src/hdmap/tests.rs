@@ -130,11 +130,28 @@ fn layout_keeps_field_proportions() {
     assert_eq!(l.text, 2);
     assert_eq!(l.frame, crate::cockpit::LINE);
     assert_eq!(l.margin, 8);
-    assert_eq!((l.header_y, l.header_h), (11, 32));
-    assert_eq!(l.top, 46);
+    assert_eq!((l.header_y, l.header_h), (11, 48));
+    assert_eq!(l.top, 62);
     assert!(l.fy0 >= l.top, "поле заходит под заголовок");
     assert!(l.fy0 + l.fh <= l.panel_y, "поле заходит под панель");
     assert!(l.panel_y + l.frame + l.margin <= 768);
+}
+
+/// Заголовок карты стоит на той же строке, что и заголовки других нативных
+/// экранов и отсчёт гиперпрыжка в левом верхнем углу.
+#[test]
+fn title_line_matches_info_screens_and_countdown() {
+    let map = Map::new();
+    for &(w, h) in &[(640u32, 480u32), (1024, 768), (1280, 720), (1920, 1080)] {
+        let l = map.layout(w, h);
+        let line = 8 * l.text as i32;
+        assert_eq!(l.header_h, 3 * line, "{w}x{h}: высота ячейки заголовка");
+        assert_eq!(
+            l.title_y,
+            l.margin + l.frame + line,
+            "{w}x{h}: строка заголовка"
+        );
+    }
 }
 
 /// Толщина линий и отступ рамки карты совпадают с кокпитом: при переключении
