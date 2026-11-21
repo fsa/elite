@@ -492,28 +492,37 @@ impl App<'_> {
         }
     }
 
-    /// В момент начала тоннеля гиперпрыжка открыть нативный вид F1.
+    /// Открыть нативный вид F1 с началом любой анимации перехода.
     ///
-    /// Отсчёт может идти под любым нативным экраном (или под эмуляторным
-    /// кадром): экран не закрывается до нуля, а сам прыжок уже показывается
-    /// нативной анимацией, как по `F1`.
-    pub(super) fn switch_to_flight_on_jump(&mut self) {
-        if !self.saw_jump_countdown || self.flight.active || self.flight_emulator {
+    /// Отсчёт гиперпрыжка может идти под любым экраном: до нуля экран остаётся
+    /// на месте (на нём показывается только число), а в момент тоннеля вид
+    /// принудительно переключается на передний и проигрывает нативную анимацию.
+    /// Стыковка и вылет не имеют отсчёта, поэтому их анимация включается сразу
+    /// по флагу `JumpDocking`, в том числе поверх экрана эмулятора.
+    pub(super) fn switch_to_flight_on_transition(&mut self) {
+        if self.menu || self.flight.in_animation_mode() {
             return;
         }
-        let in_transition = flight::z80_in_transition(&self.machine.mem);
-        let countdown = self
-            .machine
-            .mem
-            .get(flight::Z80_JUMP_COUNTDOWN)
-            .copied()
-            .unwrap_or(0);
-        if !in_transition || countdown != 0 {
+        let mem = &self.machine.mem;
+        if !flight::z80_in_transition(mem) {
             return;
         }
+        let countdown = mem.get(flight::Z80_JUMP_COUNTDOWN).copied().unwrap_or(0);
+        let intergalactic = mem.get(flight::Z80_JUMP_DOCKING).copied() == Some(2);
+        let hyperspace = self.saw_jump_countdown || countdown > 0 || intergalactic;
+        // Пока идёт отсчёт, informational-экран не трогаем: он показывает число.
+        if hyperspace && countdown > 0 {
+            return;
+        }
+        let kind = if hyperspace {
+            flight::TransitionKind::Hyperspace
+        } else if flight::z80_is_docked(mem) {
+            flight::TransitionKind::Launch
+        } else {
+            flight::TransitionKind::Docking
+        };
         self.show_flight(flight::ViewDir::Forward);
-        self.flight
-            .start_transition_kind(flight::TransitionKind::Hyperspace, countdown);
+        self.flight.start_transition_kind(kind, countdown);
         self.saw_jump_countdown = false;
     }
 
@@ -527,7 +536,8 @@ impl App<'_> {
             return;
         }
         // Во время отсчёта гиперпрыжка нативный экран остаётся на месте:
-        // переход к тоннелю сам откроет вид F1 (см. `switch_to_flight_on_jump`).
+        // переход к тоннелю сам откроет вид F1 (см.
+        // `switch_to_flight_on_transition`).
         if flight::z80_in_transition(&self.machine.mem)
             && self
                 .machine
@@ -623,12 +633,12 @@ impl App<'_> {
         self.open_market();
     }
 
-    /// Открыть нативный экран полёта поверх текущего состояния игры.
-    fn open_flight(&mut self, dir: flight::ViewDir) {
-        self.flight_emulator = false;
-        let planet_color = world::current_planet_color(&self.machine.mem);
-        self.flight.open(planet_color);
-        self.flight.set_view_dir(dir);
+    /// Снять нативные экраны, которые могут лежать поверх вида из кабины.
+    ///
+    /// Карта, закупка и информационные экраны имеют приоритет в
+    /// [`crate::state::GameState`], поэтому одного открытого `flight` мало:
+    /// пока надстройка активна, кадр по-прежнему рисует её, а не полёт.
+    fn close_flight_overlays(&mut self) {
         self.close_hdmap();
         self.shop.close();
         self.close_status();
@@ -636,9 +646,18 @@ impl App<'_> {
         self.close_market();
         self.pending_status = false;
         self.pending_sysinfo = false;
+        self.pending_shop = false;
+    }
+
+    /// Открыть нативный экран полёта поверх текущего состояния игры.
+    fn open_flight(&mut self, dir: flight::ViewDir) {
+        self.flight_emulator = false;
+        let planet_color = world::current_planet_color(&self.machine.mem);
+        self.flight.open(planet_color);
+        self.flight.set_view_dir(dir);
+        self.close_flight_overlays();
         self.menu = false;
         self.pending_key = None;
-        self.pending_shop = false;
         self.pending_flight = None;
         self.pending_launch = false;
     }
@@ -648,6 +667,7 @@ impl App<'_> {
     pub(super) fn show_flight(&mut self, dir: flight::ViewDir) {
         self.flight_emulator = false;
         if self.flight.active {
+            self.close_flight_overlays();
             self.flight.set_view_dir(dir);
             self.pending_flight = None;
             self.pending_launch = false;

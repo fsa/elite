@@ -545,49 +545,16 @@ impl App<'_> {
             }
         }
 
-        // В режиме анимации (вылет, гиперпереход, стыковка) переключение
-        // экранов недоступно: работает только переход между нативной
-        // отрисовкой (F1) и экраном эмулятора (Backquote), а также пауза.
-        // Эмулятор в это время проигрывает анимацию и игра не реагирует на кнопки.
-        if !self.machine.intro_seen && !self.menu && flight::z80_in_transition(&self.machine.mem) {
-            if repeat {
-                return;
-            }
-            if code == KeyCode::F1 {
-                // Показать нативную отрисовку текущей анимации.
-                if self.flight.in_transition() {
-                    // Анимация уже идёт (в том числе скрытая Backquote) —
-                    // просто снова показываем нативный вид без сброса состояния.
-                    self.flight.active = true;
-                    self.flight.set_view_dir(flight::ViewDir::Forward);
-                    self.pending_flight = None;
-                    self.pending_launch = false;
-                } else {
-                    self.show_flight(flight::ViewDir::Forward);
-                    // После отсчёта `JumpDocking` у прыжка и стыковки
-                    // одинаков, поэтому вид берём из замеченного отсчёта.
-                    let countdown = self
-                        .machine
-                        .mem
-                        .get(flight::Z80_JUMP_COUNTDOWN)
-                        .copied()
-                        .unwrap_or(0);
-                    let intergalactic = self.machine.mem[flight::Z80_JUMP_DOCKING] == 2;
-                    let kind = if self.saw_jump_countdown || countdown > 0 || intergalactic {
-                        flight::TransitionKind::Hyperspace
-                    } else {
-                        flight::TransitionKind::Docking
-                    };
-                    self.flight.start_transition_kind(kind, countdown);
-                }
-            } else if emulator_handoff_key(code) {
-                // Показать анимацию, которую рисует эмулятор. Состояние
-                // перехода сохраняем, чтобы F1 мог вернуться к той же анимации.
-                self.flight.active = false;
-            } else if code == KeyCode::Escape {
-                self.menu = true;
-                self.menu_sel = 0;
-            }
+        // В режиме анимации (вылет, гиперпереход, стыковка) не работают ни
+        // переключения экранов, ни органы управления. Переход сам открывает
+        // передний нативный вид, поэтому F1, Backquote и Esc здесь не нужны.
+        // Системные комбинации (полный экран, скорость эмуляции) обработаны
+        // выше и на игру не влияют.
+        if !self.machine.intro_seen
+            && !self.menu
+            && (flight::z80_in_transition(&self.machine.mem) || self.flight.in_animation_mode())
+        {
+            self.release_pressed(code);
             return;
         }
 
@@ -1024,25 +991,11 @@ impl App<'_> {
             return;
         }
         // Экран полёта: F1-4 — те же клавиши 1-4 оригинала (передний/задний/
-        // левый/правый вид) плюс переключение нативного вида; 1 возвращает
-        // Z80-кадр, Esc открывает меню паузы.
-        // В режиме анимации (вылет/прыжок/стыковка) переключение экранов
-        // недоступно: работает только переход между F1 и 1 (нативная отрисовка
-        // или эмулятор). Игра в это время сама не реагирует на кнопки.
+        // левый/правый вид), Esc открывает меню паузы. Пока нативная анимация
+        // перехода продолжается после сброса флагов Z80, ввод тоже заблокирован.
         if self.flight.active {
-            let in_animation = self.flight.transition_kind().is_some();
-            if in_animation {
-                if code == KeyCode::F1 {
-                    // Оставляем нативный вид активным (уже открыт).
-                    self.flight.set_view_dir(flight::ViewDir::Forward);
-                } else if emulator_handoff_key(code) {
-                    // Показать анимацию, которую рисует эмулятор. Состояние
-                    // перехода сохраняем, чтобы F1 мог вернуться к ней.
-                    self.flight.active = false;
-                } else if code == KeyCode::Escape {
-                    self.menu = true;
-                    self.menu_sel = 0;
-                }
+            if self.flight.in_animation_mode() {
+                self.release_pressed(code);
                 return;
             }
             let view = match code {
@@ -1208,7 +1161,7 @@ impl App<'_> {
         }
         // В режиме анимации (вылет/прыжок/стыковка) эмулятор проигрывает
         // анимацию и игра не реагирует на нажатие кнопок.
-        if flight::z80_in_transition(&self.machine.mem) {
+        if flight::z80_in_transition(&self.machine.mem) || self.flight.in_animation_mode() {
             // Во время отсчёта под картой клавиши прыжка уже переданы отдельно;
             // остальной ввод в анимации не нужен.
             self.machine.release_all_keys();
@@ -1245,7 +1198,7 @@ impl App<'_> {
         self.machine.release_all_keys();
         self.machine.release_joystick();
         // В режиме анимации игра не реагирует на нажатие кнопок.
-        if flight::z80_in_transition(&self.machine.mem) {
+        if flight::z80_in_transition(&self.machine.mem) || self.flight.in_animation_mode() {
             self.pending_key = None;
             return;
         }

@@ -115,6 +115,41 @@ impl App<'_> {
         cockpit::draw_danger_half(&mut self.machine.hd, mem, margin, cockpit::LINE);
     }
 
+    /// Отсчёт гиперпрыжка в левом верхнем углу нативного информационного экрана.
+    ///
+    /// В виде из кабины число рисует сам `flight::render`. Под нативными
+    /// экранами ZX-кадр с родным отсчётом не показан, поэтому здесь выводится
+    /// только то же число в той же клетке у левой и верхней рамок. Пункт
+    /// назначения и подпись вида остаются только в кабине.
+    pub(super) fn draw_jump_countdown(&mut self) {
+        let raw = self
+            .machine
+            .mem
+            .get(flight::Z80_JUMP_COUNTDOWN)
+            .copied()
+            .unwrap_or(0);
+        if raw == 0
+            || self.machine.intro_seen
+            || flight::z80_is_docked(&self.machine.mem)
+            || !flight::z80_in_transition(&self.machine.mem)
+        {
+            return;
+        }
+        let (w, h) = (self.machine.hd.width as u32, self.machine.hd.height as u32);
+        let g = cockpit::panel_geometry(w, h);
+        let scale = (h as f32 / 300.0).floor().max(1.0) as usize;
+        let frame = cockpit::LINE.max(1);
+        let text = flight::countdown_number(raw).to_string();
+        self.machine.hd.draw_text(
+            ZX_FONT,
+            g.margin + frame + 8 * scale as i32,
+            g.margin + frame + 8 * scale as i32,
+            &text,
+            flight::countdown_color(),
+            scale,
+        );
+    }
+
     /// Шаг плавного перемещения курсора карты по удерживаемым клавишам
     /// направления с постепенным наращиванием скорости.
     pub(super) fn advance_hdmap_cursor(&mut self) {
@@ -269,7 +304,7 @@ impl App<'_> {
                         let frames = self.emulation_frames();
                         self.machine.run_frames(frames);
                         emulator_ran = true;
-                        self.switch_to_flight_on_jump();
+                        self.switch_to_flight_on_transition();
                         self.open_pending_status();
                         self.open_pending_sysinfo();
                         self.open_pending_market();
@@ -303,7 +338,7 @@ impl App<'_> {
                         let frames = self.emulation_frames();
                         self.machine.run_frames(frames);
                         emulator_ran = true;
-                        self.switch_to_flight_on_jump();
+                        self.switch_to_flight_on_transition();
                         self.open_pending_status();
                         self.open_pending_sysinfo();
                         self.open_pending_market();
@@ -356,7 +391,7 @@ impl App<'_> {
                         self.apply_input();
                         self.machine.run_frames(self.emulation_frames());
                         emulator_ran = true;
-                        self.switch_to_flight_on_jump();
+                        self.switch_to_flight_on_transition();
                         self.open_pending_status();
                         self.open_pending_sysinfo();
                         self.open_pending_market();
@@ -410,6 +445,7 @@ impl App<'_> {
                 Screen::GalacticMap => {
                     self.hdmap.draw(&mut self.machine.hd, ZX_FONT);
                     self.draw_danger_half();
+                    self.draw_jump_countdown();
                     if self.state.menu {
                         draw_pause_menu(&mut self.machine.hd, ZX_FONT, self.menu_sel, self.machine.intro_seen);
                     }
@@ -449,6 +485,7 @@ impl App<'_> {
                     self.shop
                         .draw(&mut self.machine.hd, ZX_FONT, &self.machine.mem);
                     self.draw_danger_half();
+                    self.draw_jump_countdown();
                     if self.state.menu {
                         draw_pause_menu(&mut self.machine.hd, ZX_FONT, self.menu_sel, self.machine.intro_seen);
                     }
@@ -457,6 +494,7 @@ impl App<'_> {
                     self.status.open(&self.machine.mem, crate::status::KLADOV_STATUS);
                     self.status.draw(&mut self.machine.hd, ZX_FONT);
                     self.draw_danger_half();
+                    self.draw_jump_countdown();
                     if self.state.menu {
                         draw_pause_menu(&mut self.machine.hd, ZX_FONT, self.menu_sel, true);
                     }
@@ -465,6 +503,7 @@ impl App<'_> {
                     self.sysinfo.refresh(&self.machine.mem, galaxy::KLADOV_GALAXY);
                     self.sysinfo.draw(&mut self.machine.hd, ZX_FONT);
                     self.draw_danger_half();
+                    self.draw_jump_countdown();
                     if self.state.menu {
                         draw_pause_menu(&mut self.machine.hd, ZX_FONT, self.menu_sel, true);
                     }
@@ -478,6 +517,7 @@ impl App<'_> {
                     );
                     self.market.draw(&mut self.machine.hd, ZX_FONT);
                     self.draw_danger_half();
+                    self.draw_jump_countdown();
                     if self.state.menu {
                         draw_pause_menu(&mut self.machine.hd, ZX_FONT, self.menu_sel, self.machine.intro_seen);
                     }

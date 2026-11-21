@@ -74,6 +74,19 @@ pub use self::memory::{
 pub use self::transition::TransitionKind;
 pub use self::view::ViewDir;
 
+/// Число отсчёта для показа вне вида из кабины (`JumpCountdown >> 1`).
+///
+/// Нативный вид рисует его сам через `render`, а informational-экраны берут
+/// готовое число отсюда — то же самое, что показывает подпись в кабине.
+pub fn countdown_number(raw: u8) -> u32 {
+    messages::countdown_number(raw)
+}
+
+/// Цвет отсчёта на информационных экранах: тот же, что подпись вида в кабине.
+pub fn countdown_color() -> u32 {
+    self::palette::VIEW_LABEL_COLOR
+}
+
 /// Экран полёта по данным Z80.
 pub struct Flight {
     /// Показывать ли вид из кабины вместо ZX-кадра.
@@ -187,6 +200,9 @@ impl Flight {
     /// гиперпрыжка, отсчёт которого уже закончился к моменту открытия F1).
     pub fn start_transition_kind(&mut self, kind: TransitionKind, countdown: u8) {
         self.transition.start_kind(kind, countdown);
+        if kind == TransitionKind::Launch {
+            self.speed_resync = true;
+        }
         self.explosions.reset();
     }
 
@@ -236,8 +252,13 @@ impl Flight {
     }
 
     /// Закрыть экран и вернуться к ZX-кадру (клавиша `1`).
+    ///
+    /// Состояние анимации тоже сбрасывается: закрытый вид не может её
+    /// проигрывать. Временное скрытие ролика через `Backquote` делает это
+    /// напрямую через `active`, чтобы сохранить анимацию для возврата.
     pub fn close(&mut self) {
         self.active = false;
+        self.transition.reset();
         self.messages.reset();
     }
 

@@ -15,6 +15,7 @@ use winit::window::{Fullscreen, Window, WindowId};
 use super::{App, FRAME_TIME};
 use crate::cockpit;
 use crate::display;
+use crate::flight;
 use crate::state::Screen;
 use crate::ui::present::{SRC_H, SRC_W, debug_button_at, save_editor_button_at};
 
@@ -31,6 +32,13 @@ impl App<'_> {
             }
             self.cursor_visible = true;
         }
+    }
+
+    /// Идёт ли анимация перехода (включая отсчёт гиперпрыжка). В это время
+    /// игровой ввод, в том числе мышь, не должен влиять на игру.
+    fn in_transition_animation(&self) -> bool {
+        !self.machine.intro_seen
+            && (flight::z80_in_transition(&self.machine.mem) || self.flight.in_animation_mode())
     }
 
     /// Спрятать курсор в полном экране после паузы; в обычном окне он всегда
@@ -226,6 +234,15 @@ impl ApplicationHandler for App<'_> {
                         return;
                     }
                 }
+                // Во время анимации карта, закупка и радар недоступны: вид
+                // принудительно передний, любые игровые клики поглощаются.
+                if self.in_transition_animation() {
+                    self.mouse_left = false;
+                    self.mouse_right = false;
+                    self.mouse_wheel_up = false;
+                    self.mouse_wheel_down = false;
+                    return;
+                }
                 // При открытой карте ЛКМ перепрыгивает курсором на звезду под
                 // указателем, ПКМ делает то же и открывает информацию о системе.
                 if self.hdmap.active {
@@ -298,6 +315,11 @@ impl ApplicationHandler for App<'_> {
                     MouseScrollDelta::PixelDelta(p) => p.y as f32,
                 };
                 if dy == 0.0 {
+                    return;
+                }
+                if self.in_transition_animation() {
+                    self.mouse_wheel_up = false;
+                    self.mouse_wheel_down = false;
                     return;
                 }
                 // При открытой карте колесо меняет масштаб (зум к текущей

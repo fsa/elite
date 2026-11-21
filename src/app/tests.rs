@@ -1355,10 +1355,10 @@ use crate::world::{
         assert_eq!(app.flight.view_dir, flight::ViewDir::Forward);
     }
 
-    /// `F1` во время прыжка сразу открывает нативную анимацию гиперперехода,
-    /// а не ждёт окончания ZX-ролика.
+    /// Во время гиперпрыжка клавиши не работают: вид Front View с нативной
+    /// анимацией открывается сам в момент перехода к тоннелю.
     #[test]
-    fn f1_during_jump_plays_native_hyperspace() {
+    fn jump_transition_opens_front_view_without_keys() {
         let opts = test_options();
         let mut app = App::new(boot(), &opts);
         app.machine.mem[flight::Z80_WHAT_ON_SCREEN] = 0;
@@ -1366,9 +1366,16 @@ use crate::world::{
         app.machine.mem[flight::Z80_JUMP_DOCKING] = 1;
         app.machine.mem[flight::Z80_FLG_JUMP_DOCKING] = 1;
         app.machine.mem[flight::Z80_JUMP_COUNTDOWN] = 0x15;
+        app.track_jump_countdown();
 
         app.key_event(KeyCode::F1, true, false);
-        assert!(app.flight.active, "F1 не открыл нативный гиперпереход");
+        assert!(
+            !app.flight.active,
+            "F1 не должен переключать экран во время анимации"
+        );
+        app.machine.mem[flight::Z80_JUMP_COUNTDOWN] = 0;
+        app.switch_to_flight_on_transition();
+        assert!(app.flight.active, "анимация не открыла вид сама");
         assert_eq!(
             app.flight.transition_kind(),
             Some(flight::TransitionKind::Hyperspace),
@@ -1376,9 +1383,15 @@ use crate::world::{
         );
         assert_eq!(app.flight.view_dir, flight::ViewDir::Forward);
 
+        app.key_event(KeyCode::F2, true, false);
+        assert_eq!(app.flight.view_dir, flight::ViewDir::Forward);
+        app.key_event(KeyCode::Backquote, true, false);
+        assert!(app.flight.active, "Backquote скрыл анимацию");
+        app.key_event(KeyCode::Escape, true, false);
+        assert!(!app.menu, "Esc открыл меню во время анимации");
+
         app.machine.mem[flight::Z80_JUMP_DOCKING] = 0;
         app.machine.mem[flight::Z80_FLG_JUMP_DOCKING] = 0;
-        app.machine.mem[flight::Z80_JUMP_COUNTDOWN] = 0;
         app.follow_flight_screen();
         assert!(app.flight.active, "вид закрылся после прыжка");
         assert!(!app.flight.in_transition(), "переход не закончился");
@@ -2553,13 +2566,13 @@ use crate::world::{
         assert!(app.saw_jump_countdown);
         app.machine.mem[flight::Z80_WHAT_ON_SCREEN] = 0;
         app.follow_native_screens();
-        app.switch_to_flight_on_jump();
+        app.switch_to_flight_on_transition();
         assert!(app.market.native, "рынок закрылся во время отсчёта");
         assert!(!app.flight.active, "вид F1 открылся до конца отсчёта");
 
         // Счётчик обнулился — пора переключаться на анимацию гиперпрыжка.
         app.machine.mem[flight::Z80_JUMP_COUNTDOWN] = 0;
-        app.switch_to_flight_on_jump();
+        app.switch_to_flight_on_transition();
         assert!(app.flight.active, "не открылся нативный вид F1");
         assert!(!app.market.native, "рынок остался поверх полёта");
         assert_eq!(
@@ -2569,10 +2582,50 @@ use crate::world::{
         );
     }
 
-    /// `F1` после окончания отсчёта не должен принимать прыжок за вылет/стыковку:
+    /// Карта, открытая из кабины, оставляет нативный полёт активным. В момент
+    /// тоннеля карту всё равно нужно снять: она выигрывает по приоритету
+    /// экрана, и иначе анимация остаётся невидимой.
+    #[test]
+    fn jump_countdown_under_map_from_cockpit_shows_animation() {
+        let opts = test_options();
+        let mut app = App::new(boot(), &opts);
+        app.machine.intro_seen = false;
+        app.machine.mem[flight::Z80_IND_DANGER] = 1;
+        app.machine.mem[flight::Z80_WHAT_ON_SCREEN] = 0;
+        app.machine.mem[flight::Z80_JUMP_DOCKING] = 0;
+        app.machine.mem[flight::Z80_FLG_JUMP_DOCKING] = 0;
+        app.flight.open(0);
+        app.key_event(KeyCode::F6, true, false);
+        assert!(app.hdmap.active);
+        assert!(app.flight.active, "подготовка: кабина закрылась под картой");
+
+        app.machine.mem[flight::Z80_JUMP_DOCKING] = 1;
+        app.machine.mem[flight::Z80_FLG_JUMP_DOCKING] = 1;
+        app.machine.mem[flight::Z80_JUMP_COUNTDOWN] = 0x15;
+        app.track_jump_countdown();
+        app.switch_to_flight_on_transition();
+        assert!(app.hdmap.active, "карта закрылась во время отсчёта");
+        assert!(
+            !app.flight.in_animation_mode(),
+            "тоннель начался до конца отсчёта"
+        );
+
+        app.machine.mem[flight::Z80_JUMP_COUNTDOWN] = 0;
+        app.switch_to_flight_on_transition();
+        assert!(app.flight.active, "нативный вид не открылся");
+        assert!(!app.hdmap.active, "карта осталась поверх анимации");
+        assert_eq!(
+            app.flight.transition_kind(),
+            Some(flight::TransitionKind::Hyperspace),
+            "переход показан не как гиперпрыжок"
+        );
+        assert_eq!(app.flight.view_dir, flight::ViewDir::Forward);
+    }
+
+    /// После окончания отсчёта прыжок не принимается за вылет/стыковку:
     /// после обнуления `JumpCountdown` флаги Z80 у них одинаковые.
     #[test]
-    fn f1_after_jump_countdown_keeps_hyperspace_kind() {
+    fn jump_after_countdown_keeps_hyperspace_kind() {
         let opts = test_options();
         let mut app = App::new(boot(), &opts);
         app.machine.intro_seen = false;
@@ -2585,12 +2638,89 @@ use crate::world::{
 
         app.machine.mem[flight::Z80_JUMP_COUNTDOWN] = 0;
         app.key_event(KeyCode::F1, true, false);
+        assert!(!app.flight.active, "F1 сработал во время перехода");
+        app.switch_to_flight_on_transition();
         assert!(app.flight.active);
         assert_eq!(
             app.flight.transition_kind(),
             Some(flight::TransitionKind::Hyperspace),
             "гиперпрыжок перепутан со стыковкой"
         );
+    }
+
+    /// Отсчёт виден на любом нативном информационном экране: только число
+    /// в левом верхнем углу, без пункта назначения.
+    #[test]
+    fn jump_countdown_overlay_draws_number_on_info_screen() {
+        let opts = test_options();
+        let mut app = App::new(boot(), &opts);
+        app.machine.intro_seen = false;
+        app.machine.mem[flight::Z80_IND_DANGER] = 1;
+        app.machine.mem[flight::Z80_JUMP_DOCKING] = 1;
+        app.machine.mem[flight::Z80_FLG_JUMP_DOCKING] = 1;
+        app.machine.mem[flight::Z80_JUMP_COUNTDOWN] = 0x15;
+        let (w, h) = (1024usize, 768usize);
+        app.machine.hd.resize(w, h);
+        app.machine.hd.clear(display::TRANSPARENT);
+
+        app.draw_jump_countdown();
+        let g = cockpit::panel_geometry(w as u32, h as u32);
+        let scale = (h as f32 / 300.0).floor().max(1.0) as usize;
+        let x = (g.margin + cockpit::LINE.max(1) + 8 * scale as i32) as usize;
+        let y = x;
+        let mut drawn = false;
+        for py in y..y + 8 * scale {
+            for px in x..x + 16 * scale {
+                if app.machine.hd.pixels()[py * w + px] != display::TRANSPARENT {
+                    drawn = true;
+                }
+            }
+        }
+        assert!(drawn, "отсчёт не нарисован в левом верхнем углу");
+
+        app.machine.hd.clear(display::TRANSPARENT);
+        app.machine.mem[flight::Z80_JUMP_COUNTDOWN] = 0;
+        app.draw_jump_countdown();
+        assert!(
+            app.machine.hd
+                .pixels()
+                .iter()
+                .all(|&p| p == display::TRANSPARENT),
+            "отсчёт нарисован после обнуления счётчика"
+        );
+    }
+
+    /// Стыковка и вылет из любого экрана включают передний вид и анимацию.
+    #[test]
+    fn docking_and_launch_switch_to_front_view_from_other_screens() {
+        let opts = test_options();
+        let mut app = App::new(boot(), &opts);
+        app.machine.intro_seen = false;
+        app.machine.mem[flight::Z80_IND_DANGER] = 1;
+        app.machine.mem[flight::Z80_WHAT_ON_SCREEN] = 0;
+        app.machine.mem[flight::Z80_JUMP_DOCKING] = 1;
+        app.machine.mem[flight::Z80_FLG_JUMP_DOCKING] = 1;
+        app.machine.mem[flight::Z80_JUMP_COUNTDOWN] = 0;
+        app.switch_to_flight_on_transition();
+        assert_eq!(
+            app.flight.transition_kind(),
+            Some(flight::TransitionKind::Docking),
+            "стыковка не показана анимацией"
+        );
+        assert_eq!(app.flight.view_dir, flight::ViewDir::Forward);
+
+        app.flight.close();
+        app.machine.mem[flight::Z80_IND_DANGER] = 0;
+        app.flight_emulator = true;
+        app.switch_to_flight_on_transition();
+        assert!(app.flight.active, "вылет не открыл нативный вид из эмулятора");
+        assert!(!app.flight_emulator);
+        assert_eq!(
+            app.flight.transition_kind(),
+            Some(flight::TransitionKind::Launch),
+            "вылет показан не как вылет"
+        );
+        assert_eq!(app.flight.view_dir, flight::ViewDir::Forward);
     }
 
     /// Под картой `G` доходит до эмулятора одной клавишей, не закрывая карту;
