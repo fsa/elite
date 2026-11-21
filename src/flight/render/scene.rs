@@ -243,14 +243,15 @@ fn draw_enemy_shots_view(
     let (xmin, ymin) = (0.0, top as f32);
     let (xmax, ymax) = (frame.width as f32 - 1.0, bottom as f32 - 1.0);
     for shot in &f.combat.enemy_shots {
-        let Some((a, b)) = view::clip_segment_near(shot.from, shot.to) else {
+        // Отрезок хранится в системе игрока, а ближняя плоскость — в
+        // координатах текущего вида: сначала поворачиваем, потом отсекаем.
+        // Иначе в заднем и боковых видах обе точки имеют z <= NEAR и луч
+        // выбрасывается ещё до проекции.
+        let view_from = cam.apply(shot.from);
+        let view_to = cam.apply(shot.to);
+        let Some((va, vb)) = view::clip_segment_near(view_from, view_to) else {
             continue;
         };
-        let va = cam.apply(a);
-        let vb = cam.apply(b);
-        if va[2] <= view::NEAR && vb[2] <= view::NEAR {
-            continue;
-        }
         let ax = screen.cx + va[0] / va[2].max(view::NEAR) * screen.k;
         let ay = screen.cy - va[1] / va[2].max(view::NEAR) * screen.k;
         let bx = screen.cx + vb[0] / vb[2].max(view::NEAR) * screen.k;

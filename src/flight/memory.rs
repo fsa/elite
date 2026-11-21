@@ -57,6 +57,17 @@ pub(super) const Z80_COBRA_MK4: usize = 0xD08E;
 pub(super) const Z80_LASER_MOUNTS: usize = 0xD07D;
 /// `ShieldFront` — передний щит, 0..0xA0.
 pub(super) const Z80_SHIELD_FRONT: usize = 0x70E8;
+/// `ShieldRear` — задний щит, 0..0xA0.
+pub(super) const Z80_SHIELD_REAR: usize = 0x70EA;
+/// `DamageFrontShield`: за такт сюда складывается урон переднему щиту.
+///
+/// Оригинал обнуляет ячейку в начале `MoveAllObjects`, а `Damage2Pilot`
+/// читает её в конце игрового такта. Это надёжнее, чем падение самого щита:
+/// при нулевом щите попадание лазера уже ничего не отнимает, но луч на экране
+/// оригинала всё равно есть.
+pub(super) const Z80_DAMAGE_FRONT_SHIELD: usize = 0x9CA3;
+/// `DamageRearShield` — то же для заднего щита.
+pub(super) const Z80_DAMAGE_REAR_SHIELD: usize = 0x9CA4;
 /// `TempLaser` — нагрев лазера, 0..0xA0.
 pub(super) const Z80_TEMP_LASER: usize = 0x70F0;
 /// Таблица звёзд оригинала (`byte_7A39`): 16 пар координат.

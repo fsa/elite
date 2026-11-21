@@ -6,8 +6,8 @@ use crate::render3d::{Rotation, Screen};
 use super::explosions::EXPLOSION_TIME;
 use super::memory::{
     read_signed24, read_signed8, Z80_LASER_MOUNTS, Z80_OBJ_CORIOLIS, Z80_OBJ_SLOT0,
-    Z80_OENERG_DESTROYED, Z80_PLANET_CRD, Z80_SHIELD_FRONT, Z80_SLOT_OADRDATA, Z80_SLOT_OENERG,
-    Z80_SUN_CRD, Z80_TEMP_LASER,
+    Z80_DAMAGE_FRONT_SHIELD, Z80_OENERG_DESTROYED, Z80_PLANET_CRD, Z80_SHIELD_FRONT,
+    Z80_SHIELD_REAR, Z80_SLOT_OADRDATA, Z80_SLOT_OENERG, Z80_SUN_CRD, Z80_TEMP_LASER,
 };
 use super::messages::{countdown_number, view_label, BOTTOM_MSG_TTL};
 use super::palette::{
@@ -448,12 +448,13 @@ fn enemy_attack_draws_visible_beam() {
         "луч появился без попадания"
     );
 
-    // Оригинал обработал попадание: передний щит уменьшился.
-    mem[Z80_SHIELD_FRONT] = 0x40;
+    // Оригинал обработал одно попадание: передний щит уменьшился на 7.
+    mem[Z80_SHIELD_FRONT] = 0x49;
     f.sync_from_z80(&mem);
-    assert!(
-        !f.combat.enemy_shots.is_empty(),
-        "выстрел противника не создан"
+    assert_eq!(
+        f.combat.enemy_shots.len(),
+        1,
+        "одно попадание должно дать один луч"
     );
 
     let mut frame = Frame::new(1280, 960);
@@ -476,10 +477,11 @@ fn z80_shows_enemy_beam_when_shield_drops() {
     );
 
     // Оригинал обработал попадание: передний щит уменьшился.
-    mem[Z80_SHIELD_FRONT] = 0x40;
+    mem[Z80_SHIELD_FRONT] = 0x49;
     f.sync_from_z80(&mem);
-    assert!(
-        !f.combat.enemy_shots.is_empty(),
+    assert_eq!(
+        f.combat.enemy_shots.len(),
+        1,
         "падение щита не показано лучом"
     );
     let shot = &f.combat.enemy_shots[0];
@@ -487,6 +489,86 @@ fn z80_shows_enemy_beam_when_shield_drops() {
         shot.from[2] > view::NEAR,
         "луч противника начался не у корабля: {:?}",
         shot.from
+    );
+}
+
+#[test]
+fn enemy_beam_shown_when_shield_is_already_zero() {
+    let mut f = open();
+    let mut mem = z80_mem_with_flight();
+    mem[Z80_SHIELD_FRONT] = 0;
+    f.sync_from_z80(&mem);
+    assert!(f.combat.enemy_shots.is_empty());
+
+    // Щит уже нулевой, поэтому не меняется, но оригинал всё равно рисует луч.
+    mem[Z80_DAMAGE_FRONT_SHIELD] = 7;
+    mem[Z80_STARS_TABLE] = mem[Z80_STARS_TABLE].wrapping_add(1);
+    f.sync_from_z80(&mem);
+    assert_eq!(
+        f.combat.enemy_shots.len(),
+        1,
+        "урон при нулевом щите не показал луч"
+    );
+}
+
+#[test]
+fn enemy_beam_appears_in_rear_view() {
+    let mut f = open();
+    let mut mem = z80_mem_with_flight();
+
+    // Корабль позади игрока: в заднем виде он впереди камеры.
+    mem[Z80_OBJ_SLOT0 + 8] = 0x80;
+    f.sync_from_z80(&mem);
+    f.set_view_dir(ViewDir::Back);
+
+    // Попадание сзади уменьшает задний щит; передний не трогаем.
+    mem[Z80_SHIELD_FRONT] = 0xA0;
+    mem[Z80_SHIELD_REAR] = 0x99;
+    f.sync_from_z80(&mem);
+    assert_eq!(
+        f.combat.enemy_shots.len(),
+        1,
+        "попадание в задний щит не создало луч"
+    );
+    assert!(
+        f.combat.enemy_shots[0].from[2] < 0.0,
+        "источник луча должен быть позади игрока"
+    );
+
+    let mut frame = Frame::new(1280, 960);
+    f.draw(&mut frame, &cockpit::panel_geometry(1280, 960), &[]);
+    let beam_pixels = frame.pixels().iter().filter(|&&p| p == ENEMY_BEAM).count();
+    assert!(
+        beam_pixels > 50,
+        "луч в заднем виде не попал в кадр: {beam_pixels} px"
+    );
+}
+
+#[test]
+fn enemy_beam_aim_point_follows_view() {
+    let mut f = open();
+    let mut mem = z80_mem_with_flight();
+
+    // Корабль слева по курсу: виден только в левом виде.
+    mem[Z80_OBJ_SLOT0] = 0xE8;
+    mem[Z80_OBJ_SLOT0 + 1] = 0x03;
+    mem[Z80_OBJ_SLOT0 + 2] = 0x80;
+    for i in 6..9 {
+        mem[Z80_OBJ_SLOT0 + i] = 0;
+    }
+    f.sync_from_z80(&mem);
+    f.set_view_dir(ViewDir::Left);
+
+    mem[Z80_SHIELD_FRONT] = 0x49;
+    f.sync_from_z80(&mem);
+    assert_eq!(f.combat.enemy_shots.len(), 1);
+
+    let mut frame = Frame::new(1280, 960);
+    f.draw(&mut frame, &cockpit::panel_geometry(1280, 960), &[]);
+    let beam_pixels = frame.pixels().iter().filter(|&&p| p == ENEMY_BEAM).count();
+    assert!(
+        beam_pixels > 50,
+        "луч в левом виде не попал в кадр: {beam_pixels} px"
     );
 }
 
@@ -868,6 +950,7 @@ fn z80_mem_with_flight() -> Vec<u8> {
     mem[Z80_HIGH_DELTA_SPEED] = 0x17;
     mem[Z80_SPEED_GAUGE] = 0x17 * 5 + 5; // индикатор скорости
     mem[Z80_SHIELD_FRONT] = 0x50;
+    mem[Z80_SHIELD_REAR] = 0xA0;
     mem[Z80_TEMP_LASER] = 0x20;
     mem[Z80_LASER_MOUNTS] = 1; // FRONT: pulse laser
 

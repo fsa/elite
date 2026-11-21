@@ -396,11 +396,16 @@ impl Flight {
         // Выстрел в оригинале виден только по нагреву лазера.
         self.combat.observe_laser(mem);
 
-        // Сцена собирается из слотов Z80; попадание ловим по падению щита
-        // уже после того, как известны цели ответного луча.
+        // Сцена собирается из слотов Z80; попадание ловим по урону щитов уже
+        // после того, как известны цели ответного луча.
         self.bodies = scene::build(mem, self.planet_color, self.system_color);
-        self.combat
-            .observe_shield(mem, &self.bodies, self.stars.rng_mut());
+        self.combat.observe_shield(
+            mem,
+            &self.bodies,
+            self.view_dir,
+            ticked,
+            self.stars.rng_mut(),
+        );
         // Уничтожение ловится по `oEnerg == 0xFF`: так `FireLaser` помечает
         // объект перед `DestroyObj`.
         self.explosions.observe(mem);
