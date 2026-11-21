@@ -2415,10 +2415,10 @@ use crate::world::{
         fs::remove_file(&path).ok();
     }
 
-    /// На станции `G`/`H` теперь передаются эмулятору: нативный режим
-    /// станции снимается, а клавиша уходит в игру.
+    /// На станции `G`/`H` показывают нативный экран `DOCKED` со звуком:
+    /// эмулятор остаётся замороженным, а открытый нативный экран не закрывается.
     #[test]
-    fn g_and_h_on_station_handoff_to_emulator() {
+    fn g_and_h_on_station_show_native_docked() {
         let opts = test_options();
         for key in [KeyCode::KeyG, KeyCode::KeyH] {
             let mut app = App::new(boot(), &opts);
@@ -2427,16 +2427,13 @@ use crate::world::{
             app.key_event(KeyCode::F6, true, false);
             assert!(app.hdmap.active, "подготовка: карта не открылась");
 
-            let (row, bit) = matrix_pos(key).expect("клавиша в матрице");
             app.key_event(key, true, false);
-            assert!(
-                !app.docked.is_active(),
-                "{key:?} не должен показывать заглушку DOCKED"
-            );
-            assert!(!app.station_native, "{key:?} не снял нативный режим станции");
-            assert!(app.station_emulator, "{key:?} не передал управление эмулятору");
-            assert!(!app.hdmap.active, "{key:?} не закрыл нативный экран");
-            assert_eq!(app.pending_key, Some((row, bit)), "{key:?} не ушёл в эмулятор");
+            assert!(app.docked.is_active(), "{key:?} не показал заглушку DOCKED");
+            assert!(app.sfx.is_playing(), "{key:?} не проиграл звук DOCKED");
+            assert!(app.station_native, "{key:?} снял нативный режим станции");
+            assert!(!app.station_emulator, "{key:?} включил эмулятор");
+            assert!(app.hdmap.active, "{key:?} закрыл нативный экран");
+            assert_eq!(app.pending_key, None, "{key:?} ушёл в эмулятор");
         }
     }
 
