@@ -291,12 +291,10 @@ impl App<'_> {
         let layout = world::save_layout_kladov();
         let base = layout.pilot_name as usize;
         if self.save_editor_sel == 1 {
-            // Cash raw (0.1 Cr)
+            // Сумма целиком в десятых кредита; две ячейки денег и их
+            // нормализация — через общий доступ к блоку командира.
             if let Ok(v) = self.save_editor_input.parse::<u32>() {
-                let off = base + 0x14;
-                if off + 4 <= self.machine.mem.len() {
-                    self.machine.mem[off..off + 4].copy_from_slice(&v.to_le_bytes());
-                }
+                world::set_commander_cash_tenths(&mut self.machine.mem, base, v);
             }
         }
     }
@@ -425,18 +423,10 @@ impl App<'_> {
                     let delta: i32 = if code == ArrowLeft { -1 } else { 1 };
                     match self.save_editor_sel {
                         1 => {
-                            let off = base + 0x14;
-                            if off + 4 <= self.machine.mem.len() {
-                                let v = u32::from_le_bytes([
-                                    self.machine.mem[off],
-                                    self.machine.mem[off + 1],
-                                    self.machine.mem[off + 2],
-                                    self.machine.mem[off + 3],
-                                ]);
-                                let nv = (v as i64 + (delta as i64) * 10).clamp(0, u32::MAX as i64) as u32;
-                                let bytes = nv.to_le_bytes();
-                                self.machine.mem[off..off + 4].copy_from_slice(&bytes);
-                            }
+                            let v = world::commander_cash_tenths(&self.machine.mem, base);
+                            let nv = (v as i64 + (delta as i64) * 10)
+                                .clamp(0, world::MAX_CASH_TENTHS as i64) as u32;
+                            world::set_commander_cash_tenths(&mut self.machine.mem, base, nv);
                             true
                         }
                         2 => {

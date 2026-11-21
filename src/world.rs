@@ -3,6 +3,14 @@
 use crate::galaxy;
 use crate::native;
 
+/// `PilotCash2low` — старшая часть денег, число полных порций по 10000
+/// десятых кредита (то есть по 1000 кредитов).
+const OFF_CASH2: usize = 18;
+/// `PilotCash1` — младшая часть денег, остаток 0..9999 десятых кредита.
+const OFF_CASH1: usize = 20;
+/// Максимум для двух половин денег (`cash2*10000 + cash1`).
+pub const MAX_CASH_TENTHS: u32 = 65535 * 10000 + 9999;
+
 /// Поле `PlanetPresent` — имя текущей системы, подготовленное оригиналом
 /// (версия Кладова). Именно его оригинал печатает в заголовке рынка.
 const PLANET_PRESENT: usize = 0xDEE4;
@@ -14,6 +22,36 @@ const PLANET_NAME_LEN: usize = 8;
 /// Раскладка адресов сейва/лоада версии Кладова.
 pub fn save_layout_kladov() -> native::SaveLayout {
     native::KLADOV_SAVE
+}
+
+/// Прочитать `u16 LE` из памяти, не выходя за границы среза.
+fn read_u16(mem: &[u8], addr: usize) -> u32 {
+    let lo = mem.get(addr).copied().unwrap_or(0) as u32;
+    let hi = mem.get(addr + 1).copied().unwrap_or(0) as u32;
+    lo | (hi << 8)
+}
+
+/// Деньги командира в десятых кредита: `PilotCash2low*10000 + PilotCash1`.
+///
+/// Обе ячейки — `u16 LE`; в оригинале `IncCASH` переносит в `PilotCash2low`
+/// каждую полную порцию в 10000 десятых (1000 кредитов). Отдельно читать
+/// только `PilotCash1` нельзя: старшая часть задаёт тысячи кредитов.
+pub fn commander_cash_tenths(mem: &[u8], base: usize) -> u32 {
+    read_u16(mem, base + OFF_CASH2) * 10000 + read_u16(mem, base + OFF_CASH1)
+}
+
+/// Записать деньги в блок командира, нормализуя перенос между ячейками.
+///
+/// Записываются только два поля денег: соседние `PilotRnd` и груз не трогаются.
+pub fn set_commander_cash_tenths(mem: &mut [u8], base: usize, tenths: u32) {
+    let tenths = tenths.min(MAX_CASH_TENTHS);
+    let cash2 = (tenths / 10000) as u16;
+    let cash1 = (tenths % 10000) as u16;
+    if base + OFF_CASH1 + 2 > mem.len() {
+        return;
+    }
+    mem[base + OFF_CASH2..base + OFF_CASH2 + 2].copy_from_slice(&cash2.to_le_bytes());
+    mem[base + OFF_CASH1..base + OFF_CASH1 + 2].copy_from_slice(&cash1.to_le_bytes());
 }
 
 /// Маркеры «заставки» и старта игры. Пока игра проигрывает заставку,

@@ -222,7 +222,7 @@ pub(crate) fn draw_save_editor_fullscreen(
 
     let b = |off: usize| save_data.get(off).copied().unwrap_or(0);
     let name = summary_name(save_data);
-    let cash = u32::from_le_bytes([b(0x14), b(0x15), b(0x16), b(0x17)]);
+    let cash = crate::world::commander_cash_tenths(save_data, 0);
     let fuel = b(0x2E);
     let missiles = b(0x2F);
 
@@ -289,14 +289,11 @@ fn draw_save_summary(
     let left = x0 + 8;
     let mut y = top;
     let b = |off: usize| save_data.get(off).copied().unwrap_or(0);
-    let u32_at = |off: usize| {
-        u32::from_le_bytes([b(off), b(off + 1), b(off + 2), b(off + 3)])
-    };
 
     let name = summary_name(save_data);
     let legal = b(0x0B);
     let rating = u32::from_le_bytes([b(0x0C), b(0x0D), b(0x0E), 0]);
-    let cash = u32_at(0x14);
+    let cash = crate::world::commander_cash_tenths(save_data, 0);
 
     let rows: [(usize, &str, String); 26] = [
         (0x00, "NAME", name),
@@ -304,7 +301,7 @@ fn draw_save_summary(
         (0x0C, "RATING", format!("{rating} {}", rating_text(rating))),
         (0x0F, "SERVICE", hex_at(save_data, 0x0F, 5)),
         (
-            0x14,
+            0x12,
             "CASH",
             format!("{}.{} Cr", cash / 10, cash % 10),
         ),

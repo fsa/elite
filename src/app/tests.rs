@@ -27,7 +27,10 @@ use crate::ui::present::{
     DebugView, SRC_H, SRC_W, blit_zx_frame, debug_button_at, debug_button_rects, draw_debug_panel,
     save_editor_button_at, save_editor_button_rect,
 };
-use crate::world::{current_planet_color, save_layout_kladov, scene_markers};
+use crate::world::{
+    MAX_CASH_TENTHS, commander_cash_tenths, current_planet_color, save_layout_kladov,
+    scene_markers,
+};
 
 
     /// Boot the real game image with the real ROM, as `main` does.
@@ -335,6 +338,69 @@ use crate::world::{current_planet_color, save_layout_kladov, scene_markers};
         app.machine.intro_seen = true;
         app.sync_intro_state();
         assert!(!app.save_editor_open, "кадр не закрыл редактор на заставке");
+    }
+
+    /// Деньги в редакторе — сумма двух половин блока командира. Стрелки и
+    /// ввод меняют её целиком и не затирают соседние поля (`PilotRnd`, груз).
+    #[test]
+    fn save_editor_cash_uses_both_halves() {
+        let opts = test_options();
+        let mut app = App::new(boot(), &opts);
+        let p = save_layout_kladov().pilot_name as usize;
+        app.machine.mem[p + 18..p + 20].copy_from_slice(&327u16.to_le_bytes());
+        app.machine.mem[p + 20..p + 22].copy_from_slice(&9868u16.to_le_bytes());
+        app.machine.mem[p + 22] = 0xA5; // PilotRnd
+        app.machine.mem[p + 23] = 0x5A; // первый товар груза
+
+        app.save_editor_open = true;
+        app.save_editor_sel = 1;
+        app.key_event(KeyCode::ArrowRight, true, false);
+        assert_eq!(commander_cash_tenths(&app.machine.mem, p), 3_279_878);
+        assert_eq!(
+            u16::from_le_bytes([app.machine.mem[p + 18], app.machine.mem[p + 19]]),
+            327
+        );
+        assert_eq!(
+            u16::from_le_bytes([app.machine.mem[p + 20], app.machine.mem[p + 21]]),
+            9878
+        );
+
+        app.key_event(KeyCode::Enter, true, false);
+        for digit in "2500000".bytes() {
+            let key = match digit {
+                b'0' => KeyCode::Digit0,
+                b'1' => KeyCode::Digit1,
+                b'2' => KeyCode::Digit2,
+                b'3' => KeyCode::Digit3,
+                b'4' => KeyCode::Digit4,
+                b'5' => KeyCode::Digit5,
+                b'6' => KeyCode::Digit6,
+                b'7' => KeyCode::Digit7,
+                b'8' => KeyCode::Digit8,
+                _ => KeyCode::Digit9,
+            };
+            app.key_event(key, true, false);
+        }
+        app.key_event(KeyCode::Enter, true, false);
+        assert_eq!(commander_cash_tenths(&app.machine.mem, p), 2_500_000);
+        assert_eq!(
+            u16::from_le_bytes([app.machine.mem[p + 18], app.machine.mem[p + 19]]),
+            250
+        );
+        assert_eq!(
+            u16::from_le_bytes([app.machine.mem[p + 20], app.machine.mem[p + 21]]),
+            0
+        );
+        assert_eq!(app.machine.mem[p + 22], 0xA5);
+        assert_eq!(app.machine.mem[p + 23], 0x5A);
+
+        // Слишком большая сумма ограничивается максимумом двух ячеек.
+        app.key_event(KeyCode::Enter, true, false);
+        for _ in 0..9 {
+            app.key_event(KeyCode::Digit9, true, false);
+        }
+        app.key_event(KeyCode::Enter, true, false);
+        assert_eq!(commander_cash_tenths(&app.machine.mem, p), MAX_CASH_TENTHS);
     }
 
     /// F6 открывает нативную карту галактики на станции. Пока карта открыта,
