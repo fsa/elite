@@ -126,6 +126,11 @@ pub struct Flight {
     system_color: u32,
     /// Нативная анимация вылета/прыжка/стыковки вместо ZX-ролика.
     transition: TransitionState,
+    /// После стыковки оригинал сбрасывает флаги перехода раньше, чем уходит
+    /// с кабинного экрана, а `IndDanger = 0` может записать ещё позже. В этот
+    /// промежуток вид должен оставаться тёмным: обычная сцена показывалась бы
+    /// «сквозь станцию».
+    pub(super) docking_blackout: bool,
     /// Боевые эффекты: лазеры и попадания.
     combat: Combat,
     /// Облака частиц на месте уничтоженных объектов.
@@ -152,6 +157,7 @@ impl Flight {
             planet_color: PLANET_COLOR,
             system_color: 0,
             transition: TransitionState::new(),
+            docking_blackout: false,
             combat: Combat::new(),
             explosions: Explosions::new(),
             messages: Messages::new(),
@@ -173,6 +179,7 @@ impl Flight {
         self.game_over = false;
         self.bodies.clear();
         self.transition.reset();
+        self.docking_blackout = false;
         self.combat.reset();
         self.explosions.reset();
         self.messages.reset();
@@ -190,6 +197,7 @@ impl Flight {
     /// показывать — уход станции или тоннель.
     pub fn start_transition(&mut self, launch: bool, mem: &[u8]) {
         self.transition.start(launch, mem);
+        self.docking_blackout = false;
         if launch {
             self.speed_resync = true;
         }
@@ -200,6 +208,7 @@ impl Flight {
     /// гиперпрыжка, отсчёт которого уже закончился к моменту открытия F1).
     pub fn start_transition_kind(&mut self, kind: TransitionKind, countdown: u8) {
         self.transition.start_kind(kind, countdown);
+        self.docking_blackout = false;
         if kind == TransitionKind::Launch {
             self.speed_resync = true;
         }
@@ -259,6 +268,7 @@ impl Flight {
     pub fn close(&mut self) {
         self.active = false;
         self.transition.reset();
+        self.docking_blackout = false;
         self.messages.reset();
     }
 
@@ -285,7 +295,11 @@ impl Flight {
     /// Гибель корабля (`PlayerGameOver`) тоже не закрывает вид — оригинал ещё
     /// держит кабину, а нативный рендер показывает «Game Over»; на заставку
     /// вид закрывает приложение (см. `App::follow_flight_screen`).
-    pub fn follow_z80_screen(&mut self, mem: &[u8]) {
+    ///
+    /// `launch` передаёт приложение: по памяти в момент перехода вылет и
+    /// стыковку различить нельзя (`JumpDocking` у обоих равен `1`, а
+    /// `IndDanger` к моменту проверки уже изменён обеими сторонами).
+    pub fn follow_z80_screen(&mut self, mem: &[u8], launch: bool) {
         let Some(&screen) = mem.get(Z80_WHAT_ON_SCREEN) else {
             return;
         };
@@ -294,16 +308,16 @@ impl Flight {
         }
         if memory::z80_in_transition(mem) {
             // Ролик теперь рисуем сами: нативный вид остаётся открытым и
-            // получает состояние перехода. Вылет/прыжок/стыковку по флагам
-            // различает `start_transition` (для вылета признак передаёт App).
-            // Если вид временно скрыт (показ эмулятора), состояние перехода
-            // всё равно поддерживаем, чтобы F1 вернул ту же анимацию.
+            // получает состояние перехода. Если вид временно скрыт (показ
+            // эмулятора), состояние перехода всё равно поддерживаем, чтобы F1
+            // вернул ту же анимацию.
             if !self.transition.in_transition() {
-                self.transition.start(false, mem);
+                self.transition.start(launch, mem);
                 self.explosions.reset();
             }
             return;
         }
+        let was_docking = matches!(self.transition.kind(), Some(TransitionKind::Docking));
         self.transition.reset();
         if !self.active {
             return;
@@ -315,7 +329,17 @@ impl Flight {
             if screen == 0x0B && !self.seen_flight_screen {
                 return;
             }
+            self.docking_blackout = false;
             self.active = false;
+            return;
+        }
+        // Оригинал гасит флаги перехода, пока ещё держит вид из кабины.
+        // `IndDanger = 0` он может записать позже, поэтому одним только
+        // признаком «пристыкован» пользоваться нельзя: между сбросом флагов
+        // и уходом на информационный экран нативный вид рисовал бы обычный
+        // космос. Держим чёрный фон до смены экрана Z80.
+        if was_docking && memory::z80_in_cockpit(mem) {
+            self.docking_blackout = true;
         }
     }
 

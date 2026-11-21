@@ -29,6 +29,12 @@ pub(super) fn draw(f: &mut Flight, frame: &mut Frame, geom: &CockpitGeom, font: 
     let view_bottom = geom.panel_y.clamp(1, frame.height as i32);
     let view_h = view_bottom as usize;
     frame.fill_rect(0, 0, frame.width, view_h, BG);
+    if f.docking_blackout {
+        // Между концом нативного тоннеля и уходом Z80 на информационный экран
+        // оригинал ещё держит кабину с уже пристыкованным кораблём. Обычная
+        // сцена в этот момент выглядела бы как вид сквозь станцию.
+        return;
+    }
     // Плотность звёзд зависит от площади вида: на большом разрешении
     // исходных 16 точек недостаточно, экран выглядит пустым.
     f.stars.resize(star_count_for(frame.width, view_h));

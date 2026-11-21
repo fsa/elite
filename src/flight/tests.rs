@@ -881,7 +881,7 @@ fn game_over_keeps_native_view_and_sets_flag() {
     );
 
     let mut f = open();
-    f.follow_z80_screen(&mem);
+    f.follow_z80_screen(&mem, false);
     assert!(f.active, "нативный вид закрылся при гибели");
     f.set_view_dir(ViewDir::Right);
     f.sync_from_z80(&mem);

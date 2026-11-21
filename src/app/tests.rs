@@ -1525,6 +1525,64 @@ use crate::world::{
         assert!(app.pending_flight.is_none(), "запрос вида пережил стыковку");
     }
 
+    /// После стыковки Z80 сбрасывает флаги перехода раньше, чем уходит с
+    /// кабинного экрана. Пока он там, нативный вид обязан оставаться чёрным,
+    /// а не рисовать планету и станцию «насквозь».
+    #[test]
+    fn docking_blackout_lasts_until_z80_leaves_cockpit() {
+        let opts = test_options();
+        let mut app = App::new(boot(), &opts);
+        app.machine.intro_seen = false;
+        app.machine.mem[flight::Z80_WHAT_ON_SCREEN] = 0;
+        app.machine.mem[flight::Z80_IND_DANGER] = 1;
+        app.machine.mem[flight::Z80_JUMP_COUNTDOWN] = 0;
+        app.flight.open(0);
+        app.follow_flight_screen();
+
+        app.machine.mem[flight::Z80_JUMP_DOCKING] = 1;
+        app.machine.mem[flight::Z80_FLG_JUMP_DOCKING] = 1;
+        app.follow_flight_screen();
+        assert_eq!(
+            app.flight.transition_kind(),
+            Some(flight::TransitionKind::Docking),
+            "стыковка не распознана"
+        );
+
+        // Оригинал сбросил флаги перехода, но ещё держит кабину и даже не
+        // успел записать `IndDanger = 0`. Затемнение не должно зависеть от
+        // этой ячейки: иначе последующая обычная сцена выглядит как космос.
+        app.machine.mem[flight::Z80_JUMP_DOCKING] = 0;
+        app.machine.mem[flight::Z80_FLG_JUMP_DOCKING] = 0;
+        app.follow_flight_screen();
+        assert!(app.flight.active, "вид закрылся до информационного экрана");
+        assert!(app.flight.docking_blackout, "после стыковки нет затемнения");
+
+        app.machine.mem[flight::Z80_IND_DANGER] = 0;
+        app.follow_flight_screen();
+        assert!(app.flight.docking_blackout, "затемнение снято раньше экрана");
+
+        let (w, h) = (256usize * 5, 192usize * 5);
+        let g = cockpit::panel_geometry(w as u32, h as u32);
+        app.machine.hd.resize(w, h);
+        app.machine.hd.clear(display::TRANSPARENT);
+        app.flight.draw(&mut app.machine.hd, &g, ZX_FONT);
+        let view = g.view();
+        for y in view.y..view.y + view.h {
+            for x in view.x..view.x + view.w {
+                assert_eq!(
+                    app.machine.hd.pixels()[y as usize * w + x as usize],
+                    0xFF00_0000,
+                    "в виде после стыковки рисуется не фон ({x},{y})"
+                );
+            }
+        }
+
+        app.machine.mem[flight::Z80_WHAT_ON_SCREEN] = 0x0B;
+        app.follow_flight_screen();
+        assert!(!app.flight.active, "вид не закрылся на станционном экране");
+        assert!(!app.flight.docking_blackout, "затемнение не снято");
+    }
+
     /// Реальная игра: `F1` на станции запускает вылет, нативный рендер
     /// включается уже во время перехода и показывает свою анимацию вылета.
     #[test]
@@ -1563,6 +1621,9 @@ use crate::world::{
         let mut frames = 0;
         while frames < 1500 && !app.flight.active {
             app.machine.run_frame();
+            // Как в настоящем кадре: сначала приложение распознаёт переход,
+            // и только потом открывает отложенный вид.
+            app.switch_to_flight_on_transition();
             app.open_pending_flight();
             frames += 1;
         }
@@ -2701,6 +2762,9 @@ use crate::world::{
         app.machine.mem[flight::Z80_JUMP_DOCKING] = 1;
         app.machine.mem[flight::Z80_FLG_JUMP_DOCKING] = 1;
         app.machine.mem[flight::Z80_JUMP_COUNTDOWN] = 0;
+        // В кадре состояние до эмуляции уже показывает космос — по нему и
+        // отличаем стыковку от вылета.
+        app.sync_state();
         app.switch_to_flight_on_transition();
         assert_eq!(
             app.flight.transition_kind(),
@@ -2710,7 +2774,10 @@ use crate::world::{
         assert_eq!(app.flight.view_dir, flight::ViewDir::Forward);
 
         app.flight.close();
-        app.machine.mem[flight::Z80_IND_DANGER] = 0;
+        // При вылете оригинал сразу пишет `IndDanger = 4`, поэтому саму
+        // команду вылета запоминает приложение — по ней и выбираем анимацию.
+        app.machine.mem[flight::Z80_IND_DANGER] = 4;
+        app.pending_launch = true;
         app.flight_emulator = true;
         app.switch_to_flight_on_transition();
         assert!(app.flight.active, "вылет не открыл нативный вид из эмулятора");
@@ -2720,6 +2787,7 @@ use crate::world::{
             Some(flight::TransitionKind::Launch),
             "вылет показан не как вылет"
         );
+        assert!(!app.pending_launch, "запрос вылета не был израсходован");
         assert_eq!(app.flight.view_dir, flight::ViewDir::Forward);
     }
 

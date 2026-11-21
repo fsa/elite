@@ -514,9 +514,15 @@ impl App<'_> {
         if hyperspace && countdown > 0 {
             return;
         }
+        // `IndDanger` в момент перехода уже переписан обеими сторонами:
+        // при вылете оригинал ставит `4`, при стыковке обнуляет его в конце
+        // ролика, не обязательно вместе со сбросом флагов. Вылет отличаем по
+        // запросу `F1` и по состоянию кадра до эмуляции, а не по текущему
+        // значению ячейки.
+        let launch = self.pending_launch || self.state.is_docked();
         let kind = if hyperspace {
             flight::TransitionKind::Hyperspace
-        } else if flight::z80_is_docked(mem) {
+        } else if launch {
             flight::TransitionKind::Launch
         } else {
             flight::TransitionKind::Docking
@@ -524,6 +530,7 @@ impl App<'_> {
         self.show_flight(flight::ViewDir::Forward);
         self.flight.start_transition_kind(kind, countdown);
         self.saw_jump_countdown = false;
+        self.pending_launch = false;
     }
 
     /// Следить за экранными режимами Z80 под нативными экранами без
@@ -697,7 +704,11 @@ impl App<'_> {
             self.flight_emulator = false;
             return;
         }
-        self.flight.follow_z80_screen(&self.machine.mem);
+        let launch = self.pending_launch;
+        self.flight.follow_z80_screen(&self.machine.mem, launch);
+        if launch && self.flight.transition_kind() == Some(flight::TransitionKind::Launch) {
+            self.pending_launch = false;
+        }
     }
 
     /// Открыть нативный вид, отложенный до полёта или перехода (см.
