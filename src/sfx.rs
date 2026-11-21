@@ -26,6 +26,12 @@ pub enum Sfx {
     DockedBeep,
 }
 
+/// Описание звука: последовательность тонов бипера.
+#[derive(Clone, Copy, Debug)]
+struct ToneSeq {
+    tones: &'static [Tone],
+}
+
 /// Компактное описание прямоугольного сигнала бипера.
 #[derive(Clone, Copy, Debug)]
 struct Tone {
@@ -37,15 +43,16 @@ struct Tone {
     start_high: bool,
 }
 
+const DOCKED_BEEP: [Tone; 1] = [Tone {
+    half_period_tstates: 630,
+    edges: 194,
+    start_high: true,
+}];
+
 impl Sfx {
-    fn tone(self) -> Tone {
+    fn seq(self) -> ToneSeq {
         match self {
-            // Параметры сняты с ROM BEEPER 48K (0x03B5) для HL=0x0080, DE=0x0060.
-            Sfx::DockedBeep => Tone {
-                half_period_tstates: 630,
-                edges: 194,
-                start_high: true,
-            },
+            Sfx::DockedBeep => ToneSeq { tones: &DOCKED_BEEP },
         }
     }
 }
@@ -62,50 +69,65 @@ pub struct SfxPlayer {
 /// Состояние проигрываемого звука с масштабированием времени в фиксированной точке.
 #[derive(Clone, Copy, Debug)]
 struct Playing {
-    tone: Tone,
+    tones: &'static [Tone],
+    tone_idx: usize,
     edge_index: u32,
     /// Накопитель: сколько "такто-сэмплов" прошло в текущем полупериоде.
-    /// Порог перехода к следующему полупериоду: `half_period_tstates * SAMPLE_RATE`.
     accum: u64,
 }
 
 impl Playing {
-    fn new(tone: Tone) -> Self {
+    fn new(seq: ToneSeq) -> Self {
         Self {
-            tone,
+            tones: seq.tones,
+            tone_idx: 0,
             edge_index: 0,
             accum: 0,
         }
     }
 
+    fn tone(&self) -> Option<Tone> {
+        self.tones.get(self.tone_idx).copied()
+    }
+
     fn level(&self) -> bool {
+        let Some(tone) = self.tone() else { return false };
         if self.edge_index.is_multiple_of(2) {
-            self.tone.start_high
+            tone.start_high
         } else {
-            !self.tone.start_high
+            !tone.start_high
         }
     }
 
     fn finished(&self) -> bool {
-        self.edge_index >= self.tone.edges
+        self.tone_idx >= self.tones.len()
     }
 
     fn render(&mut self, out: &mut [i16]) {
-        if self.finished() || self.tone.half_period_tstates == 0 {
-            return;
-        }
-        let edge_len = self.tone.half_period_tstates as u64 * SAMPLE_RATE as u64;
         for sample in out.iter_mut() {
-            if self.finished() {
+            let Some(tone) = self.tone() else {
                 break;
+            };
+            if tone.half_period_tstates == 0 || tone.edges == 0 {
+                self.tone_idx += 1;
+                self.edge_index = 0;
+                self.accum = 0;
+                continue;
             }
             let amp = if self.level() { AMP } else { -AMP };
             *sample = sample.saturating_add(amp);
 
+            let edge_len = tone.half_period_tstates as u64 * SAMPLE_RATE as u64;
             self.accum += CPU_HZ as u64;
             while self.accum >= edge_len && !self.finished() {
                 self.accum -= edge_len;
                 self.edge_index += 1;
+                if let Some(tone) = self.tone() {
+                    if self.edge_index >= tone.edges {
+                        self.tone_idx += 1;
+                        self.edge_index = 0;
+                    }
+                }
             }
         }
     }
@@ -119,7 +141,7 @@ impl SfxPlayer {
 
     /// Начать воспроизведение эффекта, прерывая текущий, если он есть.
     pub fn play(&mut self, sfx: Sfx) {
-        self.playing = Some(Playing::new(sfx.tone()));
+        self.playing = Some(Playing::new(sfx.seq()));
     }
 
     /// Подмешать звук в буфер моно-сэмплов (44100 Гц, `i16`).

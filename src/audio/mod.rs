@@ -132,25 +132,20 @@ pub fn write_wav(path: &str, samples: &[i16], rate: u32) {
 
 impl Audio {
     /// Положить моно-сэмплы (44100 Гц, i16) в очередь воспроизведения.
+    ///
+    /// Сэмплы ставятся в очередь как есть, без ресемплинга по содержимому:
+    /// так сохраняется тактовая форма бипера Z80 (периоды по T-states).
     pub fn push(&self, samples: &[i16]) {
-        let now = Instant::now();
         let mut shared = self.shared.lock().unwrap();
-        match shared.last_push {
-            Some(prev) => {
-                let dt = now.duration_since(prev).as_secs_f64();
-                shared.acc = (shared.acc + dt * SAMPLE_RATE as f64).min(MAX_QUEUED as f64);
+        // Небольшой стартовый запас, чтобы первый колбэк не взял тишину.
+        if shared.last_push.is_none() && shared.samples.is_empty() {
+            let pad = shared.last;
+            for _ in 0..CUSHION {
+                shared.samples.push_back(pad);
             }
-            None => shared.acc = CUSHION as f64,
         }
-        shared.last_push = Some(now);
-
-        if shared.acc < 1.0 {
-            return;
-        }
-        let need = shared.acc.floor() as usize;
-        shared.acc -= need as f64;
-        for i in 0..need {
-            let s = samples.get(i).copied().unwrap_or(shared.last);
+        shared.last_push = Some(Instant::now());
+        for &s in samples {
             if shared.samples.len() >= MAX_QUEUED {
                 shared.samples.pop_front();
                 shared.dropped += 1;

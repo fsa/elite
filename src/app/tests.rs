@@ -573,11 +573,9 @@ use crate::world::{
         let opts = test_options();
         let mut app = App::new(boot(), &opts);
         assert!(!app.accelerated);
-        assert_eq!(app.emulation_frames(), 1);
 
         app.key_event(KeyCode::F12, true, false);
         assert!(app.accelerated, "F12 не включил ускорение");
-        assert_eq!(app.emulation_frames(), 2);
 
         // Автоповтор удерживаемой клавиши режим не переключает.
         app.key_event(KeyCode::F12, true, true);
@@ -586,7 +584,6 @@ use crate::world::{
         app.key_event(KeyCode::F12, false, false);
         app.key_event(KeyCode::F12, true, false);
         assert!(!app.accelerated, "F12 не выключил ускорение");
-        assert_eq!(app.emulation_frames(), 1);
     }
 
     /// F5 — нативный экран закупки оборудования на станции. Экран открывается

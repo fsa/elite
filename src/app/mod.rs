@@ -54,7 +54,10 @@ enum StationNativePending {
 }
 
 /// Частота кадров ZX Spectrum: 50 кадров в секунду (кадр каждые 20 мс).
-const FRAME_TIME: Duration = Duration::from_micros(1_000_000 / 50);
+const Z80_FRAME_TIME: Duration = Duration::from_micros(1_000_000 / 50);
+/// Целевая частота отображения. Держим 50 Гц, чтобы 1 кадр рендера = 1 кадр
+/// Z80/звука и форма бипера сохранялась по тактам CPU.
+const DISPLAY_FRAME_TIME: Duration = Duration::from_micros(1_000_000 / 50);
 
 /// Запустить оконный режим и крутить цикл событий до выхода.
 pub(crate) fn run(machine: Spectrum, opts: &Options) {
@@ -234,6 +237,9 @@ struct App<'a> {
     mouse_wheel_up: bool,
     mouse_wheel_down: bool,
     next_frame: Instant,
+    /// Накопитель реального времени для фиксированных шагов Z80 (50 Гц).
+    z80_accum: Duration,
+    last_tick: Instant,
 }
 
 impl<'a> App<'a> {
@@ -310,6 +316,8 @@ impl<'a> App<'a> {
             mouse_wheel_up: false,
             mouse_wheel_down: false,
             next_frame: Instant::now(),
+            z80_accum: Duration::ZERO,
+            last_tick: Instant::now(),
         };
         // Снапшот может сразу быть пристыкованным. Это не переход из
         // эмулятора, а начальное состояние, поэтому `L` не посылаем.

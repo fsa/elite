@@ -12,7 +12,7 @@ use winit::event_loop::{ActiveEventLoop, ControlFlow};
 use winit::keyboard::{ModifiersState, PhysicalKey};
 use winit::window::{Fullscreen, Window, WindowId};
 
-use super::{App, FRAME_TIME};
+use super::{App, DISPLAY_FRAME_TIME};
 use crate::cockpit;
 use crate::display;
 use crate::flight;
@@ -126,6 +126,8 @@ impl App<'_> {
         self.context = Some(context);
         self.surface = Some(surface);
         self.next_frame = Instant::now();
+        self.last_tick = Instant::now();
+        self.z80_accum = std::time::Duration::ZERO;
     }
 }
 
@@ -348,10 +350,9 @@ impl ApplicationHandler for App<'_> {
         self.update_cursor_visibility();
         if now >= self.next_frame {
             self.frame();
-            self.next_frame += FRAME_TIME;
-            // Если не успеваем за реальным временем — не копим долг.
+            self.next_frame += DISPLAY_FRAME_TIME;
             if self.next_frame <= now {
-                self.next_frame = now + FRAME_TIME;
+                self.next_frame = now + DISPLAY_FRAME_TIME;
             }
         }
         event_loop.set_control_flow(ControlFlow::WaitUntil(self.next_frame));

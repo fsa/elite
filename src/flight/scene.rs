@@ -11,6 +11,12 @@ use super::memory::{
     self, Z80_OBJ_CORIOLIS, Z80_OBJ_MISSILE, Z80_OBJ_SLOT0, Z80_OENERG_DESTROYED,
     Z80_PLANET_CRD, Z80_SLOT_OADRDATA, Z80_SLOT_OENERG, Z80_SLOT_SIZE, Z80_SUN_CRD,
 };
+
+pub(super) const BODY_SRC_CORIOLIS: u8 = 0;
+pub(super) const BODY_SRC_SLOT0: u8 = 1;
+pub(super) const BODY_SRC_MISSILE: u8 = 7;
+pub(super) const BODY_SRC_SUN: u8 = 8;
+pub(super) const BODY_SRC_PLANET: u8 = 9;
 use super::palette::{sun_tint, CYAN, SUN_COLOR};
 
 /// Радиус солнца в единицах координат игры.
@@ -36,6 +42,9 @@ pub(super) enum BodyKind {
 /// Объект сцены в координатах вида.
 #[derive(Clone)]
 pub(super) struct Body {
+    /// Источник в памяти Z80: станция, слоты кораблей, ракета, солнце, планета.
+    /// Нужен для интерполяции между игровыми тактами.
+    pub(super) source: u8,
     pub(super) kind: BodyKind,
     /// Геометрия (для кораблей и станции).
     pub(super) model: Option<&'static Ship>,
@@ -62,22 +71,36 @@ pub(super) fn build(mem: &[u8], planet_color: u32, system_color: u32) -> Vec<Bod
     let mut bodies: Vec<Body> = Vec::with_capacity(9);
     // Станция, шесть основных слотов и слот ракеты. Пустые слоты
     // обнулены: `oEnerg == 0`, ссылки на модель нет.
-    push_z80_slot(&mut bodies, mem, Z80_OBJ_CORIOLIS, BodyKind::Station);
+    push_z80_slot(
+        &mut bodies,
+        mem,
+        Z80_OBJ_CORIOLIS,
+        BODY_SRC_CORIOLIS,
+        BodyKind::Station,
+    );
     for i in 0..6 {
         push_z80_slot(
             &mut bodies,
             mem,
             Z80_OBJ_SLOT0 + i * Z80_SLOT_SIZE,
+            BODY_SRC_SLOT0 + i as u8,
             BodyKind::Ship,
         );
     }
-    push_z80_slot(&mut bodies, mem, Z80_OBJ_MISSILE, BodyKind::Ship);
+    push_z80_slot(
+        &mut bodies,
+        mem,
+        Z80_OBJ_MISSILE,
+        BODY_SRC_MISSILE,
+        BodyKind::Ship,
+    );
 
     // Солнце и планета: те же координаты вида, что использует оригинал.
     push_z80_celestial(
         &mut bodies,
         mem,
         Z80_SUN_CRD,
+        BODY_SRC_SUN,
         BodyKind::Sun,
         SUN_RADIUS,
         sun_color,
@@ -86,6 +109,7 @@ pub(super) fn build(mem: &[u8], planet_color: u32, system_color: u32) -> Vec<Bod
         &mut bodies,
         mem,
         Z80_PLANET_CRD,
+        BODY_SRC_PLANET,
         BodyKind::Planet,
         PLANET_RADIUS,
         planet_color,
@@ -137,7 +161,7 @@ pub(super) fn slot_pose(mem: &[u8], base: usize) -> Option<([f32; 3], f32)> {
 /// Ориентация хранится двумя осями: ось Z модели — по `+0x0A/0C/0E`,
 /// ось Y — по `+0x10/12/14` (знаковые байты), ось X достраивается как
 /// `Y × Z`.
-fn push_z80_slot(bodies: &mut Vec<Body>, mem: &[u8], base: usize, kind: BodyKind) {
+fn push_z80_slot(bodies: &mut Vec<Body>, mem: &[u8], base: usize, source: u8, kind: BodyKind) {
     if mem.get(base + Z80_SLOT_OENERG) == Some(&Z80_OENERG_DESTROYED) {
         return;
     }
@@ -163,6 +187,7 @@ fn push_z80_slot(bodies: &mut Vec<Body>, mem: &[u8], base: usize, kind: BodyKind
         Rotation::from_axes(x_axis, y_axis, z_axis)
     };
     bodies.push(Body {
+        source,
         kind,
         model: Some(model),
         pos,
@@ -180,6 +205,7 @@ fn push_z80_celestial(
     bodies: &mut Vec<Body>,
     mem: &[u8],
     addr: usize,
+    source: u8,
     kind: BodyKind,
     radius: f32,
     color: u32,
@@ -188,6 +214,7 @@ fn push_z80_celestial(
         return;
     }
     bodies.push(Body {
+        source,
         kind,
         model: None,
         pos: [

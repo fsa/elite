@@ -95,9 +95,9 @@ pub(crate) fn draw_stars_view(
 
 fn draw_bodies_view(f: &Flight, frame: &mut Frame, screen: &Screen, view_rot: &Rotation, s: i32) {
     let cam = view_rot.transpose();
+    let render_bodies = f.render_bodies();
     // Дальние объекты рисуются первыми, ближние перекрывают их.
-    let mut order: Vec<(f32, usize)> = f
-        .bodies
+    let mut order: Vec<(f32, usize)> = render_bodies
         .iter()
         .enumerate()
         .map(|(i, b)| (cam.apply(b.pos)[2], i))
@@ -107,7 +107,7 @@ fn draw_bodies_view(f: &Flight, frame: &mut Frame, screen: &Screen, view_rot: &R
         if vz <= view::NEAR {
             continue;
         }
-        let b = &f.bodies[i];
+        let b = &render_bodies[i];
         let vpos = cam.apply(b.pos);
         if vpos[2] <= view::NEAR {
             continue;

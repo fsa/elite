@@ -120,6 +120,14 @@ pub struct Flight {
     /// вместо подписи направления.
     game_over: bool,
     bodies: Vec<Body>,
+    /// Положение/ориентация тел на предыдущем игровом такте Z80.
+    /// Используется для интерполяции между тактами (~5.5 Гц), чтобы корабли
+    /// не «прыгали» при отрисовке 50 Гц.
+    prev_bodies: Vec<Body>,
+    /// Время, прошедшее с последнего игрового такта Z80.
+    tick_accum: f32,
+    /// Длительность последнего интервала между игровыми тактами Z80.
+    tick_interval: f32,
     stars: StarField,
     planet_color: u32,
     /// Цвет системы на карте галактики — оттенок почти белой звезды.
@@ -153,6 +161,9 @@ impl Flight {
             lasers: [0; 4],
             game_over: false,
             bodies: Vec::new(),
+            prev_bodies: Vec::new(),
+            tick_accum: 0.0,
+            tick_interval: 1.0 / 5.5,
             stars: StarField::new(STAR_COUNT),
             planet_color: PLANET_COLOR,
             system_color: 0,
@@ -178,6 +189,9 @@ impl Flight {
         self.lasers = [0; 4];
         self.game_over = false;
         self.bodies.clear();
+        self.prev_bodies.clear();
+        self.tick_accum = 0.0;
+        self.tick_interval = 1.0 / 5.5;
         self.transition.reset();
         self.docking_blackout = false;
         self.combat.reset();
@@ -409,6 +423,7 @@ impl Flight {
         if mem[Z80_STARS_FAST_SCROLL] == 1 {
             self.z80_fast_scroll = true;
         }
+        let prev_bodies_snapshot = self.bodies.clone();
         if ticked {
             // J-драйв `PrintStars` проматывает звёзды тремя проходами
             // `sub_78B1` (скорости `0x1E` и дважды `0x10`) и на этом такте
@@ -436,6 +451,9 @@ impl Flight {
             // `CalcNewCrdObj_Pl`.
             let delta_z = 2.0 * (self.speed.round() + 1.0);
             self.explosions.tick_world(&turn, delta_z);
+            self.prev_bodies = prev_bodies_snapshot;
+            self.tick_interval = self.tick_accum.max(1.0 / 60.0);
+            self.tick_accum = 0.0;
         }
 
         // Выстрел в оригинале виден только по нагреву лазера.
@@ -444,6 +462,9 @@ impl Flight {
         // Сцена собирается из слотов Z80; попадание ловим по урону щитов уже
         // после того, как известны цели ответного луча.
         self.bodies = scene::build(mem, self.planet_color, self.system_color);
+        if !ticked && self.prev_bodies.is_empty() {
+            self.prev_bodies = self.bodies.clone();
+        }
         self.combat.observe_shield(
             mem,
             &self.bodies,
@@ -461,6 +482,7 @@ impl Flight {
     /// Мир не двигается — его координаты приходят из [`Self::sync_from_z80`].
     pub fn tick(&mut self, dt: f32) {
         let dt = dt.clamp(0.0, 0.1);
+        self.tick_accum += dt;
         self.combat.tick(dt);
         self.explosions.tick(dt);
         self.transition.tick(dt);
@@ -489,6 +511,41 @@ impl Flight {
         render::draw(self, frame, geom, font);
     }
 
+    /// Тела сцены для рендера с интерполяцией между игровыми тактами Z80.
+    ///
+    /// Z80 обновляет координаты объектов на своём такте (~5.5 Гц), а рендер
+    /// идёт с частотой кадра. Без интерполяции корабли и станция заметно
+    /// «прыгают». Звёзды не интерполируются: они рисуются из живого поля,
+    /// которое уже обновляется по `dt`.
+    pub(super) fn render_bodies(&self) -> Vec<Body> {
+        let alpha = if self.tick_interval > 0.0 {
+            (self.tick_accum / self.tick_interval).clamp(0.0, 1.0)
+        } else {
+            1.0
+        };
+        if alpha >= 0.999 || self.prev_bodies.is_empty() {
+            return self.bodies.clone();
+        }
+        self.bodies
+            .iter()
+            .map(|body| {
+                let Some(prev) = self.prev_bodies.iter().find(|p| p.source == body.source) else {
+                    return body.clone();
+                };
+                // Другой тип/модель в том же слоте — это уже новый объект.
+                if prev.kind != body.kind || prev.model.map(|m| m.addr) != body.model.map(|m| m.addr) {
+                    return body.clone();
+                }
+                let mut out = body.clone();
+                for k in 0..3 {
+                    out.pos[k] = prev.pos[k] + (body.pos[k] - prev.pos[k]) * alpha;
+                }
+                out.rot = lerp_rotation(&prev.rot, &body.rot, alpha);
+                out
+            })
+            .collect()
+    }
+
     /// Цвет рамки кокпита: белый, при попадании — красный.
     pub fn cockpit_color(&self) -> u32 {
         if self.combat.damage_flash > 0.0 {
@@ -508,6 +565,54 @@ impl Flight {
             cockpit::BAR_RED
         }
     }
+}
+
+fn lerp_rotation(a: &Rotation, b: &Rotation, t: f32) -> Rotation {
+    let mut m = [[0.0f32; 3]; 3];
+    for i in 0..3 {
+        for j in 0..3 {
+            m[i][j] = a.m[i][j] + (b.m[i][j] - a.m[i][j]) * t;
+        }
+    }
+    // Переортонормализация: интерполяция матриц портит ортогональность,
+    // а рендер ожидает оси СКО.
+    let z = normalize3([m[0][2], m[1][2], m[2][2]]);
+    let mut y = normalize3([m[0][1], m[1][1], m[2][1]]);
+    let mut x = cross3(y, z);
+    if len3(x) < 1e-6 {
+        x = [1.0, 0.0, 0.0];
+        y = cross3(z, x);
+    } else {
+        x = normalize3(x);
+        y = cross3(z, x);
+    }
+    if len3(y) < 1e-6 {
+        y = [0.0, 1.0, 0.0];
+    } else {
+        y = normalize3(y);
+    }
+    Rotation::from_axes(x, y, z)
+}
+
+fn normalize3(v: [f32; 3]) -> [f32; 3] {
+    let l = len3(v);
+    if l < 1e-6 {
+        [0.0, 0.0, 0.0]
+    } else {
+        [v[0] / l, v[1] / l, v[2] / l]
+    }
+}
+
+fn len3(v: [f32; 3]) -> f32 {
+    (v[0] * v[0] + v[1] * v[1] + v[2] * v[2]).sqrt()
+}
+
+fn cross3(a: [f32; 3], b: [f32; 3]) -> [f32; 3] {
+    [
+        a[1] * b[2] - a[2] * b[1],
+        a[2] * b[0] - a[0] * b[2],
+        a[0] * b[1] - a[1] * b[0],
+    ]
 }
 
 impl Default for Flight {

@@ -6,7 +6,7 @@ use std::time::Instant;
 
 use winit::window::Window;
 
-use super::App;
+use super::{App, Z80_FRAME_TIME};
 use crate::cockpit;
 use crate::display;
 use crate::flight;
@@ -19,26 +19,46 @@ use crate::ui::present::{blit_zx_frame, draw_debug_panel};
 use crate::{native, world};
 
 impl App<'_> {
-    /// Сколько кадров Z80 прогнать за один кадр показа. `F12` включает
-    /// ускорение вдвое.
-    pub(super) fn emulation_frames(&self) -> u64 {
-        if self.accelerated { 2 } else { 1 }
+    /// Сколько фиксированных 50 Гц кадров Z80 накопилось за реальное время.
+    ///
+    /// Эмулятор привязан к настенным часам, а не к частоте отрисовки. Это
+    /// позволяет рендерить чаще 50 Гц и не дёргать игру при пропусках кадров
+    /// рендера: Z80 просто догонит накопленное время несколькими шагами.
+    fn take_emulation_frames(&mut self, now: std::time::Instant) -> u64 {
+        let mut dt = now.saturating_duration_since(self.last_tick);
+        self.last_tick = now;
+        // При паузе/подвисании не копим огромный долг.
+        let cap = std::time::Duration::from_millis(100);
+        if dt > cap {
+            dt = cap;
+        }
+        self.z80_accum += dt;
+        let mut frames = 0u64;
+        while self.z80_accum >= Z80_FRAME_TIME {
+            self.z80_accum -= Z80_FRAME_TIME;
+            frames += 1;
+        }
+        if self.accelerated {
+            frames = frames.saturating_mul(2);
+        }
+        // Не даём одному кадру рендера превращаться в минутный догон.
+        frames.min(10)
     }
 
     /// Синтезировать и отдать звук последнего кадра (эмулятор + эффекты).
     ///
-    /// Когда эмулятор заморожен на станции, бипер не обновляется: звучит
-    /// только нативный эффект (например гудок `DOCKED`).
+    /// Аудио выдаётся на каждый кадр рендера фиксированным буфером 20 мс,
+    /// чтобы вывод не зависал при пропусках/избытке шагов Z80. Если Z80 не
+    /// выполнялся, держим текущий уровень бипера.
     fn play_frame_audio(&mut self, run_emulator: bool) {
         if self.audio.is_none() && self.wav_samples.is_none() && !self.sfx.is_playing() {
             return;
         }
-        let samples_count = (self.machine.audio_rate as usize) / 50;
         self.audio_buf.clear();
         if run_emulator {
             self.machine.render_audio(&mut self.audio_buf);
         } else {
-            self.audio_buf.resize(samples_count, 0);
+            self.machine.render_audio_hold(&mut self.audio_buf);
         }
         self.sfx.mix(&mut self.audio_buf);
         if let Some(audio) = &self.audio {
@@ -252,6 +272,8 @@ impl App<'_> {
             self.machine.hd.clear(display::TRANSPARENT);
         }
 
+        let z80_frames = self.take_emulation_frames(std::time::Instant::now());
+
         // Эмуляция и ввод зависят от текущего экрана. В нативном режиме
         // станции эмулятор стоит на экране капитана и больше не исполняется:
         // все данные уже доступны нативным экранам, ввод в Z80 не уходит.
@@ -273,9 +295,8 @@ impl App<'_> {
             self.machine.release_all_keys();
             self.machine.release_joystick();
             self.pending_key = None;
-            if !self.state.menu {
-                let frames = self.emulation_frames();
-                self.machine.run_frames(frames);
+            if !self.state.menu && z80_frames > 0 {
+                self.machine.run_frames(z80_frames);
                 emulator_ran = true;
                 self.play_frame_audio(true);
             }
@@ -286,30 +307,25 @@ impl App<'_> {
                         let in_flight = !self.state.intro
                             && self.state.location == crate::state::Location::Space;
                         if self.pending_station_native.is_some() {
-                            // Карту открыли из эмулятора на станции: `L` должен
-                            // дойти до Z80, пока нативный режим ещё не заморозил его.
                             self.forward_input();
                         } else if self.pending_key.is_some() {
-                            // Разовая клавиша (например `G`/`H` для отсчёта прыжка)
-                            // должна дойти до эмулятора под открытой картой.
                             self.forward_pending_key();
                         } else if in_flight {
-                            // Под картой Z80 продолжает работать, но кнопки
-                            // управления кораблём в него не идут (см. `forward_input`).
                             self.apply_input();
                         } else {
                             self.machine.release_all_keys();
                             self.machine.release_joystick();
                         }
-                        let frames = self.emulation_frames();
-                        self.machine.run_frames(frames);
-                        emulator_ran = true;
-                        self.switch_to_flight_on_transition();
-                        self.open_pending_status();
-                        self.open_pending_sysinfo();
-                        self.open_pending_market();
-                        self.sync_flight_after_frames(frames);
-                        self.play_frame_audio(true);
+                        if z80_frames > 0 {
+                            self.machine.run_frames(z80_frames);
+                            emulator_ran = true;
+                            self.switch_to_flight_on_transition();
+                            self.open_pending_status();
+                            self.open_pending_sysinfo();
+                            self.open_pending_market();
+                            self.sync_flight_after_frames(z80_frames);
+                            self.play_frame_audio(true);
+                        }
                     } else {
                         self.machine.release_all_keys();
                         self.machine.release_joystick();
@@ -319,10 +335,11 @@ impl App<'_> {
                     if !self.state.menu {
                         if self.pending_station_native.is_some() {
                             self.forward_input();
-                            let frames = self.emulation_frames();
-                            self.machine.run_frames(frames);
-                            emulator_ran = true;
-                            self.play_frame_audio(true);
+                            if z80_frames > 0 {
+                                self.machine.run_frames(z80_frames);
+                                emulator_ran = true;
+                                self.play_frame_audio(true);
+                            }
                         } else {
                             self.machine.release_all_keys();
                             self.machine.release_joystick();
@@ -335,22 +352,23 @@ impl App<'_> {
                 Screen::PilotStatus | Screen::PlanetInfo | Screen::Market => {
                     if !self.state.menu {
                         self.apply_input();
-                        let frames = self.emulation_frames();
-                        self.machine.run_frames(frames);
-                        emulator_ran = true;
-                        self.switch_to_flight_on_transition();
-                        self.open_pending_status();
-                        self.open_pending_sysinfo();
-                        self.open_pending_market();
-                        self.open_pending_shop();
-                        self.open_pending_flight();
-                        self.follow_native_screens();
-                        if self.machine.save_requested {
-                            self.machine.save_requested = false;
-                            storage::do_save(&mut self.machine, self.opts, &mut self.last_path);
+                        if z80_frames > 0 {
+                            self.machine.run_frames(z80_frames);
+                            emulator_ran = true;
+                            self.switch_to_flight_on_transition();
+                            self.open_pending_status();
+                            self.open_pending_sysinfo();
+                            self.open_pending_market();
+                            self.open_pending_shop();
+                            self.open_pending_flight();
+                            self.follow_native_screens();
+                            if self.machine.save_requested {
+                                self.machine.save_requested = false;
+                                storage::do_save(&mut self.machine, self.opts, &mut self.last_path);
+                            }
+                            self.sync_flight_after_frames(z80_frames);
+                            self.play_frame_audio(true);
                         }
-                        self.sync_flight_after_frames(frames);
-                        self.play_frame_audio(true);
                     } else {
                         self.machine.release_all_keys();
                         self.machine.release_joystick();
@@ -358,12 +376,13 @@ impl App<'_> {
                 }
                 Screen::Flight | Screen::Animation(_) => {
                     if !self.state.menu {
-                        let frames = self.emulation_frames();
                         self.forward_input();
-                        self.machine.run_frames(frames);
-                        emulator_ran = true;
-                        self.sync_flight_after_frames(frames);
-                        self.play_frame_audio(true);
+                        if z80_frames > 0 {
+                            self.machine.run_frames(z80_frames);
+                            emulator_ran = true;
+                            self.sync_flight_after_frames(z80_frames);
+                            self.play_frame_audio(true);
+                        }
                     } else {
                         self.machine.release_all_keys();
                         self.machine.release_joystick();
@@ -373,13 +392,9 @@ impl App<'_> {
                     self.splash.tick();
                     self.machine.release_all_keys();
                     self.machine.release_joystick();
-                    if !self.state.menu {
-                        self.machine.run_frames(self.emulation_frames());
+                    if !self.state.menu && z80_frames > 0 {
+                        self.machine.run_frames(z80_frames);
                         emulator_ran = true;
-                        // `Space` запустил игру: эмулятор уже перешёл в режим
-                        // капитана своей веткой старта. Проверяем это по состоянию
-                        // Z80 и только после этого показываем нативный экран —
-                        // пока идёт заставка, он был бы сразу закрыт.
                         self.open_pending_status();
                     }
                 }
@@ -389,20 +404,22 @@ impl App<'_> {
                         self.machine.release_joystick();
                     } else {
                         self.apply_input();
-                        self.machine.run_frames(self.emulation_frames());
-                        emulator_ran = true;
-                        self.switch_to_flight_on_transition();
-                        self.open_pending_status();
-                        self.open_pending_sysinfo();
-                        self.open_pending_market();
-                        self.open_pending_shop();
-                        self.open_pending_flight();
-                        self.follow_native_screens();
-                        if self.machine.save_requested {
-                            self.machine.save_requested = false;
-                            storage::do_save(&mut self.machine, self.opts, &mut self.last_path);
+                        if z80_frames > 0 {
+                            self.machine.run_frames(z80_frames);
+                            emulator_ran = true;
+                            self.switch_to_flight_on_transition();
+                            self.open_pending_status();
+                            self.open_pending_sysinfo();
+                            self.open_pending_market();
+                            self.open_pending_shop();
+                            self.open_pending_flight();
+                            self.follow_native_screens();
+                            if self.machine.save_requested {
+                                self.machine.save_requested = false;
+                                storage::do_save(&mut self.machine, self.opts, &mut self.last_path);
+                            }
+                            self.play_frame_audio(true);
                         }
-                        self.play_frame_audio(true);
                     }
                 }
             }
