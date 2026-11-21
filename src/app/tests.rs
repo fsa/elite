@@ -1304,6 +1304,31 @@ use crate::world::{
         );
     }
 
+    #[test]
+    fn game_over_clears_ship_rotation() {
+        let opts = test_options();
+        let mut app = App::new(boot(), &opts);
+        app.machine.mem[flight::Z80_IND_DANGER] = 1;
+        app.key_event(KeyCode::F1, true, false);
+        app.machine.mem[flight::Z80_WHAT_ON_SCREEN] = 0;
+        app.machine.mem[flight::Z80_PLAYER_GAME_OVER] = 1;
+        app.machine.mem[flight::Z80_HIGH_ANGLE_LR] = 0x40;
+        app.machine.mem[flight::Z80_HIGH_ANGLE_DU] = 0x84;
+
+        app.sync_flight_after_frames(1);
+
+        assert_eq!(
+            app.machine.mem[flight::Z80_HIGH_ANGLE_LR],
+            0,
+            "крен после гибели не обнулён"
+        );
+        assert_eq!(
+            app.machine.mem[flight::Z80_HIGH_ANGLE_DU],
+            0,
+            "тангаж после гибели не обнулён"
+        );
+    }
+
     /// `F1` на станции — родная команда вылета. Нативный вид включается уже
     /// во время перехода и проигрывает свою анимацию вылета.
     #[test]

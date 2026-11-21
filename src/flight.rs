@@ -40,8 +40,8 @@ use crate::render3d::Rotation;
 use self::combat::Combat;
 use self::explosions::Explosions;
 use self::memory::{
-    Z80_COBRA_MK4, Z80_HIGH_ANGLE_DU, Z80_HIGH_ANGLE_LR, Z80_HIGH_DELTA_SPEED, Z80_MEM_MIN,
-    Z80_SPEED_GAUGE, Z80_STARS_FAST_SCROLL, Z80_STARS_LEN, Z80_STARS_TABLE,
+    Z80_COBRA_MK4, Z80_HIGH_DELTA_SPEED, Z80_MEM_MIN, Z80_SPEED_GAUGE, Z80_STARS_FAST_SCROLL,
+    Z80_STARS_LEN, Z80_STARS_TABLE,
 };
 use self::messages::Messages;
 use self::palette::{planet_green, PLANET_COLOR};
@@ -67,7 +67,8 @@ mod view;
 // модуля полёта, поэтому не считаем их неиспользуемыми в обычной сборке.
 #[allow(unused_imports)]
 pub use self::memory::{
-    z80_in_cockpit, z80_in_transition, z80_is_docked, Z80_FLG_JUMP_DOCKING, Z80_IND_DANGER,
+    z80_in_cockpit, z80_in_transition, z80_is_docked, z80_player_dead, z80_stop_rotation,
+    Z80_FLG_JUMP_DOCKING, Z80_HIGH_ANGLE_DU, Z80_HIGH_ANGLE_LR, Z80_IND_DANGER,
     Z80_JUMP_COUNTDOWN, Z80_JUMP_DOCKING, Z80_PLAYER_GAME_OVER, Z80_SCREEN_INFO_PLANET,
     Z80_SCREEN_LOCAL_MAP, Z80_SCREEN_MARKET, Z80_SCREEN_PILOT_INFO, Z80_WHAT_ON_SCREEN,
 };
@@ -391,6 +392,12 @@ impl Flight {
             *laser = memory::laser_type(mem, mount);
         }
         self.game_over = memory::z80_player_dead(mem);
+        if self.game_over {
+            // Оригинал на гибели пишет `HighDeltaSpeed = 0`, но индикатор
+            // скорости больше не обновляет. Старое значение из индикатора
+            // заставляло бы звёзды лететь дальше, хотя камера уже стоит.
+            self.speed = 0.0;
+        }
         if self.game_over || self.in_animation_mode() {
             // При взрыве корабля и в режиме анимации (вылет/гиперпереход)
             // показывается только передний вид.
@@ -439,18 +446,27 @@ impl Flight {
             let pitch = -memory::read_signed8(mem[Z80_HIGH_ANGLE_DU]) * STAR_ANGLE_DU_PER_UNIT;
             let turn = Rotation::axis_angle([0.0, 0.0, 1.0], roll)
                 .mul(&Rotation::axis_angle([1.0, 0.0, 0.0], pitch));
-            // Каждый проход `sub_78B1` поворачивает поле, поэтому при J-драйве
-            // за такт набегает тройной поворот.
-            for _ in 0..if fast { 3 } else { 1 } {
-                self.stars.turn(&turn);
+            if self.game_over {
+                // При гибели оригинал обнуляет скорость и блокирует управление:
+                // камера стоит. Обломки из слотов Z80 уносятся своей скоростью,
+                // а облака взрывов не поворачиваются и не летят на игрока.
+                // Шаг `CalcNewCrdObj_Pl` при `HighDeltaSpeed == 0` равен 2.
+                let delta_z = 2.0;
+                self.explosions.tick_death(delta_z);
+            } else {
+                // Каждый проход `sub_78B1` поворачивает поле, поэтому при
+                // J-драйве за такт набегает тройной поворот.
+                for _ in 0..if fast { 3 } else { 1 } {
+                    self.stars.turn(&turn);
+                }
+                self.stars.mark_boost(fast);
+                // Облака живут в той же системе координат, что и тела: на
+                // такте они поворачиваются вместе с миром и сдвигаются к
+                // игроку на шаг `CalcNewCrdObj_Pl`.
+                let delta_z = 2.0 * (self.speed.round() + 1.0);
+                self.explosions.tick_world(&turn, delta_z);
             }
-            self.stars.mark_boost(fast);
             self.z80_fast_scroll = false;
-            // Облака живут в той же системе координат, что и тела: на такте
-            // они поворачиваются вместе с миром и сдвигаются к игроку на шаг
-            // `CalcNewCrdObj_Pl`.
-            let delta_z = 2.0 * (self.speed.round() + 1.0);
-            self.explosions.tick_world(&turn, delta_z);
             self.prev_bodies = prev_bodies_snapshot;
             self.tick_interval = self.tick_accum.max(1.0 / 60.0);
             self.tick_accum = 0.0;
@@ -486,6 +502,11 @@ impl Flight {
         self.combat.tick(dt);
         self.explosions.tick(dt);
         self.transition.tick(dt);
+        // После гибели камера стоит: даже нулевая скорость даёт базовый шаг
+        // `speed_b(0) == 1`, поэтому звёзды надо остановить явно.
+        if self.game_over {
+            return;
+        }
         if let Some(t) = self.transition.current {
             if t.kind == TransitionKind::Hyperspace && t.warp {
                 let initial_speed = t.warp_initial_speed.unwrap_or(self.speed);

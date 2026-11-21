@@ -911,6 +911,39 @@ fn game_over_does_not_trigger_star_boost() {
     assert!(!f.stars.boost, "на гибели включился J-драйв");
 }
 
+/// Оригинал при гибели перестаёт пересчитывать углы, но оставляет последние
+/// значения: слоты продолжают вращаться, и обломки уезжают в сторону поворота.
+#[test]
+fn game_over_clears_z80_rotation() {
+    let mut mem = z80_mem_with_flight();
+    mem[Z80_HIGH_ANGLE_LR] = 0x40;
+    mem[Z80_HIGH_ANGLE_DU] = 0x84;
+    z80_stop_rotation(&mut mem);
+    assert_eq!(mem[Z80_HIGH_ANGLE_LR], 0, "крен не обнулён");
+    assert_eq!(mem[Z80_HIGH_ANGLE_DU], 0, "тангаж не обнулён");
+}
+
+/// После гибели камера стоит: индикатор скорости уже не обновляется, поэтому
+/// старое значение из памяти не должно заставлять звёзды лететь дальше.
+#[test]
+fn game_over_stops_camera() {
+    let mut f = open();
+    let mut mem = z80_mem_with_flight();
+    f.sync_from_z80(&mem);
+    assert!(f.speed > 0.0, "в тестовой памяти нет скорости");
+
+    mem[Z80_PLAYER_GAME_OVER] = 1;
+    f.sync_from_z80(&mem);
+    assert_eq!(f.speed, 0.0, "после гибели осталась старая скорость");
+
+    let before = f.stars.stars[0].pos;
+    f.tick(0.1);
+    assert_eq!(
+        f.stars.stars[0].pos, before,
+        "звёзды летят после гибели — камера продолжает двигаться"
+    );
+}
+
 /// При гибели верхняя подпись направления заменяется надписью «Game Over»
 /// по центру вида.
 #[test]
@@ -1518,6 +1551,37 @@ fn particle_cloud_follows_game_tick() {
     assert!(
         after[2] < before[2] - 1.0,
         "облако не сдвинулось к игроку: {} -> {}",
+        before[2],
+        after[2]
+    );
+}
+
+/// После гибели облако не поворачивается вместе с камерой и уносится от неё.
+#[test]
+fn game_over_cloud_flies_away_from_camera() {
+    let mut f = open();
+    let mut mem = z80_mem_with_flight();
+    f.sync_from_z80(&mem);
+    mark_slot_destroyed(&mut mem, Z80_OBJ_SLOT0);
+    f.sync_from_z80(&mem);
+    assert_eq!(f.explosions.clouds.len(), 1, "облако не создано");
+
+    let before = f.explosions.clouds[0].center;
+    // Игровой такт с поворотом камеры и гибелью игрока.
+    mem[Z80_STARS_TABLE] = mem[Z80_STARS_TABLE].wrapping_add(1);
+    mem[Z80_HIGH_ANGLE_LR] = 0x40;
+    mem[Z80_PLAYER_GAME_OVER] = 1;
+    f.sync_from_z80(&mem);
+    let after = f.explosions.clouds[0].center;
+
+    assert_eq!(
+        [after[0], after[1]],
+        [before[0], before[1]],
+        "облако повернулось вместе с камерой после гибели"
+    );
+    assert!(
+        after[2] > before[2],
+        "облако не ушло от игрока: {} -> {}",
         before[2],
         after[2]
     );

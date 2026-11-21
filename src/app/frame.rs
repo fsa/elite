@@ -73,7 +73,7 @@ impl App<'_> {
     /// эмулятора. Под нативными информационными экранами полёт не рисуется,
     /// но симуляция продолжает жить; кнопки управления при этом в игру не
     /// уходят (см. `App::forward_input`).
-    fn sync_flight_after_frames(&mut self, frames: u64) {
+    pub(super) fn sync_flight_after_frames(&mut self, frames: u64) {
         let in_space_flight = !self.machine.intro_seen
             && !flight::z80_is_docked(&self.machine.mem)
             && (flight::z80_in_cockpit(&self.machine.mem)
@@ -91,6 +91,12 @@ impl App<'_> {
             || self.shop.active;
         if !(info_overlay && in_space_flight) {
             self.follow_flight_screen();
+        }
+        if flight::z80_player_dead(&self.machine.mem) {
+            // Оригинал блокирует управление, но оставляет последнюю угловую
+            // скорость: без этого обломки продолжают ехать в сторону последнего
+            // поворота корабля вместо того, чтобы лететь от игрока.
+            flight::z80_stop_rotation(&mut self.machine.mem);
         }
         self.flight.sync_from_z80(&self.machine.mem);
         // Повтор текста в этом кадре продлевает показ сообщения.

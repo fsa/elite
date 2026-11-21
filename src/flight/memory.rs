@@ -38,9 +38,9 @@ pub const Z80_FLG_JUMP_DOCKING: usize = 0xD040;
 /// перехода.
 pub const Z80_JUMP_COUNTDOWN: usize = 0xDBA1;
 /// `HighAngleLR` — угловая скорость крена (знак-величина).
-pub(super) const Z80_HIGH_ANGLE_LR: usize = 0x70E4;
+pub const Z80_HIGH_ANGLE_LR: usize = 0x70E4;
 /// `HighAngleDU` — угловая скорость тангажа (знак-величина).
-pub(super) const Z80_HIGH_ANGLE_DU: usize = 0x70E5;
+pub const Z80_HIGH_ANGLE_DU: usize = 0x70E5;
 /// `HighDeltaSpeed` — текущая скорость, 0..=31.
 pub(super) const Z80_HIGH_DELTA_SPEED: usize = 0x70E6;
 /// `Speed` — индикатор скорости: `5 * HighDeltaSpeed + 5`, 0..=0xA0.
@@ -118,6 +118,21 @@ pub(super) fn laser_type(mem: &[u8], mount: usize) -> u8 {
 /// но вместо подписи направления показывает «Game Over».
 pub fn z80_player_dead(mem: &[u8]) -> bool {
     mem.get(Z80_PLAYER_GAME_OVER).copied().unwrap_or(0) != 0
+}
+
+/// Обнулить угловые скорости при гибели игрока.
+///
+/// Оригинал в `GameMain` при `BlockControl != 0` перестаёт вызывать
+/// `CalcAngSpeed4Prn`, но оставляет последние `HighAngleLR/DU` в памяти.
+/// `CalcNewCrdObj_Pl` продолжает поворачивать слоты на эти углы, поэтому
+/// обломки уезжали в сторону последнего поворота корабля. Гасим скорости,
+/// чтобы после гибели они летели только от игрока.
+pub fn z80_stop_rotation(mem: &mut [u8]) {
+    if mem.len() <= Z80_HIGH_ANGLE_DU {
+        return;
+    }
+    mem[Z80_HIGH_ANGLE_LR] = 0;
+    mem[Z80_HIGH_ANGLE_DU] = 0;
 }
 
 /// Показывает ли Z80 сейчас настоящий вид из кабины, а не переход.

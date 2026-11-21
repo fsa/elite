@@ -8,7 +8,9 @@
 //!
 //! Облако живёт в тех же координатах, что и тела сцены, поэтому на игровом
 //! такте оно поворачивается вместе со звёздами и сдвигается к игроку на шаг
-//! `CalcNewCrdObj_Pl` (см. [`Explosions::tick_world`]).
+//! `CalcNewCrdObj_Pl` (см. [`Explosions::tick_world`]). После гибели игрока
+//! камера стоит, и облако, наоборот, уносится от неё (см.
+//! [`Explosions::tick_death`]).
 
 use crate::render3d::Rotation;
 
@@ -126,6 +128,17 @@ impl Explosions {
             for p in &mut cloud.particles {
                 p.offset = turn.apply(p.offset);
             }
+        }
+    }
+
+    /// Игровой такт после гибели игрока: унести облако от камеры.
+    ///
+    /// Оригинал на гибели обнуляет `HighDeltaSpeed` и блокирует управление,
+    /// поэтому к облаку не применяется поворот камеры. Вместо сдвига к игроку
+    /// (`CalcNewCrdObj_Pl`) центр уходит вглубь сцены: обломки летят от тебя.
+    pub(super) fn tick_death(&mut self, delta_z: f32) {
+        for cloud in &mut self.clouds {
+            cloud.center[2] += delta_z;
         }
     }
 
