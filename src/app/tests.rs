@@ -853,11 +853,11 @@ use crate::world::{current_planet_color, save_layout_kladov, scene_markers};
         );
     }
 
-    /// Кнопки управления кораблём уходят в эмулятор только из нативного вида
-    /// полёта. Под нативной картой Z80 продолжает работать, но стрельба и
-    /// движение корабля должны быть остановлены.
+    /// Кнопки управления кораблём уходят в эмулятор из нативного вида полёта
+    /// и с экрана эмулятора в полёте. Под нативной картой Z80 продолжает
+    /// работать, но стрельба и движение корабля должны быть остановлены.
     #[test]
-    fn ship_controls_reach_emulator_only_in_native_flight() {
+    fn ship_controls_reach_emulator_in_flight_views() {
         let opts = test_options();
         let mut app = App::new(boot(), &opts);
         app.machine.intro_seen = false;
@@ -880,7 +880,24 @@ use crate::world::{current_planet_color, save_layout_kladov, scene_markers};
         app.key_event(KeyCode::Space, false, false);
         app.key_event(KeyCode::KeyS, false, false);
 
-        // Нативная карта поверх полёта: кнопки управления в игру не идут.
+        // Экран эмулятора в полёте: управление кораблём тоже идёт в игру.
+        app.key_event(KeyCode::Backquote, true, false);
+        assert!(app.flight_emulator && !app.flight.active);
+        app.key_event(KeyCode::Space, true, false);
+        app.key_event(KeyCode::ArrowUp, true, false);
+        app.apply_input();
+        assert_eq!(
+            app.machine.keyboard[fire_row] & (1 << fire_bit),
+            0,
+            "огонь не дошёл до эмулятора"
+        );
+        assert_ne!(app.machine.kempston, 0, "джойстик не дошёл до эмулятора");
+        app.key_event(KeyCode::Space, false, false);
+        app.key_event(KeyCode::ArrowUp, false, false);
+
+        // Вернуться в нативный полёт и открыть карту поверх него: под
+        // информационным экраном кнопки управления в игру не идут.
+        app.key_event(KeyCode::F1, true, false);
         app.key_event(KeyCode::F6, true, false);
         assert!(app.hdmap.active, "подготовка: карта не открылась");
         app.key_event(KeyCode::Space, true, false);
@@ -901,10 +918,10 @@ use crate::world::{current_planet_color, save_layout_kladov, scene_markers};
         );
     }
 
-    /// Экран эмулятора в полёте не является экраном управления кораблём:
-    /// стрельба и джойстик в игру не уходят, а буквенные клавиши уходят.
+    /// На экране эмулятора в полёте кнопки управления кораблём уходят в игру,
+    /// как и обычные игровые клавиши.
     #[test]
-    fn emulator_screen_blocks_ship_controls() {
+    fn emulator_screen_passes_ship_controls_in_flight() {
         let opts = test_options();
         let mut app = App::new(boot(), &opts);
         app.machine.intro_seen = false;
@@ -925,12 +942,12 @@ use crate::world::{current_planet_color, save_layout_kladov, scene_markers};
         app.key_event(KeyCode::ArrowUp, true, false);
         app.apply_input();
         let (row, bit) = matrix_pos(KeyCode::Space).expect("Space в матрице");
-        assert_ne!(
+        assert_eq!(
             app.machine.keyboard[row] & (1 << bit),
             0,
-            "огонь ушёл в эмулятор"
+            "огонь не дошёл до эмулятора"
         );
-        assert_eq!(app.machine.kempston, 0, "джойстик ушёл в эмулятор");
+        assert_ne!(app.machine.kempston, 0, "джойстик не дошёл до эмулятора");
 
         // Обычная игровая клавиша продолжает доходить до Z80.
         app.key_event(KeyCode::KeyL, true, false);

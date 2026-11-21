@@ -481,10 +481,7 @@ impl App<'_> {
                         draw_pause_menu(&mut self.machine.hd, ZX_FONT, self.menu_sel, true);
                     }
                 }
-                Screen::Emulator(orig) => {
-                    if !orig.is_cockpit_view() {
-                        self.draw_danger_half();
-                    }
+                Screen::Emulator(_) => {
                     if self.state.menu {
                         draw_pause_menu(&mut self.machine.hd, ZX_FONT, self.menu_sel, false);
                     }

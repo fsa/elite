@@ -1049,10 +1049,14 @@ impl App<'_> {
         }
     }
 
-    /// Разрешено ли управление кораблём: только нативный вид полёта без
-    /// наложенных информационных экранов.
+    /// Разрешено ли управление кораблём: нативный вид полёта или экран
+    /// эмулятора в полёте, без наложенных информационных экранов.
     fn ship_controls_allowed(&self) -> bool {
-        self.flight.active
+        let in_flight = self.flight.active
+            || (self.flight_emulator
+                && !self.machine.intro_seen
+                && !flight::z80_is_docked(&self.machine.mem));
+        in_flight
             && !self.hdmap.active
             && !self.shop.active
             && !self.status.active
