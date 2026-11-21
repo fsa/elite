@@ -25,6 +25,7 @@ use crate::splash;
 use crate::ui::menu::draw_pause_menu;
 use crate::ui::present::{
     DebugView, SRC_H, SRC_W, blit_zx_frame, debug_button_at, debug_button_rects, draw_debug_panel,
+    save_editor_button_at, save_editor_button_rect,
 };
 use crate::world::{current_planet_color, save_layout_kladov, scene_markers};
 
@@ -223,7 +224,8 @@ use crate::world::{current_planet_color, save_layout_kladov, scene_markers};
             }
         }
         let mut out = vec![0xFFFF_FFFFu32; w as usize * h as usize];
-        draw_debug_panel(&src, &mut out, w as usize, h as usize, &[], DebugView::Summary);        let x0 = display::debug_panel_x(w) as usize;
+        draw_debug_panel(&src, &mut out, w as usize, h as usize, &[], DebugView::Summary, false);
+        let x0 = display::debug_panel_x(w) as usize;
         assert_eq!(out[x0] & 0xFF, 0);
         assert_eq!(out[(SRC_H - 1) * w as usize + x0] & 0xFF, (SRC_H - 1) as u32);
         assert_eq!(out[SRC_H * w as usize + x0], 0, "ниже миниатюры не чёрно");
@@ -268,8 +270,9 @@ use crate::world::{current_planet_color, save_layout_kladov, scene_markers};
             768,
             &save,
             DebugView::Summary,
+            false,
         );
-        draw_debug_panel(&src, &mut dump, w, 768, &save, DebugView::Dump);
+        draw_debug_panel(&src, &mut dump, w, 768, &save, DebugView::Dump, false);
         let content = rects[0].1 as usize + rects[0].3 + 8;
         let has_content = |buf: &[u32]| {
             (content..(content + 200).min(768))
@@ -278,6 +281,60 @@ use crate::world::{current_planet_color, save_layout_kladov, scene_markers};
         assert!(has_content(&summary));
         assert!(has_content(&dump));
         assert_ne!(summary, dump);
+    }
+
+    /// Кнопка редактора рисуется в отладочной панели только в игре.
+    /// На заставке `intro_seen` взведён, и кнопка скрыта.
+    #[test]
+    fn editor_button_shown_only_in_game() {
+        let (w, h) = (1280usize, 768usize);
+        let src = vec![0u32; SRC_W * SRC_H];
+        let (bx, by, bw, bh) = save_editor_button_rect(w, h);
+        let mut intro = vec![0u32; w * h];
+        let mut game = vec![0u32; w * h];
+        draw_debug_panel(&src, &mut intro, w, h, &[], DebugView::Summary, false);
+        draw_debug_panel(&src, &mut game, w, h, &[], DebugView::Summary, true);
+        let px = (bx + 1) as usize + (by + 1) as usize * w;
+        assert_eq!(intro[px], 0, "кнопка нарисована на заставке");
+        assert_ne!(game[px], 0, "кнопка не нарисована в игре");
+        assert!(save_editor_button_at(
+            w,
+            h,
+            bx as f64 + bw as f64 / 2.0,
+            by as f64 + bh as f64 / 2.0
+        ));
+    }
+
+    /// ALT+E не открывает редактор на заставке и работает после входа в игру.
+    #[test]
+    fn alt_e_editor_only_in_game() {
+        let opts = test_options();
+        let mut app = App::new(boot(), &opts);
+        app.alt = true;
+        app.machine.intro_seen = true;
+        app.key_event(KeyCode::KeyE, true, false);
+        assert!(!app.save_editor_open, "ALT+E сработал на заставке");
+
+        app.machine.intro_seen = false;
+        app.key_event(KeyCode::KeyE, true, false);
+        assert!(app.save_editor_open, "ALT+E не открыл редактор в игре");
+        app.key_event(KeyCode::KeyE, true, false);
+        assert!(!app.save_editor_open, "ALT+E не закрыл редактор");
+    }
+
+    /// Кадр не должен сам закрывать редактор в игре; закрытие — только на заставке.
+    #[test]
+    fn frame_keeps_editor_open_in_game() {
+        let opts = test_options();
+        let mut app = App::new(boot(), &opts);
+        app.machine.intro_seen = false;
+        app.save_editor_open = true;
+        app.sync_intro_state();
+        assert!(app.save_editor_open, "кадр закрыл редактор в игре");
+
+        app.machine.intro_seen = true;
+        app.sync_intro_state();
+        assert!(!app.save_editor_open, "кадр не закрыл редактор на заставке");
     }
 
     /// F6 открывает нативную карту галактики на станции. Пока карта открыта,

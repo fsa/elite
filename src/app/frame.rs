@@ -157,6 +157,20 @@ impl App<'_> {
         }
     }
 
+    /// На заставке нативные альтернативы и захват сообщений не нужны.
+    /// Редактор сохранений закрывается только здесь: в игре его открывает
+    /// `Alt+E` или кнопка, и сбрасывать флаг каждый кадр нельзя.
+    pub(super) fn sync_intro_state(&mut self) {
+        if !self.machine.intro_seen {
+            return;
+        }
+        if self.market.native {
+            self.market.disable();
+        }
+        self.close_intro_screens();
+        self.save_editor_open = false;
+    }
+
     /// Один кадр: ввод, эмуляция, звук, отрисовка и показ.
     ///
     /// Выбор того, что отображается, определяется централизованным
@@ -166,13 +180,7 @@ impl App<'_> {
             return;
         };
 
-        // На заставке нативные альтернативы и захват сообщений не нужны.
-        if self.machine.intro_seen {
-            if self.market.native {
-                self.market.disable();
-            }
-            self.close_intro_screens();
-        }
+        self.sync_intro_state();
 
         // Станция по умолчанию принадлежит нативным экранам: как только игра
         // пристыковалась и управление не отдано эмулятору явно, замораживаем
@@ -186,7 +194,8 @@ impl App<'_> {
         // к тому, что был открыт до неё.
         self.docked.expire(Instant::now());
         let capture = matches!(self.state.screen, Screen::Flight | Screen::Animation(_))
-            && !self.state.menu;
+            && !self.state.menu
+            && !self.save_editor_open;
         self.machine.game_msg.set_capture(capture);
 
         let size = window.inner_size();
@@ -196,6 +205,7 @@ impl App<'_> {
             || self.pending_station_native.is_some()
             || self.pause_stub
             || self.docked.is_active()
+            || self.save_editor_open
             || !matches!(self.state.screen, Screen::Emulator(_));
 
         // HD-слой нативного рендера очищается каждый кадр.
@@ -211,7 +221,12 @@ impl App<'_> {
         // станции эмулятор стоит на экране капитана и больше не исполняется:
         // все данные уже доступны нативным экранам, ввод в Z80 не уходит.
         let mut emulator_ran = false;
-        if self.station_native {
+        if self.save_editor_open {
+            self.machine.release_all_keys();
+            self.machine.release_joystick();
+            self.pending_key = None;
+            self.play_frame_audio(false);
+        } else if self.station_native {
             self.machine.release_all_keys();
             self.machine.release_joystick();
             self.pending_key = None;
@@ -546,7 +561,8 @@ impl App<'_> {
         if self.opts.debug {
             let layout = world::save_layout_kladov();
             let save = native::commander_block(&self.machine, layout);
-            draw_debug_panel(src, &mut out, ow, oh, save, self.debug_view);
+            // Кнопка редактора — только в игре: `intro_seen` взведён на заставке.
+            draw_debug_panel(src, &mut out, ow, oh, save, self.debug_view, !self.machine.intro_seen);
         }
         if self.save_editor_open {
             let layout = world::save_layout_kladov();

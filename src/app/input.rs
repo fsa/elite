@@ -523,6 +523,26 @@ impl App<'_> {
         if code == KeyCode::F10 {
             return;
         }
+        // Alt+E — открыть/закрыть редактор сейва (секретная комбинация). Игра на паузе, пока открыт.
+        if code == KeyCode::KeyE && self.alt && !repeat {
+            // `intro_seen` взведён на заставке: до входа в игру комбинация
+            // не должна открывать редактор.
+            if self.machine.intro_seen {
+                return;
+            }
+            self.save_editor_open = !self.save_editor_open;
+            if self.save_editor_open {
+                self.save_editor_sel = 0;
+                self.save_editor_editing = false;
+                self.save_editor_input.clear();
+                self.save_editor_name_editing = false;
+                self.save_editor_name_input.clear();
+                self.save_editor_hex_cursor = 0;
+                self.save_editor_hex_editing = false;
+                self.save_editor_hex_input.clear();
+            }
+            return;
+        }
         // Временная страница клавиш паузы закрывается следующим нажатием;
         // само нажатие при этом продолжает обрабатываться обычным порядком.
         if self.pause_stub && !repeat {

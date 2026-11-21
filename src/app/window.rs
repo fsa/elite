@@ -213,7 +213,7 @@ impl ApplicationHandler for App<'_> {
                         self.debug_view = view;
                         return;
                     }
-                    if save_editor_button_at(out_w, out_h, self.cursor_x, self.cursor_y) {
+                    if !self.machine.intro_seen && save_editor_button_at(out_w, out_h, self.cursor_x, self.cursor_y) {
                         self.save_editor_open = true;
                         self.save_editor_sel = 0;
                         self.save_editor_editing = false;

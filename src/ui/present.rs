@@ -85,6 +85,7 @@ pub(crate) fn draw_debug_panel(
     out_h: usize,
     save_data: &[u8],
     view: DebugView,
+    show_editor_button: bool,
 ) {
     let x0 = crate::display::debug_panel_x(out_w as u32) as usize;
     let panel_w = out_w - x0;
@@ -97,7 +98,7 @@ pub(crate) fn draw_debug_panel(
         let dst = y * out_w + x0;
         out[dst..dst + panel_w].copy_from_slice(&src[y * SRC_W..y * SRC_W + panel_w]);
     }
-    draw_debug_buttons(out, out_w, out_h, view);
+    draw_debug_buttons(out, out_w, out_h, view, show_editor_button);
     let top = SRC_H as i32 + (BUTTON_MARGIN + BUTTON_H + BUTTON_MARGIN) as i32;
     match view {
         DebugView::Summary => draw_save_summary(out, out_w, out_h, x0, save_data, top),
@@ -110,7 +111,7 @@ const WHITE: u32 = 0xFFD7_D7D7;
 const GREY: u32 = 0xFF80_8080;
 
 /// Кнопки под миниатюрой. Активная обведена голубым, неактивная — серым.
-fn draw_debug_buttons(out: &mut [u32], out_w: usize, out_h: usize, view: DebugView) {
+fn draw_debug_buttons(out: &mut [u32], out_w: usize, out_h: usize, view: DebugView, show_editor_button: bool) {
     let buttons = [
         ("1 SUM", DebugView::Summary),
         ("2 HEX", DebugView::Dump),
@@ -129,17 +130,19 @@ fn draw_debug_buttons(out: &mut [u32], out_w: usize, out_h: usize, view: DebugVi
         let text = if active { WHITE } else { GREY };
         draw_text(out, out_w, out_h, tx, ty, label, text, text, 1);
     }
-    // Отдельная кнопка открытия редактора сейва (внизу панели)
-    let (ex, ey, ew, eh) = save_editor_button_rect(out_w, out_h);
-    fill_rect(out, out_w, out_h, ex, ey, ew, eh, 0xFF101010);
-    fill_rect(out, out_w, out_h, ex, ey, ew, 1, CYAN);
-    fill_rect(out, out_w, out_h, ex, ey + eh as i32 - 1, ew, 1, CYAN);
-    fill_rect(out, out_w, out_h, ex, ey, 1, eh, CYAN);
-    fill_rect(out, out_w, out_h, ex + ew as i32 - 1, ey, 1, eh, CYAN);
-    let label = "SAVE EDITOR";
-    let tx = ex + ((ew as i32 - label.len() as i32 * 8) / 2).max(0);
-    let ty = ey + (eh as i32 - 8) / 2;
-    draw_text(out, out_w, out_h, tx, ty, label, WHITE, WHITE, 1);
+    if show_editor_button {
+        // Отдельная кнопка открытия редактора сейва (внизу панели)
+        let (ex, ey, ew, eh) = save_editor_button_rect(out_w, out_h);
+        fill_rect(out, out_w, out_h, ex, ey, ew, eh, 0xFF101010);
+        fill_rect(out, out_w, out_h, ex, ey, ew, 1, CYAN);
+        fill_rect(out, out_w, out_h, ex, ey + eh as i32 - 1, ew, 1, CYAN);
+        fill_rect(out, out_w, out_h, ex, ey, 1, eh, CYAN);
+        fill_rect(out, out_w, out_h, ex + ew as i32 - 1, ey, 1, eh, CYAN);
+        let label = "EDITOR";
+        let tx = ex + ((ew as i32 - label.len() as i32 * 8) / 2).max(0);
+        let ty = ey + (eh as i32 - 8) / 2;
+        draw_text(out, out_w, out_h, tx, ty, label, WHITE, WHITE, 1);
+    }
 }
 
 pub(crate) fn save_editor_button_rect(out_w: usize, out_h: usize) -> (i32, i32, usize, usize) {
@@ -212,7 +215,7 @@ pub(crate) fn draw_save_editor_fullscreen(
     let scale: usize = 2;
     let left = 16;
     let mut y = 16i32;
-    draw_text(out, out_w, out_h, left, y, "SAVE EDITOR (Esc to close)", CYAN, CYAN, scale);
+    draw_text(out, out_w, out_h, left, y, "EDITOR (Esc to close)", CYAN, CYAN, scale);
     y += (8 * scale as i32) + 8;
     draw_text(out, out_w, out_h, left, y, "Up/Down: select, Left/Right: change", GREY, GREY, scale);
     y += (8 * scale as i32) + 16;
