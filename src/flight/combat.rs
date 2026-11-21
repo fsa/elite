@@ -38,6 +38,8 @@ const MAX_ENEMY_SHOTS: usize = 2;
 /// вида. Поэтому линия правильно поворачивается вместе с полем, пока живёт;
 /// проекция в конкретный вид делается уже при отрисовке.
 pub(super) struct EnemyShot {
+    /// Индекс корабля в текущей сцене: один источник даёт только один луч.
+    pub(super) source: usize,
     pub(super) from: [f32; 3],
     pub(super) to: [f32; 3],
     pub(super) life: f32,
@@ -166,6 +168,7 @@ impl Combat {
             })
             .collect();
         targets.sort_by(|a, b| a.0.total_cmp(&b.0));
+        let active: Vec<usize> = self.enemy_shots.iter().map(|shot| shot.source).collect();
         for (_, i) in targets.into_iter().take(hits) {
             let from = laser_origin(&bodies[i]);
             let jx = (rng.next_u32() % 161) as f32 - 80.0;
@@ -174,7 +177,19 @@ impl Combat {
             // игрока, чтобы после поворота камеры при отрисовке луч снова
             // оказался у перекрестия, а не за камерой.
             let to = rot.apply([jx, jy, 8000.0]);
+            // Один корабль может выстрелить несколько раз, пока след прошлого
+            // выстрела ещё жив. Не умножаем линии от него, а обновляем уже
+            // существующий луч: новая цель и новый срок жизни.
+            if active.contains(&i) {
+                if let Some(shot) = self.enemy_shots.iter_mut().find(|s| s.source == i) {
+                    shot.from = from;
+                    shot.to = to;
+                    shot.life = ENEMY_LASER_TIME;
+                }
+                continue;
+            }
             self.enemy_shots.push(EnemyShot {
+                source: i,
                 from,
                 to,
                 life: ENEMY_LASER_TIME,

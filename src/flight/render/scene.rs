@@ -281,9 +281,6 @@ fn draw_enemy_shots_view(
             continue;
         };
         frame.line(x0, y0, x1, y1, ENEMY_BEAM);
-        // Второй пиксель поперёк луча делает выстрел заметнее на фоне
-        // тонких белых рёбер корпусов.
-        frame.line(x0, y0 + 1, x1, y1 + 1, RED);
     }
 }
 

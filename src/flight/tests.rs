@@ -512,6 +512,31 @@ fn enemy_beam_shown_when_shield_is_already_zero() {
 }
 
 #[test]
+fn repeated_hits_from_one_ship_keep_single_beam() {
+    let mut f = open();
+    let mut mem = z80_mem_with_flight();
+    f.sync_from_z80(&mem);
+
+    mem[Z80_SHIELD_FRONT] = 0x49;
+    f.sync_from_z80(&mem);
+    assert_eq!(f.combat.enemy_shots.len(), 1);
+    let first_to = f.combat.enemy_shots[0].to;
+
+    // Следующее попадание от того же корабля, пока прошлый луч ещё жив.
+    mem[Z80_SHIELD_FRONT] = 0x42;
+    f.sync_from_z80(&mem);
+    assert_eq!(
+        f.combat.enemy_shots.len(),
+        1,
+        "один корабль должен давать одну линию"
+    );
+    assert_ne!(
+        f.combat.enemy_shots[0].to, first_to,
+        "существующий луч не обновился"
+    );
+}
+
+#[test]
 fn enemy_beam_appears_in_rear_view() {
     let mut f = open();
     let mut mem = z80_mem_with_flight();
