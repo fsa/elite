@@ -52,6 +52,9 @@ pub(super) const Z80_SPEED_GAUGE: usize = 0x70F4;
 /// `byte_D08E`: <>0 — у игрока Cobra Mk IV (в блоке командира `PilotName`).
 /// От типа корабля зависит цвет длинных клеток приборной панели.
 pub(super) const Z80_COBRA_MK4: usize = 0xD08E;
+/// `PilotFrontLaser`: типы лазеров в креплениях FRONT, REAR, LEFT, RIGHT.
+/// `0` — лазер не установлен.
+pub(super) const Z80_LASER_MOUNTS: usize = 0xD07D;
 /// `ShieldFront` — передний щит, 0..0xA0.
 pub(super) const Z80_SHIELD_FRONT: usize = 0x70E8;
 /// `TempLaser` — нагрев лазера, 0..0xA0.
@@ -90,6 +93,11 @@ pub(super) const Z80_PLANET_CRD: usize = 0x7110;
 pub fn z80_in_transition(mem: &[u8]) -> bool {
     mem.get(Z80_JUMP_DOCKING).copied().unwrap_or(0) != 0
         || mem.get(Z80_FLG_JUMP_DOCKING).copied().unwrap_or(0) != 0
+}
+
+/// Тип лазера в креплении `mount` (0 — лазера нет).
+pub(super) fn laser_type(mem: &[u8], mount: usize) -> u8 {
+    mem.get(Z80_LASER_MOUNTS + mount).copied().unwrap_or(0)
 }
 
 /// Погиб ли корабль игрока (`PlayerGameOver != 0`).

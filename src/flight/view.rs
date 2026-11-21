@@ -28,6 +28,21 @@ impl Default for ViewDir {
     }
 }
 
+impl ViewDir {
+    /// Индекс крепления лазера в блоке командира: `PilotFrontLaser` + индекс.
+    ///
+    /// Порядок совпадает с порядком видов в оригинале и с таблицей
+    /// `Cmd_L_PilotInfo`: FRONT, REAR, LEFT, RIGHT.
+    pub(super) fn laser_mount(self) -> usize {
+        match self {
+            ViewDir::Forward => 0,
+            ViewDir::Back => 1,
+            ViewDir::Left => 2,
+            ViewDir::Right => 3,
+        }
+    }
+}
+
 /// Поворот камеры для выбранного направления вида.
 pub(super) fn rotation(dir: ViewDir) -> Rotation {
     match dir {

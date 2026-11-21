@@ -1040,6 +1040,34 @@ use crate::world::{
         );
     }
 
+    /// Кнопка огня доходит до Z80 в каждом из четырёх видов кабины: лазер может
+    /// стоять в любом креплении, и нативный слой не должен фильтровать ввод.
+    #[test]
+    fn fire_key_reaches_emulator_in_all_cockpit_views() {
+        let opts = test_options();
+        let mut app = App::new(boot(), &opts);
+        app.machine.intro_seen = false;
+        app.machine.mem[flight::Z80_IND_DANGER] = 1;
+        app.machine.mem[flight::Z80_WHAT_ON_SCREEN] = 0;
+        app.machine.mem[flight::Z80_JUMP_DOCKING] = 0;
+        app.machine.mem[flight::Z80_FLG_JUMP_DOCKING] = 0;
+        app.sync_state();
+        app.key_event(KeyCode::F1, true, false);
+
+        let (fire_row, fire_bit) = matrix_pos(KeyCode::KeyA).expect("A в матрице");
+        for view in [KeyCode::F1, KeyCode::F2, KeyCode::F3, KeyCode::F4] {
+            app.key_event(view, true, false);
+            app.key_event(KeyCode::KeyA, true, false);
+            app.apply_input();
+            assert_eq!(
+                app.machine.keyboard[fire_row] & (1 << fire_bit),
+                0,
+                "огонь не дошёл до Z80 в виде {view:?}"
+            );
+            app.key_event(KeyCode::KeyA, false, false);
+        }
+    }
+
     /// На экране эмулятора в полёте кнопки управления кораблём уходят в игру,
     /// как и обычные игровые клавиши.
     #[test]

@@ -101,6 +101,8 @@ pub struct Flight {
     speed_resync: bool,
     /// У игрока Cobra Mk IV (`byte_D08E`) — фиолетовые клетки панели.
     cobra_mk4: bool,
+    /// Типы лазеров в креплениях FRONT/REAR/LEFT/RIGHT (`0` — нет лазера).
+    lasers: [u8; 4],
     /// Корабль игрока погиб (`PlayerGameOver`): на виде рисуется «Game Over»
     /// вместо подписи направления.
     game_over: bool,
@@ -130,6 +132,7 @@ impl Flight {
             speed: 0.0,
             speed_resync: false,
             cobra_mk4: false,
+            lasers: [0; 4],
             game_over: false,
             bodies: Vec::new(),
             stars: StarField::new(STAR_COUNT),
@@ -153,6 +156,7 @@ impl Flight {
         self.speed = 0.0;
         self.speed_resync = false;
         self.cobra_mk4 = false;
+        self.lasers = [0; 4];
         self.game_over = false;
         self.bodies.clear();
         self.transition.reset();
@@ -221,6 +225,14 @@ impl Flight {
         // Поле сферическое и общее для всех видов: при смене направления его
         // не пересоздаём, иначе звёзды снова окажутся только перед кораблём.
         self.view_dir = dir;
+    }
+
+    /// Есть ли лазер в направлении текущего вида.
+    ///
+    /// Прицел и луч собственного лазера показываются только там, где оригинал
+    /// действительно может стрелять. Сам выстрел по-прежнему решает Z80.
+    pub(super) fn laser_in_view(&self) -> bool {
+        self.lasers[self.view_dir.laser_mount()] != 0
     }
 
     /// Закрыть экран и вернуться к ZX-кадру (клавиша `1`).
@@ -316,6 +328,9 @@ impl Flight {
             self.speed_resync = false;
         }
         self.cobra_mk4 = mem.get(Z80_COBRA_MK4).is_some_and(|&b| b != 0);
+        for (mount, laser) in self.lasers.iter_mut().enumerate() {
+            *laser = memory::laser_type(mem, mount);
+        }
         self.game_over = memory::z80_player_dead(mem);
         if self.game_over || self.in_animation_mode() {
             // При взрыве корабля и в режиме анимации (вылет/гиперпереход)

@@ -10,7 +10,7 @@ use super::super::palette::{
 };
 use super::super::scene::{Body, BodyKind};
 use super::super::stars::Star;
-use super::super::view::{self, ViewDir};
+use super::super::view;
 use super::super::Flight;
 
 /// Обычный вид из кабины: звёзды, объекты, выстрелы и перекрестие.
@@ -26,11 +26,13 @@ pub(super) fn draw_flight_scene(
     draw_bodies_view(f, frame, screen, view_rot, s);
     draw_explosions_view(f, frame, screen, view_rot, s);
     draw_enemy_shots_view(f, frame, screen, 0, view_bottom, view_rot);
-    if f.view_dir == ViewDir::Forward {
+    // Лазер может быть установлен в любом из четырёх креплений. Прицел и
+    // собственный луч видны только в том направлении, где лазер есть.
+    if f.laser_in_view() {
         draw_crosshair(frame, screen.cx, screen.cy, s);
-    }
-    if f.combat.laser_timer > 0.0 && f.view_dir == ViewDir::Forward {
-        draw_laser(frame, screen.cx, screen.cy, view_bottom - 1, s);
+        if f.combat.laser_timer > 0.0 {
+            draw_laser(frame, screen.cx, screen.cy, view_bottom - 1, s);
+        }
     }
 }
 

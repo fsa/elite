@@ -5,13 +5,13 @@ use crate::render3d::{Rotation, Screen};
 
 use super::explosions::EXPLOSION_TIME;
 use super::memory::{
-    read_signed24, read_signed8, Z80_OBJ_CORIOLIS, Z80_OBJ_SLOT0, Z80_OENERG_DESTROYED,
-    Z80_PLANET_CRD, Z80_SHIELD_FRONT, Z80_SLOT_OADRDATA, Z80_SLOT_OENERG, Z80_SUN_CRD,
-    Z80_TEMP_LASER,
+    read_signed24, read_signed8, Z80_LASER_MOUNTS, Z80_OBJ_CORIOLIS, Z80_OBJ_SLOT0,
+    Z80_OENERG_DESTROYED, Z80_PLANET_CRD, Z80_SHIELD_FRONT, Z80_SLOT_OADRDATA, Z80_SLOT_OENERG,
+    Z80_SUN_CRD, Z80_TEMP_LASER,
 };
 use super::messages::{countdown_number, view_label, BOTTOM_MSG_TTL};
 use super::palette::{
-    planet_rim, sun_tint, CYAN, ENEMY_BEAM, STAR_RIM_COLOR, VIEW_LABEL_COLOR,
+    planet_rim, sun_tint, CYAN, ENEMY_BEAM, RED, STAR_RIM_COLOR, VIEW_LABEL_COLOR,
 };
 use super::render::scene::{draw_star, draw_stars_view};
 use super::scene::{BodyKind, PLANET_RADIUS, SUN_RADIUS};
@@ -353,6 +353,89 @@ fn z80_detects_laser_shot_by_heating() {
     mem[Z80_TEMP_LASER] = 0x00;
     f.sync_from_z80(&mem);
     assert_eq!(f.combat.laser_timer, 0.0);
+}
+
+/// Циан в окрестности центра вида — это линии прицела (звёзды такого цвета
+/// не рисуются, а тела в этом тесте не создаются).
+fn crosshair_pixels(frame: &Frame, geom: &cockpit::CockpitGeom) -> usize {
+    let (cx, cy) = (frame.width as i32 / 2, geom.panel_y / 2);
+    let r = 80;
+    let mut count = 0;
+    for y in (cy - r).max(0)..=(cy + r).min(frame.height as i32 - 1) {
+        for x in (cx - r).max(0)..=(cx + r).min(frame.width as i32 - 1) {
+            if frame.pixels()[y as usize * frame.width + x as usize] == CYAN {
+                count += 1;
+            }
+        }
+    }
+    count
+}
+
+#[test]
+fn crosshair_follows_fitted_laser_mount() {
+    let mut f = open();
+    let mut mem = vec![0u8; 0x10000];
+    let geom = cockpit::panel_geometry(1280, 960);
+
+    // Без лазера прицела нет.
+    f.sync_from_z80(&mem);
+    let mut frame = Frame::new(1280, 960);
+    f.draw(&mut frame, &geom, &[]);
+    assert_eq!(crosshair_pixels(&frame, &geom), 0, "прицел без лазера");
+
+    // FRONT: прицел появляется в переднем виде.
+    mem[Z80_LASER_MOUNTS] = 1;
+    f.sync_from_z80(&mem);
+    let mut frame = Frame::new(1280, 960);
+    f.draw(&mut frame, &geom, &[]);
+    assert!(crosshair_pixels(&frame, &geom) > 0, "нет прицела в FRONT");
+
+    // REAR: прицел переходит в задний вид и пропадает в переднем.
+    mem[Z80_LASER_MOUNTS] = 0;
+    mem[Z80_LASER_MOUNTS + 1] = 2;
+    f.sync_from_z80(&mem);
+    f.set_view_dir(ViewDir::Back);
+    let mut frame = Frame::new(1280, 960);
+    f.draw(&mut frame, &geom, &[]);
+    assert!(crosshair_pixels(&frame, &geom) > 0, "нет прицела в REAR");
+
+    f.set_view_dir(ViewDir::Forward);
+    let mut frame = Frame::new(1280, 960);
+    f.draw(&mut frame, &geom, &[]);
+    assert_eq!(
+        crosshair_pixels(&frame, &geom),
+        0,
+        "прицел остался в FRONT без лазера"
+    );
+}
+
+#[test]
+fn own_laser_beam_uses_current_view_mount() {
+    let mut f = open();
+    let mut mem = vec![0u8; 0x10000];
+    mem[Z80_LASER_MOUNTS + 1] = 1; // REAR: pulse laser
+    let geom = cockpit::panel_geometry(1280, 960);
+
+    f.sync_from_z80(&mem);
+    f.set_view_dir(ViewDir::Back);
+    f.combat.laser_timer = 0.05;
+    let mut frame = Frame::new(1280, 960);
+    f.draw(&mut frame, &geom, &[]);
+    assert!(
+        frame.pixels().iter().any(|&p| p == RED),
+        "луч не нарисован в REAR"
+    );
+
+    // Снятый лазер убирает и луч, хотя таймер эффекта ещё жив.
+    mem[Z80_LASER_MOUNTS + 1] = 0;
+    f.sync_from_z80(&mem);
+    f.combat.laser_timer = 0.05;
+    let mut frame = Frame::new(1280, 960);
+    f.draw(&mut frame, &geom, &[]);
+    assert!(
+        !frame.pixels().iter().any(|&p| p == RED),
+        "луч остался без лазера в этом креплении"
+    );
 }
 
 #[test]
@@ -786,6 +869,7 @@ fn z80_mem_with_flight() -> Vec<u8> {
     mem[Z80_SPEED_GAUGE] = 0x17 * 5 + 5; // индикатор скорости
     mem[Z80_SHIELD_FRONT] = 0x50;
     mem[Z80_TEMP_LASER] = 0x20;
+    mem[Z80_LASER_MOUNTS] = 1; // FRONT: pulse laser
 
     // Станция в 240 единицах позади, оси Z=(0,0,-1), Y=(0,-1,0).
     let st = Z80_OBJ_CORIOLIS;
