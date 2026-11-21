@@ -16,7 +16,7 @@ use super::{App, FRAME_TIME};
 use crate::cockpit;
 use crate::display;
 use crate::state::Screen;
-use crate::ui::present::{SRC_H, SRC_W, debug_button_at};
+use crate::ui::present::{SRC_H, SRC_W, debug_button_at, save_editor_button_at};
 
 /// Через сколько времени без движения мыши прячем курсор в полном экране.
 const CURSOR_IDLE: Duration = Duration::from_secs(3);
@@ -202,10 +202,27 @@ impl ApplicationHandler for App<'_> {
                         .as_ref()
                         .map(|w| w.inner_size().width as usize)
                         .unwrap_or(0);
+                    let out_h = self
+                        .window
+                        .as_ref()
+                        .map(|w| w.inner_size().height as usize)
+                        .unwrap_or(0);
                     if let Some(view) =
                         debug_button_at(out_w, self.cursor_x, self.cursor_y)
                     {
                         self.debug_view = view;
+                        return;
+                    }
+                    if save_editor_button_at(out_w, out_h, self.cursor_x, self.cursor_y) {
+                        self.save_editor_open = true;
+                        self.save_editor_sel = 0;
+                        self.save_editor_editing = false;
+                        self.save_editor_input.clear();
+                        self.save_editor_name_editing = false;
+                        self.save_editor_name_input.clear();
+                        self.save_editor_hex_cursor = 0;
+                        self.save_editor_hex_editing = false;
+                        self.save_editor_hex_input.clear();
                         return;
                     }
                 }

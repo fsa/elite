@@ -269,6 +269,229 @@ impl App<'_> {
         true
     }
 
+    fn apply_save_editor_name(&mut self) {
+        let layout = world::save_layout_kladov();
+        let base = layout.pilot_name as usize;
+        let name = self.save_editor_name_input.trim_end();
+        let bytes = name.as_bytes();
+        for i in 0..10 {
+            if base + i >= self.machine.mem.len() {
+                break;
+            }
+            let b = if i < bytes.len() { bytes[i] } else { b' ' };
+            self.machine.mem[base + i] = b;
+        }
+        // byte 10 (11th) must remain unchanged (null)
+    }
+
+    fn apply_save_editor_input(&mut self) {
+        if self.save_editor_input.is_empty() {
+            return;
+        }
+        let layout = world::save_layout_kladov();
+        let base = layout.pilot_name as usize;
+        if self.save_editor_sel == 1 {
+            // Cash raw (0.1 Cr)
+            if let Ok(v) = self.save_editor_input.parse::<u32>() {
+                let off = base + 0x14;
+                if off + 4 <= self.machine.mem.len() {
+                    self.machine.mem[off..off + 4].copy_from_slice(&v.to_le_bytes());
+                }
+            }
+        }
+    }
+
+    fn handle_save_editor_key(&mut self, code: KeyCode) -> bool {
+        use KeyCode::*;
+        if self.save_editor_name_editing {
+            match code {
+                Escape => {
+                    self.save_editor_name_editing = false;
+                    self.save_editor_name_input.clear();
+                    true
+                }
+                Enter => {
+                    self.apply_save_editor_name();
+                    self.save_editor_name_editing = false;
+                    self.save_editor_name_input.clear();
+                    true
+                }
+                Backspace => {
+                    self.save_editor_name_input.pop();
+                    true
+                }
+                Space => {
+                    if self.save_editor_name_input.len() < 10 {
+                        self.save_editor_name_input.push(' ');
+                    }
+                    true
+                }
+                KeyA => { if self.save_editor_name_input.len() < 10 { self.save_editor_name_input.push('A'); } true }
+                KeyB => { if self.save_editor_name_input.len() < 10 { self.save_editor_name_input.push('B'); } true }
+                KeyC => { if self.save_editor_name_input.len() < 10 { self.save_editor_name_input.push('C'); } true }
+                KeyD => { if self.save_editor_name_input.len() < 10 { self.save_editor_name_input.push('D'); } true }
+                KeyE => { if self.save_editor_name_input.len() < 10 { self.save_editor_name_input.push('E'); } true }
+                KeyF => { if self.save_editor_name_input.len() < 10 { self.save_editor_name_input.push('F'); } true }
+                KeyG => { if self.save_editor_name_input.len() < 10 { self.save_editor_name_input.push('G'); } true }
+                KeyH => { if self.save_editor_name_input.len() < 10 { self.save_editor_name_input.push('H'); } true }
+                KeyI => { if self.save_editor_name_input.len() < 10 { self.save_editor_name_input.push('I'); } true }
+                KeyJ => { if self.save_editor_name_input.len() < 10 { self.save_editor_name_input.push('J'); } true }
+                KeyK => { if self.save_editor_name_input.len() < 10 { self.save_editor_name_input.push('K'); } true }
+                KeyL => { if self.save_editor_name_input.len() < 10 { self.save_editor_name_input.push('L'); } true }
+                KeyM => { if self.save_editor_name_input.len() < 10 { self.save_editor_name_input.push('M'); } true }
+                KeyN => { if self.save_editor_name_input.len() < 10 { self.save_editor_name_input.push('N'); } true }
+                KeyO => { if self.save_editor_name_input.len() < 10 { self.save_editor_name_input.push('O'); } true }
+                KeyP => { if self.save_editor_name_input.len() < 10 { self.save_editor_name_input.push('P'); } true }
+                KeyQ => { if self.save_editor_name_input.len() < 10 { self.save_editor_name_input.push('Q'); } true }
+                KeyR => { if self.save_editor_name_input.len() < 10 { self.save_editor_name_input.push('R'); } true }
+                KeyS => { if self.save_editor_name_input.len() < 10 { self.save_editor_name_input.push('S'); } true }
+                KeyT => { if self.save_editor_name_input.len() < 10 { self.save_editor_name_input.push('T'); } true }
+                KeyU => { if self.save_editor_name_input.len() < 10 { self.save_editor_name_input.push('U'); } true }
+                KeyV => { if self.save_editor_name_input.len() < 10 { self.save_editor_name_input.push('V'); } true }
+                KeyW => { if self.save_editor_name_input.len() < 10 { self.save_editor_name_input.push('W'); } true }
+                KeyX => { if self.save_editor_name_input.len() < 10 { self.save_editor_name_input.push('X'); } true }
+                KeyY => { if self.save_editor_name_input.len() < 10 { self.save_editor_name_input.push('Y'); } true }
+                KeyZ => { if self.save_editor_name_input.len() < 10 { self.save_editor_name_input.push('Z'); } true }
+                _ => true,
+            }
+        } else if self.save_editor_editing {
+            match code {
+                Escape => {
+                    self.save_editor_editing = false;
+                    self.save_editor_input.clear();
+                    return true;
+                }
+                Enter => {
+                    self.apply_save_editor_input();
+                    self.save_editor_editing = false;
+                    self.save_editor_input.clear();
+                    return true;
+                }
+                Backspace => {
+                    self.save_editor_input.pop();
+                    return true;
+                }
+                Digit0 | Numpad0 => { self.save_editor_input.push('0'); true }
+                Digit1 | Numpad1 => { self.save_editor_input.push('1'); true }
+                Digit2 | Numpad2 => { self.save_editor_input.push('2'); true }
+                Digit3 | Numpad3 => { self.save_editor_input.push('3'); true }
+                Digit4 | Numpad4 => { self.save_editor_input.push('4'); true }
+                Digit5 | Numpad5 => { self.save_editor_input.push('5'); true }
+                Digit6 | Numpad6 => { self.save_editor_input.push('6'); true }
+                Digit7 | Numpad7 => { self.save_editor_input.push('7'); true }
+                Digit8 | Numpad8 => { self.save_editor_input.push('8'); true }
+                Digit9 | Numpad9 => { self.save_editor_input.push('9'); true }
+                _ => true,
+            }
+        } else {
+            if code == Escape {
+                self.save_editor_open = false;
+                return true;
+            }
+            let layout = world::save_layout_kladov();
+            let base = layout.pilot_name as usize;
+            match code {
+                ArrowUp => {
+                    if self.save_editor_sel > 0 {
+                        self.save_editor_sel -= 1;
+                    }
+                    true
+                }
+                ArrowDown => {
+                    if self.save_editor_sel < 6 {
+                        self.save_editor_sel += 1;
+                    }
+                    true
+                }
+                Enter => {
+                    if self.save_editor_sel == 1 {
+                        self.save_editor_editing = true;
+                        self.save_editor_input.clear();
+                    } else if self.save_editor_sel == 0 {
+                        // start name editing
+                        self.save_editor_name_editing = true;
+                        self.save_editor_name_input = String::new();
+                        for i in 0..10 {
+                            if let Some(&b) = self.machine.mem.get(base + i) {
+                                let ch = if (0x20..=0x7F).contains(&b) { b as char } else { ' ' };
+                                self.save_editor_name_input.push(ch);
+                            }
+                        }
+                        self.save_editor_name_input = self.save_editor_name_input.trim_end().to_string();
+                    }
+                    true
+                }
+                ArrowLeft | ArrowRight => {
+                    let delta: i32 = if code == ArrowLeft { -1 } else { 1 };
+                    match self.save_editor_sel {
+                        1 => {
+                            let off = base + 0x14;
+                            if off + 4 <= self.machine.mem.len() {
+                                let v = u32::from_le_bytes([
+                                    self.machine.mem[off],
+                                    self.machine.mem[off + 1],
+                                    self.machine.mem[off + 2],
+                                    self.machine.mem[off + 3],
+                                ]);
+                                let nv = (v as i64 + (delta as i64) * 10).clamp(0, u32::MAX as i64) as u32;
+                                let bytes = nv.to_le_bytes();
+                                self.machine.mem[off..off + 4].copy_from_slice(&bytes);
+                            }
+                            true
+                        }
+                        2 => {
+                            let off = base + 0x2E;
+                            if off < self.machine.mem.len() {
+                                let v = self.machine.mem[off] as i32;
+                                let nv = (v + delta).clamp(0, 255) as u8;
+                                self.machine.mem[off] = nv;
+                            }
+                            true
+                        }
+                        3 => {
+                            let off = base + 0x2F;
+                            if off < self.machine.mem.len() {
+                                let v = self.machine.mem[off] as i32;
+                                let nv = (v + delta).clamp(0, 255) as u8;
+                                self.machine.mem[off] = nv;
+                            }
+                            true
+                        }
+                        4 => {
+                            let off = base + 0x0B;
+                            if off < self.machine.mem.len() {
+                                let v = self.machine.mem[off] as i32;
+                                let nv = (v + delta).clamp(0, 255) as u8;
+                                self.machine.mem[off] = nv;
+                            }
+                            true
+                        }
+                        5 => {
+                            let off = base + 0x28;
+                            if off < self.machine.mem.len() {
+                                let v = self.machine.mem[off] as i32;
+                                let nv = (v + delta).clamp(0, 255) as u8;
+                                self.machine.mem[off] = nv;
+                            }
+                            true
+                        }
+                        6 => {
+                            let off = base + 0x29;
+                            if off < self.machine.mem.len() {
+                                let v = self.machine.mem[off] as i32;
+                                let nv = (v + delta).clamp(0, 255) as u8;
+                                self.machine.mem[off] = nv;
+                            }
+                            true
+                        }
+                        _ => false,
+                    }
+                }
+                _ => true,
+            }
+        }
+    }
+
     /// Обработать событие клавиши (по физической позиции, раскладка не важна).
     pub(super) fn key_event(&mut self, code: KeyCode, pressed: bool, repeat: bool) {
         if let Some((row, bit)) = matrix_pos(code) {
@@ -304,6 +527,12 @@ impl App<'_> {
         // само нажатие при этом продолжает обрабатываться обычным порядком.
         if self.pause_stub && !repeat {
             self.pause_stub = false;
+        }
+        // Полноэкранный редактор сейва: перехватываем ввод.
+        if self.save_editor_open && !repeat {
+            if self.handle_save_editor_key(code) {
+                return;
+            }
         }
 
         // В режиме анимации (вылет, гиперпереход, стыковка) переключение

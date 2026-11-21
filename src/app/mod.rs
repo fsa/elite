@@ -200,6 +200,24 @@ struct App<'a> {
     /// Что показывать под миниатюрой в отладочной полосе. По умолчанию —
     /// сокращённая сводка; дамп всех байтов включается второй кнопкой.
     debug_view: DebugView,
+    /// Открыт ли полноэкранный редактор сейва.
+    save_editor_open: bool,
+    /// Выбранное поле в редакторе сейва (0..6): 0=NAME,1=CASH,2=FUEL,3=MISSILES,4=LEGAL,5=BAY,6=FRONT.
+    save_editor_sel: usize,
+    /// Режим ввода числа в редакторе.
+    save_editor_editing: bool,
+    /// Буфер ввода числа.
+    save_editor_input: String,
+    /// Режим ввода имени.
+    save_editor_name_editing: bool,
+    /// Буфер ввода имени.
+    save_editor_name_input: String,
+    /// Курсор в HEX-редакторе (индекс байта).
+    save_editor_hex_cursor: usize,
+    /// Режим ввода HEX-байта (2 символа).
+    save_editor_hex_editing: bool,
+    /// Буфер ввода HEX.
+    save_editor_hex_input: String,
     /// Позиция указателя в координатах окна — для кнопок отладочной полосы.
     cursor_x: f64,
     cursor_y: f64,
@@ -272,6 +290,15 @@ impl<'a> App<'a> {
             alt: false,
             accelerated: false,
             debug_view: DebugView::default(),
+            save_editor_open: false,
+            save_editor_sel: 0,
+            save_editor_editing: false,
+            save_editor_input: String::new(),
+            save_editor_name_editing: false,
+            save_editor_name_input: String::new(),
+            save_editor_hex_cursor: 0,
+            save_editor_hex_editing: false,
+            save_editor_hex_input: String::new(),
             cursor_x: 0.0,
             cursor_y: 0.0,
             cursor_visible: true,

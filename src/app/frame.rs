@@ -548,6 +548,21 @@ impl App<'_> {
             let save = native::commander_block(&self.machine, layout);
             draw_debug_panel(src, &mut out, ow, oh, save, self.debug_view);
         }
+        if self.save_editor_open {
+            let layout = world::save_layout_kladov();
+            let save = native::commander_block(&self.machine, layout);
+            crate::ui::present::draw_save_editor_fullscreen(
+                &mut out,
+                ow,
+                oh,
+                save,
+                self.save_editor_sel,
+                self.save_editor_editing,
+                &self.save_editor_input,
+                self.save_editor_name_editing,
+                &self.save_editor_name_input,
+            );
+        }
         window.pre_present_notify();
         let _ = out.present();
     }

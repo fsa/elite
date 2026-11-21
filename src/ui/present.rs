@@ -33,8 +33,7 @@ pub(crate) fn blit_zx_frame(
 }
 
 /// Что показывать под миниатюрой эмулятора. По умолчанию — сокращённая
-/// сводка по полям блока командира; дамп всех байтов включается второй
-/// кнопкой.
+/// сводка по полям блока командира; дамп всех байтов — второй кнопкой.
 #[derive(Clone, Copy, PartialEq, Eq, Debug, Default)]
 pub(crate) enum DebugView {
     #[default]
@@ -57,12 +56,7 @@ pub(crate) fn debug_button_rects(out_w: usize) -> [(i32, i32, usize, usize); 2] 
     let y = SRC_H as i32 + BUTTON_MARGIN as i32;
     [
         (x0 + BUTTON_MARGIN as i32, y, w, BUTTON_H),
-        (
-            x0 + (2 * BUTTON_MARGIN + w) as i32,
-            y,
-            w,
-            BUTTON_H,
-        ),
+        (x0 + (2 * BUTTON_MARGIN + w) as i32, y, w, BUTTON_H),
     ]
 }
 
@@ -107,27 +101,25 @@ pub(crate) fn draw_debug_panel(
     let top = SRC_H as i32 + (BUTTON_MARGIN + BUTTON_H + BUTTON_MARGIN) as i32;
     match view {
         DebugView::Summary => draw_save_summary(out, out_w, out_h, x0, save_data, top),
-        DebugView::Dump => draw_save_dump(out, out_w, out_h, x0, save_data, top),
+        DebugView::Dump => draw_save_dump(out, out_w, out_h, x0, save_data, top, 1, 8),
     }
 }
 
 const CYAN: u32 = 0xFF00_FFFF;
 const WHITE: u32 = 0xFFD7_D7D7;
 const GREY: u32 = 0xFF80_8080;
-const RED: u32 = 0xFFFF_0000;
 
-/// Две кнопки под миниатюрой. Активная обведена голубым, неактивная — серым.
+/// Кнопки под миниатюрой. Активная обведена голубым, неактивная — серым.
 fn draw_debug_buttons(out: &mut [u32], out_w: usize, out_h: usize, view: DebugView) {
     let buttons = [
-        ("1 SUMMARY", DebugView::Summary),
-        ("2 HEX DUMP", DebugView::Dump),
+        ("1 SUM", DebugView::Summary),
+        ("2 HEX", DebugView::Dump),
     ];
     for (i, &(label, button_view)) in buttons.iter().enumerate() {
         let (x, y, w, h) = debug_button_rects(out_w)[i];
         let active = view == button_view;
         fill_rect(out, out_w, out_h, x, y, w, h, 0xFF10_1010);
         let color = if active { CYAN } else { GREY };
-        // Рамка толщиной 1 пиксель по периметру кнопки.
         fill_rect(out, out_w, out_h, x, y, w, 1, color);
         fill_rect(out, out_w, out_h, x, y + h as i32 - 1, w, 1, color);
         fill_rect(out, out_w, out_h, x, y, 1, h, color);
@@ -135,15 +127,38 @@ fn draw_debug_buttons(out: &mut [u32], out_w: usize, out_h: usize, view: DebugVi
         let tx = x + ((w as i32 - label.len() as i32 * 8) / 2).max(0);
         let ty = y + (h as i32 - 8) / 2;
         let text = if active { WHITE } else { GREY };
-        draw_text(out, out_w, out_h, tx, ty, label, text, text);
+        draw_text(out, out_w, out_h, tx, ty, label, text, text, 1);
     }
+    // Отдельная кнопка открытия редактора сейва (внизу панели)
+    let (ex, ey, ew, eh) = save_editor_button_rect(out_w, out_h);
+    fill_rect(out, out_w, out_h, ex, ey, ew, eh, 0xFF101010);
+    fill_rect(out, out_w, out_h, ex, ey, ew, 1, CYAN);
+    fill_rect(out, out_w, out_h, ex, ey + eh as i32 - 1, ew, 1, CYAN);
+    fill_rect(out, out_w, out_h, ex, ey, 1, eh, CYAN);
+    fill_rect(out, out_w, out_h, ex + ew as i32 - 1, ey, 1, eh, CYAN);
+    let label = "SAVE EDITOR";
+    let tx = ex + ((ew as i32 - label.len() as i32 * 8) / 2).max(0);
+    let ty = ey + (eh as i32 - 8) / 2;
+    draw_text(out, out_w, out_h, tx, ty, label, WHITE, WHITE, 1);
 }
 
-/// Дамп `save_data` под миниатюрой эмулятора: адрес от начала блока (голубым),
-/// два пробела, 8 байт через пробел. Отступ одно знакоместо от края панели и
-/// от основного экрана, с отступом между строками. Под каждым байтом в этом
-/// отступе показан соответствующий символ (0x20..0x7F — из ZX-набора,
-/// < 0x20 — голубая точка, > 0x7F — красная точка).
+pub(crate) fn save_editor_button_rect(out_w: usize, out_h: usize) -> (i32, i32, usize, usize) {
+    let x0 = crate::display::debug_panel_x(out_w as u32) as i32;
+    let y = (out_h as i32 - BUTTON_H as i32 - BUTTON_MARGIN as i32).max(SRC_H as i32 + BUTTON_MARGIN as i32);
+    let w = SRC_W - 2 * BUTTON_MARGIN;
+    (x0 + BUTTON_MARGIN as i32, y, w, BUTTON_H)
+}
+
+pub(crate) fn save_editor_button_at(out_w: usize, out_h: usize, x: f64, y: f64) -> bool {
+    if x < 0.0 || y < 0.0 {
+        return false;
+    }
+    let (px, py) = (x as i32, y as i32);
+    let (bx, by, bw, bh) = save_editor_button_rect(out_w, out_h);
+    px >= bx && px < bx + bw as i32 && py >= by && py < by + bh as i32
+}
+
+/// Дамп `save_data`: адрес, hex байты, и под ними ASCII-подсказки.
 fn draw_save_dump(
     out: &mut [u32],
     out_w: usize,
@@ -151,17 +166,21 @@ fn draw_save_dump(
     x0: usize,
     save_data: &[u8],
     top: i32,
+    scale: usize,
+    bpl: usize,
 ) {
     if save_data.is_empty() {
         return;
     }
-    let left = x0 + 8;
+    let scale = scale.max(1);
+    let left = x0 as i32 + 8;
     let mut y = top;
-    for (i, chunk) in save_data.chunks(8).enumerate() {
-        if y + 16 > out_h as i32 {
+    let line_h = (8 * scale as i32) + 4;
+    for (i, chunk) in save_data.chunks(bpl).enumerate() {
+        if y + line_h > out_h as i32 {
             break;
         }
-        let mut s = format!("{:04X}  ", i * 8);
+        let mut s = format!("{:04X}  ", i * bpl);
         for (j, b) in chunk.iter().enumerate() {
             if j > 0 {
                 s.push(' ');
@@ -169,13 +188,85 @@ fn draw_save_dump(
             use std::fmt::Write as _;
             let _ = write!(s, "{b:02X}");
         }
-        draw_text(out, out_w, out_h, left as i32, y, &s, CYAN, WHITE);
-        for (j, &b) in chunk.iter().enumerate() {
-            let cx = left as i32 + (6 + j as i32 * 3) * 8;
-            draw_byte_char(out, out_w, out_h, cx, y + 8, b);
-        }
-        y += 24;
+        draw_text(out, out_w, out_h, left, y, &s, CYAN, WHITE, scale);
+        y += line_h;
     }
+}
+
+/// Полноэкранный оверлей редактора сейва (поверх всего окна).
+pub(crate) fn draw_save_editor_fullscreen(
+    out: &mut [u32],
+    out_w: usize,
+    out_h: usize,
+    save_data: &[u8],
+    edit_sel: usize,
+    editing: bool,
+    input: &str,
+    name_editing: bool,
+    name_input: &str,
+) {
+    if save_data.is_empty() {
+        return;
+    }
+    out.fill(0xFF080808);
+    let scale: usize = 2;
+    let left = 16;
+    let mut y = 16i32;
+    draw_text(out, out_w, out_h, left, y, "SAVE EDITOR (Esc to close)", CYAN, CYAN, scale);
+    y += (8 * scale as i32) + 8;
+    draw_text(out, out_w, out_h, left, y, "Up/Down: select, Left/Right: change", GREY, GREY, scale);
+    y += (8 * scale as i32) + 16;
+
+    let b = |off: usize| save_data.get(off).copied().unwrap_or(0);
+    let name = summary_name(save_data);
+    let cash = u32::from_le_bytes([b(0x14), b(0x15), b(0x16), b(0x17)]);
+    let fuel = b(0x2E);
+    let missiles = b(0x2F);
+
+    let draw_field = |out: &mut [u32], y: &mut i32, label: &str, value: &str, sel: bool, scale: usize| {
+        let line_h = 8 * scale as i32;
+        if *y + line_h > out_h as i32 { return; }
+        if sel {
+            fill_rect(out, out_w, out_h, left, *y - 2, out_w.saturating_sub(32), (line_h + 4) as usize, 0xFF202020);
+        }
+        let color = if sel { WHITE } else { CYAN };
+        let s = format!("{}: {}", label, value);
+        draw_text(out, out_w, out_h, left, *y, &s, color, color, scale);
+        *y += line_h + 6;
+    };
+
+    let display_name = if name_editing { name_input.to_string() } else { name };
+    draw_field(out, &mut y, "NAME", &display_name, edit_sel == 0, scale);
+    draw_field(out, &mut y, "CASH 0.1Cr", &format!("{}.{} ({})", cash / 10, cash % 10, cash), edit_sel == 1, scale);
+    draw_field(out, &mut y, "FUEL 0.1LY", &format!("{}.{}", fuel / 10, fuel % 10), edit_sel == 2, scale);
+    draw_field(out, &mut y, "MISSILES", &format!("{}", missiles), edit_sel == 3, scale);
+    draw_field(out, &mut y, "LEGAL", &format!("{}", b(0x0B)), edit_sel == 4, scale);
+    draw_field(out, &mut y, "BAY (t)", &format!("{}", b(0x28)), edit_sel == 5, scale);
+    draw_field(out, &mut y, "FRONT LASER", &format!("{}", b(0x29)), edit_sel == 6, scale);
+
+    y += 6;
+    if name_editing {
+        let msg = format!("NAME: {}_ (A-Z,Space,Enter)", name_input);
+        draw_text(out, out_w, out_h, left, y, &msg, WHITE, WHITE, scale);
+        y += (8 * scale as i32) + 6;
+    } else if editing {
+        let msg = format!("INPUT: {}_", input);
+        draw_text(out, out_w, out_h, left, y, &msg, WHITE, WHITE, scale);
+        y += (8 * scale as i32) + 6;
+    } else if edit_sel == 0 {
+        draw_text(out, out_w, out_h, left, y, "Enter: edit name", GREY, GREY, scale);
+        y += (8 * scale as i32) + 6;
+    } else if edit_sel == 1 {
+        draw_text(out, out_w, out_h, left, y, "Enter: input number", GREY, GREY, scale);
+        y += (8 * scale as i32) + 6;
+    } else if edit_sel >= 2 && edit_sel <= 6 {
+        draw_text(out, out_w, out_h, left, y, "Left/Right: change (0..255)", GREY, GREY, scale);
+        y += (8 * scale as i32) + 6;
+    }
+    y += 4;
+    draw_text(out, out_w, out_h, left, y, "--- HEX DUMP ---", CYAN, CYAN, 1);
+    y += 14;
+    draw_save_dump(out, out_w, out_h, 8, save_data, y, 2, 16);
 }
 
 /// Сокращённая сводка по блоку сохранения: поля из `docs/kladov_save.md` с
@@ -262,22 +353,19 @@ fn summary_line(
         return false;
     }
     let head = format!("{addr:02X} {label}: ");
-    draw_text(out, out_w, out_h, x, *y, &head, CYAN, CYAN);
+    draw_text(out, out_w, out_h, x, *y, &head, CYAN, CYAN, 1);
     let vx = x + head.chars().count() as i32 * 8;
-    draw_text(out, out_w, out_h, vx, *y, value, WHITE, WHITE);
+    draw_text(out, out_w, out_h, vx, *y, value, WHITE, WHITE, 1);
     *y += SUMMARY_LINE;
     true
 }
 
-/// Имя командира: строка до `NUL`; непечатаемые байты заменяются на `?`.
+/// Имя командира: первые 10 байт, пробелы в конце обрезаются.
 fn summary_name(data: &[u8]) -> String {
-    let end = data[..data.len().min(11)]
+    let len = data.len().min(10);
+    data[..len]
         .iter()
-        .position(|&b| b == 0)
-        .unwrap_or_else(|| data.len().min(11));
-    data[..end]
-        .iter()
-        .map(|&b| if (0x20..0x7F).contains(&b) { b as char } else { '?' })
+        .map(|&b| if (0x20..=0x7F).contains(&b) { b as char } else { ' ' })
         .collect::<String>()
         .trim_end()
         .to_string()
@@ -341,13 +429,7 @@ fn fill_rect(
     }
 }
 
-fn draw_byte_char(out: &mut [u32], out_w: usize, out_h: usize, x: i32, y: i32, b: u8) {
-    match b {
-        0x20..=0x7F => draw_char(out, out_w, out_h, x, y, b as char, WHITE),
-        0x00..=0x1F => draw_char(out, out_w, out_h, x, y, '.', CYAN),
-        _ => draw_char(out, out_w, out_h, x, y, '.', RED),
-    }
-}
+
 
 fn draw_text(
     out: &mut [u32],
@@ -358,32 +440,38 @@ fn draw_text(
     s: &str,
     addr_color: u32,
     data_color: u32,
+    scale: usize,
 ) {
+    let scale = scale.max(1);
     let mut cx = x;
     for (i, ch) in s.chars().enumerate() {
-        // "ADDR  " — первые 6 символов голубым, остальное белым.
         let color = if i < 6 { addr_color } else { data_color };
-        draw_char(out, out_w, out_h, cx, y, ch, color);
-        cx += 8;
+        draw_char(out, out_w, out_h, cx, y, ch, color, scale);
+        cx += 8 * scale as i32;
     }
 }
 
-fn draw_char(out: &mut [u32], out_w: usize, out_h: usize, x: i32, y: i32, ch: char, color: u32) {
+fn draw_char(out: &mut [u32], out_w: usize, out_h: usize, x: i32, y: i32, ch: char, color: u32, scale: usize) {
     let code = ch as u32;
     if !(0x20..=0x7F).contains(&code) {
         return;
     }
+    let scale = scale.max(1);
     let off = ((code - 0x20) as usize) * 8;
     for (row, bits) in ZX_FONT[off..off + 8].iter().enumerate() {
-        let py = y + row as i32;
-        if py < 0 || py >= out_h as i32 {
-            continue;
-        }
         for bit in 0..8 {
             if bits & (0x80 >> bit) != 0 {
-                let px = x + bit as i32;
-                if px >= 0 && px < out_w as i32 {
-                    out[py as usize * out_w + px as usize] = color;
+                for sy in 0..scale {
+                    let py = y + (row * scale + sy) as i32;
+                    if py < 0 || py >= out_h as i32 {
+                        continue;
+                    }
+                    for sx in 0..scale {
+                        let px = x + (bit * scale + sx) as i32;
+                        if px >= 0 && px < out_w as i32 {
+                            out[py as usize * out_w + px as usize] = color;
+                        }
+                    }
                 }
             }
         }
