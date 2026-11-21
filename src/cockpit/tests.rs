@@ -721,54 +721,36 @@ fn compass_ring_and_pointer_follow_target() {
     assert_eq!(px(&up, cx, cy + 4 * unit), BACKGROUND);
 }
 
-/// Компас читает цель по логике оригинала: вне системы — фиктивные
-/// координаты, рядом с планетой — станция, иначе планета.
+/// Компас берёт готовый указатель из переменных `PrintCompass`, а не
+/// пересчитывает цель сам: так нативный вид совпадает с экраном Z80.
 #[test]
-fn compass_reads_target_from_memory() {
+fn compass_reads_pointer_from_memory() {
     let l = KLADOV_COCKPIT;
     let mut mem = vec![0u8; 0x10000];
-    let crd = |mem: &mut [u8], addr: u16, x: i32, y: i32, z: i32| {
-        let put = |mem: &mut [u8], at: u16, v: i32| {
-            let sign = if v < 0 { 0x80 } else { 0 };
-            let mag = v.unsigned_abs();
-            mem[at as usize] = mag as u8;
-            mem[at as usize + 1] = (mag >> 8) as u8;
-            mem[at as usize + 2] = ((mag >> 16) as u8 & 0x7F) | sign;
-        };
-        put(mem, addr, x);
-        put(mem, addr + 3, y);
-        put(mem, addr + 6, z);
-    };
+    mem[crate::flight::Z80_WHAT_ON_SCREEN as usize] = 0;
 
-    // Планета впереди справа: указатель сдвинут вправо и заполнен.
-    // J-драйв у станции недоступен, поэтому цель — сама планета.
-    mem[l.j_drive_coriolis as usize] = 0xFF;
-    crd(&mut mem, l.planet_crd, 1000, 0, 1000);
+    // Смещения хранятся в знак-величине.
+    mem[l.compass_x as usize] = 0x86; // -6
+    mem[l.compass_y as usize] = 4;
+    mem[l.compass_type as usize] = 1; // полый указатель (цель позади)
     let v = l.read(&mem);
-    assert_eq!(v.compass.x, 6);
-    assert_eq!(v.compass.y, 0);
-    assert!(v.compass.filled);
+    assert_eq!(v.compass.x, -6);
+    assert_eq!(v.compass.y, 4);
+    assert!(!v.compass.filled);
 
-    // Планета за спиной: указатель полый.
-    crd(&mut mem, l.planet_crd, 1000, 0, -1000);
-    assert!(!l.read(&mem).compass.filled);
+    mem[l.compass_type as usize] = 0; // заполненный
+    assert!(l.read(&mem).compass.filled);
 
-    // Рядом с планетой цель — станция.
-    mem[l.in_free_space as usize] = 0;
-    mem[l.j_drive_coriolis as usize] = 0;
-    mem[l.planet_crd as usize + 2] = 0;
-    mem[l.planet_crd as usize + 5] = 0;
-    mem[l.planet_crd as usize + 8] = 0;
-    crd(&mut mem, l.coriolis_slot, 0, 1000, 1000);
-    let v = l.read(&mem);
-    assert_eq!(v.compass.y, 6, "компас не переключился на станцию");
+    // На информационных экранах оригинал не печатает указатель.
+    mem[crate::flight::Z80_WHAT_ON_SCREEN as usize] = 7;
+    assert_eq!(l.read(&mem).compass, Compass::hidden());
+}
 
-    // Вне системы — фиктивные координаты, а не планета.
-    mem[l.in_free_space as usize] = 1;
-    crd(&mut mem, l.fake_planet_crd, 0, -1000, 1000);
-    let v = l.read(&mem);
-    assert_eq!(v.compass.x, 0);
-    assert_eq!(v.compass.y, -6);
+/// Цвет индикатора опасности берётся из экранного атрибута.
+#[test]
+fn danger_reads_screen_attribute() {
+    let l = KLADOV_COCKPIT;
+    let mut mem = vec![0u8; 0x10000];
 
     // Цвет опасности берётся с экрана: `PrintIndDanger` пишет в атрибут
     // текущую фазу (мигающий красный — это чередование 0x02 и 0x00).

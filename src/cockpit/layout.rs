@@ -46,20 +46,18 @@ pub struct CockpitLayout {
     pub rotate_du: u16,
     /// Запас ракет (`PilotMissiles`), 0..4.
     pub missiles: u16,
-    /// Признак межпланетного пространства (`InFreeSpace`).
-    pub in_free_space: u16,
-    /// Координаты планеты (`PlanetCrd`, 9 байт знак-величина).
-    pub planet_crd: u16,
-    /// Фиктивные координаты планеты вне системы (`fsPlCrdXl`, 9 байт).
-    pub fake_planet_crd: u16,
+    /// Указатель компаса (`CompasPointerCrdX`), знак-величина.
+    pub compass_x: u16,
+    /// Указатель компаса (`CompasPointerCrdY`), знак-величина.
+    pub compass_y: u16,
+    /// Тип указателя (`CompasPointerType`): `0` — заполненный.
+    pub compass_type: u16,
     /// Слот станции (`objCoriolis`).
     pub coriolis_slot: u16,
     /// Первый из шести основных слотов объектов (`DataOfAround`).
     pub ship_slot0: u16,
     /// Слот ракеты (`objMissile`).
     pub missile_slot: u16,
-    /// Флаг доступности J-драйва у станции (`J_Drive_Coriolis`).
-    pub j_drive_coriolis: u16,
     /// Признак близости станции (`CoriolisNear`), включает символ `S`.
     pub coriolis_near: u16,
     /// Оставшееся время работы ECM (`TimeWorkECM`), `0` — выключена.
@@ -80,13 +78,12 @@ pub const KLADOV_COCKPIT: CockpitLayout = CockpitLayout {
     rotate_lr: 0x70FE,
     rotate_du: 0x7100,
     missiles: 0xD083,
-    in_free_space: 0x7103,
-    planet_crd: 0x7110,
-    fake_planet_crd: 0x8AC3,
+    compass_x: 0x81A6,
+    compass_y: 0x81A7,
+    compass_type: 0x81A8,
     coriolis_slot: 0x6048,
     ship_slot0: 0x606F,
     missile_slot: 0x6159,
-    j_drive_coriolis: 0x711D,
     coriolis_near: 0x711C,
     ecm_time: 0x9C9B,
 };
@@ -135,55 +132,33 @@ impl CockpitLayout {
 
     /// Прочитать указатель компаса.
     ///
-    /// Цель выбирается как в `PrintCompass`:
-    ///
-    /// * вне системы — фиктивные координаты `fsPlCrd`;
-    /// * рядом с планетой — станция (`objCoriolis`), если J-драйв у неё
-    ///   доступен, иначе планета;
-    /// * в остальных случаях — планета.
+    /// Оригинал выбирает цель в `PrintCompass` и записывает готовое смещение в
+    /// `CompasPointerCrdX/Y` и `CompasPointerType`, откуда его берёт `RenewCompass`.
+    /// Нативный компас читает те же переменные: пересчёт по координатам планеты,
+    /// станции и межпланетного «фантома» легко расходится с оригиналом и показывает
+    /// старую цель даже после переключения на станцию.
     fn read_compass(&self, mem: &[u8]) -> Compass {
         let byte = |addr: u16| mem.get(addr as usize).copied().unwrap_or(0);
-        let target = if self.in_free_space != 0 && byte(self.in_free_space) != 0 {
-            (self.fake_planet_crd != 0).then_some(self.fake_planet_crd)
-        } else if self.planet_crd != 0 {
-            let high =
-                (byte(self.planet_crd + 2) | byte(self.planet_crd + 5) | byte(self.planet_crd + 8))
-                    & 0x7F;
-            let station = self.coriolis_slot != 0
-                && self.j_drive_coriolis != 0
-                && byte(self.j_drive_coriolis) != 0xFF;
-            if high < 2 && station {
-                Some(self.coriolis_slot)
+        if mem
+            .get(crate::flight::Z80_WHAT_ON_SCREEN)
+            .copied()
+            .unwrap_or(0)
+            >= 4
+        {
+            return Compass::hidden();
+        }
+        // `CompasPointerCrdX/Y` хранятся в знак-величине, как и координаты игрока.
+        let signed = |v: u8| {
+            if v & 0x80 != 0 {
+                -((v & 0x7F) as i8)
             } else {
-                Some(self.planet_crd)
-            }
-        } else {
-            None
-        };
-        let Some(target) = target else {
-            return Compass::centered();
-        };
-        let crd = |offset: u16| {
-            read_coordinate(mem.get(target as usize + offset as usize..).unwrap_or(&[]))
-        };
-        let x = crd(0);
-        let y = crd(3);
-        let z = crd(6);
-        let len = (x * x + y * y + z * z).sqrt();
-        let offset = |v: f32| {
-            if len < 0.5 {
-                0
-            } else {
-                (v * COMPASS_POINTER_MAX as f32 / len)
-                    .round()
-                    .clamp(-(COMPASS_POINTER_MAX as f32), COMPASS_POINTER_MAX as f32)
-                    as i8
+                v as i8
             }
         };
         Compass {
-            x: offset(x),
-            y: offset(y),
-            filled: z >= 0.0,
+            x: signed(byte(self.compass_x)),
+            y: signed(byte(self.compass_y)),
+            filled: byte(self.compass_type) == 0,
             visible: true,
         }
     }
@@ -234,10 +209,6 @@ impl CockpitLayout {
     }
 }
 
-/// Максимальное смещение указателя компаса от центра, как в оригинале:
-/// `CompasPointerCrdX/Y` лежат в диапазоне `-8..=8`.
-const COMPASS_POINTER_MAX: i8 = 8;
-
 /// Атрибут кружка опасности на панели кокпита (`WhatOnScreen < 4`):
 /// `PrintIndDanger` пишет цвет в левый верхний угол 2x2 знакоместа.
 ///
@@ -269,11 +240,6 @@ pub(super) fn read_danger(mem: &[u8]) -> Danger {
         DANGER_ATTR
     };
     Danger::from_attribute(mem.get(at as usize).copied().unwrap_or(0))
-}
-
-/// Прочитать 24-битную координату в формате знак-величина.
-fn read_coordinate(b: &[u8]) -> f32 {
-    read_game_coordinate(b) as f32
 }
 
 /// Прочитать 24-битную координату как целое число единиц игры.
