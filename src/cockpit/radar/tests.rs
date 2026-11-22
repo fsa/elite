@@ -432,7 +432,6 @@ fn kladov_radar_has_two_squares() {
     let (f, _) = draw_radar_view(&[], RadarView::Kladov);
     let cx = cell.x + cell.w / 2;
     let cy = cell.y + cell.h / 2;
-    let half = cell.w / 2 - 2;
     for (name, x, y) in [
         ("верх", cx, cell.y),
         ("низ", cx, cell.y + cell.h - 1),

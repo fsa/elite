@@ -2,6 +2,7 @@
 use super::indicators::missile_icon_rect;
 use super::labels::{SPEED_ICON, indicator_label};
 use super::layout::{DANGER_ATTR, DANGER_SCREEN_ATTR};
+use super::values::CompassGlyph;
 use super::*;
 
 /// Шрифт-заглушка: все знаки — сплошной прямоугольник.

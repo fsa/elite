@@ -63,7 +63,7 @@ pub use self::palette::{
 };
 pub use self::compass::CompassView;
 pub use self::radar::RadarView;
-pub use self::values::{CockpitValues, Compass, CompassGlyph, RadarContacts};
+pub use self::values::{CockpitValues, Compass, RadarContacts};
 
 // Элементы ниже нужны только тестам модуля: боевой код обращается к
 // подмодулям напрямую.
