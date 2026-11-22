@@ -3860,6 +3860,9 @@ loc_6EE8:				; CODE XREF: RAM:loc_E9DFp
 		call	PrintNumber_HLDE
 		jp	PrnCrd_CRLF
 ; ---------------------------------------------------------------------------
+; Растры указателя компаса: 4 строки по 8 пикселей. RenewCompass сдвигает
+; байт строки в трёхбайтовом окне, поэтому знак может выйти за центр кольца.
+; N/S — солнце впереди/позади, W/E — планета впереди/позади (только в космосе).
 CompassIndFill:	db 18h,	3Ch, 3Ch, 18h	; DATA XREF: sub_6F29+3o
 CompassIndEmpty:db 3Ch,	24h, 24h, 3Ch
 CompassInd_N:	db 9, 1Ah, 2Ch,	48h
@@ -3875,15 +3878,17 @@ sub_6F29:				; CODE XREF: sub_8442j
 		ld	hl, CompassIndFill
 		ld	a, (InFreeSpace)
 		and	a
-		ret	z
+		ret	z			; внутри системы — ромб/квадрат
 		ld	a, 2
-		ld	(loc_FD09+1), a
+		ld	(loc_FD09+1), a	;=self-mod: JR Z теперь пропускает LD A,9
 		ld	a, (sub_FD02+1)
-		add	hl, de
-		rrca
+		add	hl, de			; +8: N/S (солнце)
+		rrca				; бит 0 счётчика = 1 -> планета
 		ret	nc
-		add	hl, de
+		add	hl, de			; +16: W/E (планета)
 		ret
+; Итого в космосе знак выбирается парой (sub_FD02+1, CompasPointerType):
+; 0 + впереди -> N, 0 + позади -> S, 9 + впереди -> W, 9 + позади -> E.
 ; End of function sub_6F29
 
 
@@ -8013,7 +8018,10 @@ CompasCrdNnear:				; CODE XREF: PrintCompass+B6p
 loc_827A:				; CODE XREF: PrintCompass+5Aj
 					; PrintCompass+69j
 		nop
-		call	sub_FD02
+		call	sub_FD02	;=переключает цель: солнце (0) или планета (9),
+					;=IX = fsSunCrdXl/fsPlCrdXl, CoriolisNear = 0
+					; В космосе SunCrd/PlanetCrd не участвуют: направление
+					; считается по фиктивным координатам 8ABA/8AC3.
 
 loc_827E:				; CODE XREF: PrintCompass+AAj
 		inc	ix
@@ -35184,6 +35192,13 @@ TestTargonStation:			; CODE XREF: SetTargonStationp
 ; =============== S U B	R O U T	I N E =======================================
 
 
+; Компас в межпланетном пространстве. Счётчик по адресу FD03 (байт opcode
+; XOR) переключается 0 <-> 9. sub_6F29 читает его вместе с CompasPointerType,
+; чтобы выбрать знак N/S (солнце) или W/E (планета).
+; Важно: самомодификация в sub_6F29 меняет смещение JR Z на 2. Если XOR дал
+; 0 (Z=1), переход пропускает LD A,9 — тогда DE=0 и IX остаётся на fsSunCrdXl
+; (8ABA). Если XOR дал 9 (Z=0), LD A,9 исполняется — DE=9 и IX сдвигается на
+; fsPlCrdXl (8AC3). За один вызов меняются и цель указателя, и его знак.
 sub_FD02:				; CODE XREF: PrintCompass+D2p
 					; DATA XREF: sub_6F29+10r ...
 		ld	a, 9
@@ -35191,12 +35206,12 @@ sub_FD02:				; CODE XREF: PrintCompass+D2p
 		ld	(sub_FD02+1), a
 
 loc_FD09:				; DATA XREF: sub_6F29+Dw
-		jr	z, loc_FD0B
+		jr	z, loc_FD0B	;=пропустить LD A,9, когда счётчик стал 0
 
 loc_FD0B:
 		ld	a, 9
-		ld	xl, 7
-		ld	e, a
+		ld	xl, 7		;=в космосе IX ниже перезаписывается целиком
+		ld	e, a		;=E = 0 или 9 — шаг к sun/planet координатам
 		ld	a, (InFreeSpace)
 		and	a
 		jr	z, loc_FD1B
@@ -35205,8 +35220,8 @@ loc_FD0B:
 loc_FD1B:				; CODE XREF: sub_FD02+13j
 		xor	a
 		ld	d, a
-		add	ix, de
-		ld	(CoriolisNear),	a
+		add	ix, de		;=+0 -> солнце, +9 -> планета
+		ld	(CoriolisNear),	a	;=станция в компасе не участвует
 		ret
 ; End of function sub_FD02
 

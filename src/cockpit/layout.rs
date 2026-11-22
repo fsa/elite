@@ -121,8 +121,10 @@ impl CockpitLayout {
             .copied()
             .unwrap_or(0)
             < 4;
+        // Тела видны только внутри планетной системы: в открытом космосе
+        // обычный компас работает с отдельными знаками «стороны света».
         let circle = |base: u16| {
-            if flight_view {
+            if flight_view && !in_free_space {
                 self.read_compass_circle(mem, base)
             } else {
                 CompassCircle::hidden()
@@ -195,6 +197,8 @@ impl CockpitLayout {
         let behind = byte(self.compass_type) != 0;
         let glyph = if byte(self.in_free_space) != 0 {
             // В космосе `sub_6F29` берёт «стороны света», а не ромб/квадрат.
+            // Нечётное `sub_FD02+1` означает цель-планету: в этом кадре
+            // `sub_FD02` смещает IX на 9 байтов от фиктивного солнца.
             if byte(COMPASS_TARGET) & 1 != 0 {
                 if behind {
                     CompassGlyph::PlanetBack

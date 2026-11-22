@@ -727,6 +727,52 @@ fn compass_ring_and_pointer_follow_target() {
     assert_eq!(px(&up, cx, cy + 4 * unit), BACKGROUND);
 }
 
+/// В открытом космосе компас печатает оригинальные растры «стороны света»,
+/// а не зелёный круг: `sub_6F29` меняет знак вместе с целью `sub_FD02`.
+#[test]
+fn compass_in_free_space_draws_original_glyphs() {
+    let font = font();
+    let g = panel_geometry(1280, 960);
+    let cell = g.compass_cell();
+    let unit = (cell.w.min(cell.h) / 20).max(1);
+    let cx = cell.x + cell.w / 2;
+    let cy = cell.y + cell.h / 2;
+    let draw = |glyph: CompassGlyph| {
+        let mut v = values(MISSILE_SLOTS as u8);
+        v.in_free_space = true;
+        v.compass = Compass {
+            x: 0,
+            y: 0,
+            glyph,
+            visible: true,
+        };
+        let mut f = Frame::new(1280, 960);
+        Cockpit::new().draw(&mut f, &font, CockpitStyle::COBRA_MK3, &v);
+        f
+    };
+    let px = |f: &Frame, x: i32, y: i32| f.pixels()[y as usize * 1280 + x as usize];
+
+    // CompassInd_N: солнце впереди.
+    let sun_front = draw(CompassGlyph::SunFront);
+    assert_eq!(px(&sun_front, cx, cy - 2 * unit), FRAME_COLOR);
+    // CompassInd_S: солнце позади — верхний ряд заполнен правее.
+    let sun_back = draw(CompassGlyph::SunBack);
+    assert_eq!(px(&sun_back, cx + unit, cy - 2 * unit), FRAME_COLOR);
+    assert_eq!(px(&sun_front, cx + unit, cy - 2 * unit), BACKGROUND);
+    // CompassInd_W: планета впереди; CompassInd_E: планета позади.
+    let planet_front = draw(CompassGlyph::PlanetFront);
+    assert_eq!(px(&planet_front, cx - 2 * unit, cy), FRAME_COLOR);
+    let planet_back = draw(CompassGlyph::PlanetBack);
+    assert_eq!(px(&planet_back, cx, cy - unit), FRAME_COLOR);
+
+    for f in [&sun_front, &sun_back, &planet_front, &planet_back] {
+        assert!(
+            !f.pixels().contains(&COMPASS_PLANET),
+            "в космосе компас не должен рисовать зелёный круг"
+        );
+    }
+}
+
 /// Компас берёт готовый указатель из переменных `PrintCompass`, а не
 /// пересчитывает цель сам: так нативный вид совпадает с экраном Z80.
 #[test]
@@ -774,12 +820,14 @@ fn compass_reads_circles_from_coordinates() {
     assert_eq!(v.compass_station.x, 5);
     assert!(!v.compass_station.behind);
 
-    // Флаг межпланетного пространства влияет только на обычный указатель.
+    // В космосе нет ни солнца, ни планеты: круги не показываются,
+    // обычный компас переключается на знаки «стороны света».
     mem[l.in_free_space as usize] = 1;
     let v = l.read(&mem);
     assert!(v.in_free_space);
-    assert_eq!(v.compass_sun.x, 7);
-    assert_eq!(v.compass_planet.y, -7);
+    assert_eq!(v.compass_sun, CompassCircle::hidden());
+    assert_eq!(v.compass_planet, CompassCircle::hidden());
+    assert_eq!(v.compass_station, CompassCircle::hidden());
 
     // Обычный указатель по-прежнему берётся из готовых переменных PrintCompass.
     // В космосе `sub_6F29` выбирает «стороны света» по байту `sub_FD02+1`.

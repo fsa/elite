@@ -7,18 +7,37 @@ use super::palette::{
     BACKGROUND, COMPASS_PLANET, COMPASS_STATION, COMPASS_SUN, CockpitStyle,
 };
 use super::values::{
-    COMPASS_CIRCLE_MAX_OFFSET, COMPASS_CIRCLE_RADIUS_X2, CockpitValues, CompassCircle,
+    COMPASS_CIRCLE_MAX_OFFSET, COMPASS_CIRCLE_RADIUS_X2, CockpitValues, Compass, CompassCircle,
+    CompassGlyph,
 };
+
+/// Растры указателя компаса из таблицы `CompassInd*` оригинала.
+///
+/// Это 4 строки по 8 пикселей. `RenewCompass` сдвигает байт строки в
+/// трёхбайтовом окне, поэтому знак может уходить за центр кольца на 8 точек.
+/// В открытом космосе `sub_6F29` выбирает один из четырёх последних растров:
+/// `N` — солнце впереди, `S` — солнце позади, `W` — планета впереди,
+/// `E` — планета позади. Первые два — обычный ромб и полый квадрат.
+const COMPASS_GLYPHS: [[u8; 4]; 6] = [
+    [0x18, 0x3C, 0x3C, 0x18], // CompassIndFill
+    [0x3C, 0x24, 0x24, 0x3C], // CompassIndEmpty
+    [0x09, 0x1A, 0x2C, 0x48], // CompassInd_N
+    [0x0E, 0x10, 0x08, 0x70], // CompassInd_S
+    [0x41, 0x82, 0xB4, 0x58], // CompassInd_W
+    [0x0E, 0x1C, 0x20, 0x1C], // CompassInd_E
+];
 
 /// Режим круглого компаса в нативном кокпите.
 ///
 /// Это чисто нативный переключатель: он не посылает клавиши Z80 и не меняет
 /// режим сканера в эмуляторе. Клавиша `C` в паузе включает режим цветных
 /// кругов: зелёная планета, серый станция и белое солнце. В обычном режиме
-/// один круг тоже окрашен: зелёный для планеты и обычный белый для станции,
-/// чтобы было видно, что компас перестроился. Пока солнце и планета не
-/// накладываются, они просто видны одновременно; при наложении меняется
-/// порядок отрисовки, чтобы оба тела оставались различимы.
+/// внутри системы один круг тоже окрашен: зелёный для планеты и обычный белый
+/// для станции, чтобы было видно, что компас перестроился. В открытом космосе
+/// печатается оригинальный растр «стороны света» (`N/S/W/E`), а круги тел не
+/// показываются. Пока солнце и планета не накладываются, они просто видны
+/// одновременно; при наложении меняется порядок отрисовки, чтобы оба тела
+/// оставались различимы.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum CompassView {
     /// Один указатель на планету или станцию, как в обычном полёте.
@@ -76,10 +95,14 @@ pub(super) fn draw(
             draw_circle(f, cx, cy, unit, COMPASS_SUN, &values.compass_sun);
         }
     } else {
-        // Обычный режим: тот же круг, но зелёный для планеты и белый для
-        // станции. Так сразу видно, на что перестроился компас.
+        // Обычный режим: в космосе печатаем тот же растр, что и оригинальный
+        // `RenewCompass` (стороны света), внутри системы — круг цели.
         let pointer = &values.compass;
-        let color = if values.station_near && !values.in_free_space {
+        if values.in_free_space {
+            draw_glyph(f, cx, cy, unit, style.line, pointer);
+            return;
+        }
+        let color = if values.station_near {
             style.line
         } else {
             COMPASS_PLANET
@@ -97,6 +120,40 @@ pub(super) fn draw(
                 visible: pointer.visible,
             },
         );
+    }
+}
+
+/// Растр указателя из `CompassInd*` в открытом космосе.
+///
+/// В оригинале байт строки занимает 8 пикселей, а смещение `-8..=8` сдвигает
+/// его в трёхбайтовом окне. Нативный компас рисует те же 8 колонок, поэтому
+/// левый край знака отстоит от центра на 4 точки.
+fn draw_glyph(f: &mut Frame, cx: i32, cy: i32, unit: i32, color: u32, pointer: &Compass) {
+    if !pointer.visible {
+        return;
+    }
+    let index = match pointer.glyph {
+        CompassGlyph::Filled => 0,
+        CompassGlyph::Empty => 1,
+        CompassGlyph::SunFront => 2,
+        CompassGlyph::SunBack => 3,
+        CompassGlyph::PlanetFront => 4,
+        CompassGlyph::PlanetBack => 5,
+    };
+    let x0 = cx + pointer.x as i32 * unit - 4 * unit;
+    let y0 = cy - pointer.y as i32 * unit - 2 * unit;
+    for (row, bits) in COMPASS_GLYPHS[index].iter().enumerate() {
+        for col in 0..8 {
+            if bits & (0x80 >> col) != 0 {
+                f.fill_rect(
+                    x0 + col as i32 * unit,
+                    y0 + row as i32 * unit,
+                    unit as usize,
+                    unit as usize,
+                    color,
+                );
+            }
+        }
     }
 }
 
