@@ -479,12 +479,16 @@ impl App<'_> {
                     let values = {
                         let mut values = cockpit::KLADOV_COCKPIT.read(&self.machine.mem);
                         values.blink = (self.machine.frames / 16) % 2 == 0;
+                        // sub_FD02 переключает цель каждый кадр Z80.
+                        values.compass_phase = self.machine.frames % 2 == 0;
                         if matches!(
                             self.flight.transition_kind(),
                             Some(crate::flight::TransitionKind::Launch)
                         ) {
                             values.radar = cockpit::RadarContacts::empty();
                             values.compass = cockpit::Compass::centered();
+                            values.compass_sun = cockpit::Compass::hidden();
+                            values.compass_planet = cockpit::Compass::hidden();
                         }
                         values
                     };
@@ -492,13 +496,14 @@ impl App<'_> {
                         line: self.flight.cockpit_color(),
                         bar: self.flight.cockpit_bar_color(),
                     };
-                    self.cockpit.draw_with_geom_radar(
+                    self.cockpit.draw_with_geom_views(
                         &mut self.machine.hd,
                         &g,
                         ZX_FONT,
                         style,
                         &values,
                         self.radar_view,
+                        self.compass_view,
                     );
                     if self.state.menu {
                         draw_pause_menu(&mut self.machine.hd, ZX_FONT, self.menu_sel, false);

@@ -108,6 +108,9 @@ struct App<'a> {
     /// Вид радара в нативном кокпите: классический сканер или локатор Кладова.
     /// Переключается кликом по овалу радара.
     radar_view: cockpit::RadarView,
+    /// Режим круглого компаса: обычная цель или пара «солнце + планета».
+    /// Переключается кликом по правому верхнему кружку панели.
+    compass_view: cockpit::CompassView,
     /// Нативный экран статуса пилота (F9) — альтернатива экрану `L`.
     status: status::Status,
     /// После кадра эмулятора открыть нативный экран статуса: сначала игра
@@ -261,6 +264,7 @@ impl<'a> App<'a> {
             hdmap_move_rem_y: 0.0,
             shop: equip::Shop::new(),
             radar_view: cockpit::RadarView::Classic,
+            compass_view: cockpit::CompassView::PlanetStation,
             status: status::Status::new(),
             pending_status: false,
             start_requested: false,

@@ -5,8 +5,8 @@
 //! о памяти ничего не знает.
 
 use super::values::{
-    CockpitValues, Compass, DEFLECTION_MAX, Danger, GAUGE_MAX, Indicator, MISSILE_SLOTS,
-    RadarContact, RadarContactKind, RadarContacts,
+    CockpitValues, Compass, CompassGlyph, DEFLECTION_MAX, Danger, GAUGE_MAX, Indicator,
+    MISSILE_SLOTS, RadarContact, RadarContactKind, RadarContacts,
 };
 
 /// Размер слота `SlotObj` в памяти Z80.
@@ -50,8 +50,15 @@ pub struct CockpitLayout {
     pub compass_x: u16,
     /// Указатель компаса (`CompasPointerCrdY`), знак-величина.
     pub compass_y: u16,
-    /// Тип указателя (`CompasPointerType`): `0` — заполненный.
+    /// Тип указателя (`CompasPointerType`): `0` — цель впереди.
     pub compass_type: u16,
+    /// Признак межпланетного пространства (`InFreeSpace`): включает мигающий
+    /// режим «солнце + планета» без участия пользователя.
+    pub in_free_space: u16,
+    /// Координаты солнца (`SunCrd`), три байта на ось.
+    pub sun_crd: u16,
+    /// Координаты планеты (`PlanetCrd`), три байта на ось.
+    pub planet_crd: u16,
     /// Слот станции (`objCoriolis`).
     pub coriolis_slot: u16,
     /// Первый из шести основных слотов объектов (`DataOfAround`).
@@ -81,6 +88,9 @@ pub const KLADOV_COCKPIT: CockpitLayout = CockpitLayout {
     compass_x: 0x81A6,
     compass_y: 0x81A7,
     compass_type: 0x81A8,
+    in_free_space: 0x7103,
+    sun_crd: 0x7107,
+    planet_crd: 0x7110,
     coriolis_slot: 0x6048,
     ship_slot0: 0x606F,
     missile_slot: 0x6159,
@@ -123,6 +133,20 @@ impl CockpitLayout {
             ],
             danger: read_danger(mem),
             compass: self.read_compass(mem),
+            compass_sun: self.read_compass_body(
+                mem,
+                self.sun_crd,
+                CompassGlyph::SunFront,
+                CompassGlyph::SunBack,
+            ),
+            compass_planet: self.read_compass_body(
+                mem,
+                self.planet_crd,
+                CompassGlyph::PlanetFront,
+                CompassGlyph::PlanetBack,
+            ),
+            in_free_space: byte(self.in_free_space) != 0,
+            compass_phase: true,
             radar: self.read_radar(mem),
             station_near: byte(self.coriolis_near) != 0,
             ecm_on: byte(self.ecm_time) != 0,
@@ -130,7 +154,7 @@ impl CockpitLayout {
         }
     }
 
-    /// Прочитать указатель компаса.
+    /// Прочитать указатель обычного режима компаса.
     ///
     /// Оригинал выбирает цель в `PrintCompass` и записывает готовое смещение в
     /// `CompasPointerCrdX/Y` и `CompasPointerType`, откуда его берёт `RenewCompass`.
@@ -158,7 +182,57 @@ impl CockpitLayout {
         Compass {
             x: signed(byte(self.compass_x)),
             y: signed(byte(self.compass_y)),
-            filled: byte(self.compass_type) == 0,
+            glyph: if byte(self.compass_type) != 0 {
+                CompassGlyph::Empty
+            } else {
+                CompassGlyph::Filled
+            },
+            visible: true,
+        }
+    }
+
+    /// Вычислить указатель для солнца или планеты по их координатам в Z80.
+    ///
+    /// Это нативный режим: он не меняет память игры и не зависит от того, какую
+    /// цель в этот кадр выбрал `sub_FD02`. Координаты уже ведутся относительно
+    /// игрока, поэтому смещение на компасе — это нормированная на длину
+    /// вектора проекция, умноженная на радиус 8 «пикселей» оригинала. Как и
+    /// `CalcLenVectorCrdH`/`CompasCrdXplanet`, используем только младшие 16 бит
+    /// координаты. Знак `Z` определяет, цель впереди или позади.
+    fn read_compass_body(
+        &self,
+        mem: &[u8],
+        base: u16,
+        front: CompassGlyph,
+        back: CompassGlyph,
+    ) -> Compass {
+        if mem
+            .get(crate::flight::Z80_WHAT_ON_SCREEN)
+            .copied()
+            .unwrap_or(0)
+            >= 4
+        {
+            return Compass::hidden();
+        }
+        let at = base as usize;
+        let read = |offset: usize| {
+            let from = at + offset;
+            if from + 3 > mem.len() {
+                0
+            } else {
+                read_compass_coordinate(&mem[from..from + 3])
+            }
+        };
+        let x = read(0);
+        let y = read(3);
+        let z = read(6);
+        let len = ((x as f32).powi(2) + (y as f32).powi(2) + (z as f32).powi(2)).sqrt();
+        let scale = if len > 0.0 { 8.0 / len } else { 0.0 };
+        let offset = |v: i32| (v as f32 * scale).trunc().clamp(-8.0, 8.0) as i8;
+        Compass {
+            x: offset(x),
+            y: offset(y),
+            glyph: if z < 0 { back } else { front },
             visible: true,
         }
     }
@@ -248,5 +322,18 @@ fn read_game_coordinate(b: &[u8]) -> i32 {
         return 0;
     }
     let mag = (((b[2] & 0x7F) as i32) << 16) | ((b[1] as i32) << 8) | b[0] as i32;
+    if b[2] & 0x80 != 0 { -mag } else { mag }
+}
+
+/// Координата для компаса в формате, который использует Z80.
+///
+/// `GetCrdObject`/`CalcLenVectorCrdH` считают длину по младшим 16 битам оси,
+/// а знак берётся из старшего байта координаты. Старшие биты третьего байта
+/// в расчёте компаса не участвуют.
+fn read_compass_coordinate(b: &[u8]) -> i32 {
+    if b.len() < 3 {
+        return 0;
+    }
+    let mag = ((b[1] as i32) << 8) | b[0] as i32;
     if b[2] & 0x80 != 0 { -mag } else { mag }
 }

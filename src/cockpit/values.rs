@@ -87,19 +87,55 @@ impl Danger {
     }
 }
 
+/// Растр указателя компаса, выбранный оригинальной `sub_6F29`.
+///
+/// В обычном полёте это ромб для цели впереди и полый квадрат для цели позади.
+/// В межпланетном пространстве `sub_FD02` поочерёдно берёт координаты солнца
+/// и планеты, а `sub_6F29` выбирает для них отдельные значки `N/S/W/E`.
+/// Порядок вариантов повторяет таблицу `CompassInd*` в Z80.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum CompassGlyph {
+    /// `CompassIndFill` — цель впереди.
+    Filled,
+    /// `CompassIndEmpty` — цель позади.
+    Empty,
+    /// `CompassInd_N` — солнце впереди.
+    SunFront,
+    /// `CompassInd_S` — солнце позади.
+    SunBack,
+    /// `CompassInd_W` — планета впереди.
+    PlanetFront,
+    /// `CompassInd_E` — планета позади.
+    PlanetBack,
+}
+
+impl CompassGlyph {
+    /// Индекс в оригинальной таблице растров (`CompassIndFill` = 0).
+    pub const fn index(self) -> usize {
+        match self {
+            CompassGlyph::Filled => 0,
+            CompassGlyph::Empty => 1,
+            CompassGlyph::SunFront => 2,
+            CompassGlyph::SunBack => 3,
+            CompassGlyph::PlanetFront => 4,
+            CompassGlyph::PlanetBack => 5,
+        }
+    }
+}
+
 /// Положение указателя компаса.
 ///
 /// `x` и `y` — смещение от центра в «пикселях» оригинального компаса:
 /// `-8..=8`, положительный `y` — вверх (как в `CompasPointerCrdY`).
-/// `filled` — цель впереди (`CompasPointerType == 0`), иначе указатель
-/// рисуется полым. `visible` — рисовать ли указатель вообще: на титульном
-/// экране ZX `PrnCocpit_Ifn` рисует только кольцо (`DataCompass`), а сам
-/// указатель появляется лишь в полёте (`PrintCompass`).
+/// `glyph` — один из шести оригинальных растров: обычный ромб/квадрат или
+/// отдельный значок солнца и планеты. `visible` — рисовать ли указатель
+/// вообще: на титульном экране ZX `PrnCocpit_Ifn` рисует только кольцо
+/// (`DataCompass`), а сам указатель появляется лишь в полёте (`PrintCompass`).
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct Compass {
     pub x: i8,
     pub y: i8,
-    pub filled: bool,
+    pub glyph: CompassGlyph,
     pub visible: bool,
 }
 
@@ -109,7 +145,7 @@ impl Compass {
         Compass {
             x: 0,
             y: 0,
-            filled: true,
+            glyph: CompassGlyph::Filled,
             visible: true,
         }
     }
@@ -210,8 +246,17 @@ pub struct CockpitValues {
     pub right: [Indicator; PANEL_ROWS as usize],
     /// Индикатор опасности в верхнем левом кружке.
     pub danger: Danger,
-    /// Указатель компаса в верхнем правом кружке.
+    /// Указатель обычного режима компаса: планета или станция.
     pub compass: Compass,
+    /// Указатель солнца для режима «планета + солнце».
+    pub compass_sun: Compass,
+    /// Указатель планеты для режима «планета + солнце».
+    pub compass_planet: Compass,
+    /// Корабль вне планетной системы (`InFreeSpace`): режим «солнце + планета»
+    /// включается сам, даже если пользователь его не включал кликом.
+    pub in_free_space: bool,
+    /// Фаза мигания компаса: поочерёдно показывает солнце и планету.
+    pub compass_phase: bool,
     /// Контакты радара в системе координат игрока.
     pub radar: RadarContacts,
     /// Станция рядом (`CoriolisNear`): на панели виден символ `S` и доступен
@@ -259,6 +304,10 @@ impl CockpitValues {
             ],
             danger: Danger::Off,
             compass: Compass::hidden(),
+            compass_sun: Compass::hidden(),
+            compass_planet: Compass::hidden(),
+            in_free_space: false,
+            compass_phase: true,
             radar: RadarContacts::empty(),
             station_near: true,
             ecm_on: true,

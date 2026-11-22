@@ -56,13 +56,14 @@
 
 use crate::display::Frame;
 
-pub use self::geometry::{CockpitGeom, LINE, Rect, panel_geometry, radar_hit};
+pub use self::geometry::{CockpitGeom, LINE, Rect, compass_hit, panel_geometry, radar_hit};
 pub use self::layout::KLADOV_COCKPIT;
 pub use self::palette::{
     BACKGROUND, BAR_MAGENTA, BAR_RED, CockpitStyle, DANGER_COLOR, FRAME_COLOR,
 };
+pub use self::compass::CompassView;
 pub use self::radar::RadarView;
-pub use self::values::{CockpitValues, Compass, RadarContacts};
+pub use self::values::{CockpitValues, Compass, CompassGlyph, RadarContacts};
 
 // Элементы ниже нужны только тестам модуля: боевой код обращается к
 // подмодулям напрямую.
@@ -137,11 +138,19 @@ impl Cockpit {
         style: CockpitStyle,
         values: &CockpitValues,
     ) {
-        self.draw_with_geom_radar(f, g, font, style, values, RadarView::Classic);
+        self.draw_with_geom_views(
+            f,
+            g,
+            font,
+            style,
+            values,
+            RadarView::Classic,
+            CompassView::PlanetStation,
+        );
     }
 
-    /// То же, но с явным выбором вида радара.
-    pub fn draw_with_geom_radar(
+    /// Нарисовать кокпит с явным выбором видов радара и компаса.
+    pub fn draw_with_geom_views(
         &self,
         f: &mut Frame,
         g: &CockpitGeom,
@@ -149,6 +158,7 @@ impl Cockpit {
         style: CockpitStyle,
         values: &CockpitValues,
         radar_view: RadarView,
+        compass_view: CompassView,
     ) {
         // Нижняя часть непрозрачна и закрывает всё, что под ней.
         if g.panel_h > 0 && g.width > 0 {
@@ -167,7 +177,7 @@ impl Cockpit {
         labels::draw(f, g, font, style.line);
         indicators::draw(f, g, style, values);
         danger::draw(f, g, values);
-        compass::draw(f, g, style, values);
+        compass::draw(f, g, style, values, compass_view);
         radar::draw_view(f, g, style, values, radar_view);
         status::draw(f, g, style, values);
     }

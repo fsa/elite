@@ -178,6 +178,40 @@ use crate::world::{
         assert_eq!(app.radar_view, cockpit::RadarView::Classic);
     }
 
+    /// Клик по кружку компаса переключает только нативный режим компаса.
+    #[test]
+    fn compass_click_toggles_view_only_in_flight() {
+        let opts = test_options();
+        let mut app = App::new(boot(), &opts);
+        let (w, h) = (1280u32, 960u32);
+        let cell = cockpit::panel_geometry(w, h).compass_cell();
+        let x = cell.x + cell.w / 2;
+        let y = cell.y + cell.h / 2;
+
+        assert_eq!(app.compass_view, cockpit::CompassView::PlanetStation);
+        app.state.screen = Screen::Flight;
+        assert!(
+            app.toggle_compass_at(x, y, w, h),
+            "клик по компасу не сработал"
+        );
+        assert_eq!(app.compass_view, cockpit::CompassView::PlanetSun);
+        assert!(
+            app.toggle_compass_at(x, y, w, h),
+            "повторный клик по компасу не сработал"
+        );
+        assert_eq!(app.compass_view, cockpit::CompassView::PlanetStation);
+        assert!(!app.toggle_compass_at(0, 0, w, h), "клик вне компаса сработал");
+
+        // Переключатель компаса не трогает вид радара.
+        assert_eq!(app.radar_view, cockpit::RadarView::Classic);
+
+        app.state.screen = Screen::Intro;
+        assert!(
+            !app.toggle_compass_at(x, y, w, h),
+            "клик по компасу на заставке сработал"
+        );
+    }
+
     /// В игре показывается полный ZX-кадр: нижние 64 строки (родная растровая
     /// панель оригинала) не обрезаются — нативная панель `src/cockpit.rs` в
     /// игре не рисуется, она осталась только на заставке.

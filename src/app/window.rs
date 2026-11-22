@@ -84,6 +84,33 @@ impl App<'_> {
         true
     }
 
+    /// Клик по кружку компаса переключает нативный режим цель/«планета + солнце».
+    ///
+    /// Как и у радара, это только состояние приложения: в Z80 не уходит никакой
+    /// ключ, поэтому режимы сканера и компаса в эмуляторе не меняются. Клик
+    /// поглощается, чтобы он не стал выстрелом.
+    pub(super) fn toggle_compass_at(&mut self, x: i32, y: i32, win_w: u32, win_h: u32) -> bool {
+        if self.menu
+            || self.docked.is_active()
+            || !matches!(self.state.screen, Screen::Flight | Screen::Animation(_))
+        {
+            return false;
+        }
+        let (game_w, game_h) = self.game_size(win_w, win_h);
+        if x < 0 || y < 0 || x >= game_w as i32 || y >= game_h as i32 {
+            return false;
+        }
+        let geom = cockpit::panel_geometry(game_w, game_h);
+        if !cockpit::compass_hit(&geom, x, y) {
+            return false;
+        }
+        self.compass_view = match self.compass_view {
+            cockpit::CompassView::PlanetStation => cockpit::CompassView::PlanetSun,
+            cockpit::CompassView::PlanetSun => cockpit::CompassView::PlanetStation,
+        };
+        true
+    }
+
     fn create_window(&mut self, event_loop: &ActiveEventLoop) {
         if self.window.is_some() {
             return;
@@ -291,11 +318,17 @@ impl ApplicationHandler for App<'_> {
                     self.return_from_sysinfo_to_map();
                     return;
                 }
-                // В полёте ЛКМ по овалу радара переключает вид локатора.
+                // В полёте ЛКМ по овалу радара переключает вид локатора,
+                // а ЛКМ по кружку компаса — режим «планета + солнце».
                 if button == MouseButton::Left && pressed {
                     if let Some(w) = &self.window {
                         let size = w.inner_size();
                         if self.toggle_radar_at(
+                            self.cursor_x as i32,
+                            self.cursor_y as i32,
+                            size.width,
+                            size.height,
+                        ) || self.toggle_compass_at(
                             self.cursor_x as i32,
                             self.cursor_y as i32,
                             size.width,
