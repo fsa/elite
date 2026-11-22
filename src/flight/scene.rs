@@ -8,8 +8,9 @@ use crate::render3d::Rotation;
 use crate::shipdata::{self, Ship};
 
 use super::memory::{
-    self, Z80_OBJ_CORIOLIS, Z80_OBJ_MISSILE, Z80_OBJ_SLOT0, Z80_OENERG_DESTROYED,
-    Z80_PLANET_CRD, Z80_SLOT_OADRDATA, Z80_SLOT_OENERG, Z80_SLOT_SIZE, Z80_SUN_CRD,
+    self, z80_in_free_space, Z80_OBJ_CORIOLIS, Z80_OBJ_MISSILE, Z80_OBJ_SLOT0,
+    Z80_OENERG_DESTROYED, Z80_PLANET_CRD, Z80_SLOT_OADRDATA, Z80_SLOT_OENERG, Z80_SLOT_SIZE,
+    Z80_SUN_CRD,
 };
 
 pub(super) const BODY_SRC_CORIOLIS: u8 = 0;
@@ -96,24 +97,30 @@ pub(super) fn build(mem: &[u8], planet_color: u32, system_color: u32) -> Vec<Bod
     );
 
     // Солнце и планета: те же координаты вида, что использует оригинал.
-    push_z80_celestial(
-        &mut bodies,
-        mem,
-        Z80_SUN_CRD,
-        BODY_SRC_SUN,
-        BodyKind::Sun,
-        SUN_RADIUS,
-        sun_color,
-    );
-    push_z80_celestial(
-        &mut bodies,
-        mem,
-        Z80_PLANET_CRD,
-        BODY_SRC_PLANET,
-        BodyKind::Planet,
-        PLANET_RADIUS,
-        planet_color,
-    );
+    // В межпланетном пространстве (`InFreeSpace <> 0`) оригинал в `GameMain`
+    // вызывает `PrnSunPlanet` только по нулевому флагу, поэтому диски не
+    // рисуются. Координаты там всё ещё меняются для компаса, но при перехвате
+    // таргонами остаются от покинутой системы: нативный диск заливал бы весь вид.
+    if !z80_in_free_space(mem) {
+        push_z80_celestial(
+            &mut bodies,
+            mem,
+            Z80_SUN_CRD,
+            BODY_SRC_SUN,
+            BodyKind::Sun,
+            SUN_RADIUS,
+            sun_color,
+        );
+        push_z80_celestial(
+            &mut bodies,
+            mem,
+            Z80_PLANET_CRD,
+            BODY_SRC_PLANET,
+            BodyKind::Planet,
+            PLANET_RADIUS,
+            planet_color,
+        );
+    }
 
     bodies
 }

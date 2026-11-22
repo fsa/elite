@@ -21,6 +21,13 @@ pub const Z80_SCREEN_INFO_PLANET: u8 = 9;
 pub const Z80_SCREEN_MARKET: u8 = 0x0A;
 /// `WhatOnScreen` для экрана пилота (`Cmd_L_PilotInfo`, клавиша `L`).
 pub const Z80_SCREEN_PILOT_INFO: u8 = 0x0B;
+/// `InFreeSpace`: `<>0` — корабль вне планетной системы (межпланетное
+/// пространство, в том числе после перехвата таргонами).
+///
+/// Оригинал в `GameMain` вызывает `PrnSunPlanet` только при
+/// `InFreeSpace == 0`, поэтому в космосе солнце и планета не рисуются,
+/// хотя их координаты продолжают обновляться для компаса.
+pub const Z80_IN_FREE_SPACE: usize = 0x7103;
 /// `IndDanger`: `0` — корабль пристыкован к станции, иначе — в полёте.
 pub const Z80_IND_DANGER: usize = 0x7104;
 /// `PlayerGameOver`: `<>0` — корабль игрока погиб. Оригинал проигрывает
@@ -98,6 +105,11 @@ pub(super) const Z80_SLOT_OADRDATA: usize = 0x23;
 pub(super) const Z80_SUN_CRD: usize = 0x7107;
 /// Координаты планеты (9 байт, знак-величина).
 pub(super) const Z80_PLANET_CRD: usize = 0x7110;
+
+/// Находится ли корабль вне планетной системы (`InFreeSpace <> 0`).
+pub fn z80_in_free_space(mem: &[u8]) -> bool {
+    mem.get(Z80_IN_FREE_SPACE).copied().unwrap_or(0) != 0
+}
 
 /// Идёт ли сейчас анимация вылета, прыжка или стыковки. В это время оригинал
 /// игнорирует клавиши `1`-`4`, а нативный вид не должен закрывать ролик.

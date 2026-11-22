@@ -5,8 +5,8 @@ use crate::render3d::{Rotation, Screen};
 
 use super::explosions::EXPLOSION_TIME;
 use super::memory::{
-    read_signed24, read_signed8, Z80_LASER_MOUNTS, Z80_OBJ_CORIOLIS, Z80_OBJ_SLOT0,
-    Z80_DAMAGE_FRONT_SHIELD, Z80_OENERG_DESTROYED, Z80_PLANET_CRD, Z80_SHIELD_FRONT,
+    read_signed24, read_signed8, Z80_DAMAGE_FRONT_SHIELD, Z80_IN_FREE_SPACE, Z80_LASER_MOUNTS,
+    Z80_OBJ_CORIOLIS, Z80_OBJ_SLOT0, Z80_OENERG_DESTROYED, Z80_PLANET_CRD, Z80_SHIELD_FRONT,
     Z80_SHIELD_REAR, Z80_SLOT_OADRDATA, Z80_SLOT_OENERG, Z80_SUN_CRD, Z80_TEMP_LASER,
 };
 use super::messages::{countdown_number, view_label, BOTTOM_MSG_TTL};
@@ -848,6 +848,35 @@ fn flight_view_is_opaque_and_uses_z80_scene() {
     }
 }
 
+#[test]
+fn targon_intercept_does_not_draw_stale_planet() {
+    let mut f = open();
+    let mut mem = z80_mem_with_flight();
+    // При перехвате движок выставляет `InFreeSpace`, но координаты планеты
+    // остаются близкими: без проверки флага её диск заливал бы весь вид.
+    mem[Z80_IN_FREE_SPACE] = 0xFA;
+    mem[Z80_PLANET_CRD + 7] = 0x40;
+    mem[Z80_PLANET_CRD + 8] = 0;
+    f.sync_from_z80(&mem);
+    let mut frame = Frame::new(1280, 960);
+    let geom = cockpit::panel_geometry(1280, 960);
+    f.draw(&mut frame, &geom, &[]);
+    assert!(
+        !frame.pixels().iter().any(|&p| is_planet_green(p)),
+        "планета покинутой системы нарисована в космосе"
+    );
+
+    // Контроль: в планетной системе тот же диск всё ещё рисуется.
+    mem[Z80_IN_FREE_SPACE] = 0;
+    f.sync_from_z80(&mem);
+    let mut frame = Frame::new(1280, 960);
+    f.draw(&mut frame, &geom, &[]);
+    assert!(
+        frame.pixels().iter().any(|&p| is_planet_green(p)),
+        "планета не нарисовалась в планетной системе"
+    );
+}
+
 /// Сохранить кадр в PPM (P6) для визуальной проверки.
 fn write_ppm(path: &str, px: &[u32], w: usize, h: usize) {
     let mut out = format!("P6\n{w} {h}\n255\n").into_bytes();
@@ -1103,6 +1132,35 @@ fn z80_reads_flight_data_from_memory() {
     assert_eq!(
         f.bodies.iter().filter(|b| b.kind == BodyKind::Ship).count(),
         1
+    );
+}
+
+#[test]
+fn z80_hides_sun_and_planet_in_free_space() {
+    let mut f = open();
+    let mut mem = z80_mem_with_flight();
+    // Перехват таргонами: движок держит `InFreeSpace`, но старые координаты
+    // солнца и планеты остаются от покинутой системы.
+    mem[Z80_IN_FREE_SPACE] = 0xFA;
+    f.sync_from_z80(&mem);
+    assert!(
+        !f.bodies.iter().any(|b| matches!(
+            b.kind,
+            BodyKind::Sun | BodyKind::Planet
+        )),
+        "в межпланетном пространстве не должны рисоваться солнце и планета"
+    );
+
+    // В обычной системе те же тела по тем же координатам видны.
+    mem[Z80_IN_FREE_SPACE] = 0;
+    f.sync_from_z80(&mem);
+    assert!(
+        f.bodies.iter().any(|b| b.kind == BodyKind::Sun),
+        "солнце пропало в планетной системе"
+    );
+    assert!(
+        f.bodies.iter().any(|b| b.kind == BodyKind::Planet),
+        "планета пропала в планетной системе"
     );
 }
 
