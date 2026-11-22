@@ -90,9 +90,10 @@ impl Danger {
 /// Растр указателя компаса, выбранный оригинальной `sub_6F29`.
 ///
 /// В обычном полёте это ромб для цели впереди и полый квадрат для цели позади.
-/// В межпланетном пространстве `sub_FD02` поочерёдно берёт координаты солнца
-/// и планеты, а `sub_6F29` выбирает для них отдельные значки `N/S/W/E`.
-/// Порядок вариантов повторяет таблицу `CompassInd*` в Z80.
+/// Отдельные значки `N/S/W/E` («стороны света») `sub_6F29` выбирает только в
+/// межпланетном пространстве. Нативный компас использует тип знака лишь чтобы
+/// различить цель впереди и позади: сами растры больше не печатаются. Порядок
+/// вариантов повторяет таблицу `CompassInd*` в Z80.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum CompassGlyph {
     /// `CompassIndFill` — цель впереди.
@@ -110,16 +111,12 @@ pub enum CompassGlyph {
 }
 
 impl CompassGlyph {
-    /// Индекс в оригинальной таблице растров (`CompassIndFill` = 0).
-    pub const fn index(self) -> usize {
-        match self {
-            CompassGlyph::Filled => 0,
-            CompassGlyph::Empty => 1,
-            CompassGlyph::SunFront => 2,
-            CompassGlyph::SunBack => 3,
-            CompassGlyph::PlanetFront => 4,
-            CompassGlyph::PlanetBack => 5,
-        }
+    /// Цель позади игрока: в нативном компасе такой круг рисуется контуром.
+    pub const fn is_behind(self) -> bool {
+        matches!(
+            self,
+            CompassGlyph::Empty | CompassGlyph::SunBack | CompassGlyph::PlanetBack
+        )
     }
 }
 
@@ -162,6 +159,40 @@ impl Compass {
 impl Default for Compass {
     fn default() -> Self {
         Self::centered()
+    }
+}
+
+/// Удвоенный радиус круга тела в «пикселях» компаса: 5 означает 2,5.
+/// Удвоение нужно, чтобы радиус оставался целым при любом масштабе.
+pub const COMPASS_CIRCLE_RADIUS_X2: i32 = 5;
+/// Предел смещения центра круга: `7 + 2,5 < 10` пикселей — радиус кольца.
+pub const COMPASS_CIRCLE_MAX_OFFSET: i8 = 7;
+/// Квадрат удвоенного радиуса: `(2 × 2,5)² = 25` — порог наложения.
+const COMPASS_OVERLAP_LIMIT_SQ: i32 = 25;
+
+/// Круг тела на компасе.
+///
+/// Положение задаётся так же, как у указателя: `y` вверх, но центр круга
+/// ограничен [`COMPASS_CIRCLE_MAX_OFFSET`], чтобы сам круг не выходил за
+/// кольцо. `behind` означает, что тело позади игрока: такой круг рисуется
+/// непрозрачным контуром, а не заливкой.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct CompassCircle {
+    pub x: i8,
+    pub y: i8,
+    pub behind: bool,
+    pub visible: bool,
+}
+
+impl CompassCircle {
+    /// Круг не показывается: тело отсутствует или экран не полётный.
+    pub const fn hidden() -> Self {
+        CompassCircle {
+            x: 0,
+            y: 0,
+            behind: false,
+            visible: false,
+        }
     }
 }
 
@@ -253,15 +284,18 @@ pub struct CockpitValues {
     pub danger: Danger,
     /// Указатель обычного режима компаса: планета или станция.
     pub compass: Compass,
-    /// Указатель солнца для режима «планета + солнце».
-    pub compass_sun: Compass,
-    /// Указатель планеты для режима «планета + солнце».
-    pub compass_planet: Compass,
-    /// Корабль вне планетной системы (`InFreeSpace`): режим «солнце + планета»
-    /// включается сам, даже если пользователь его не включал кликом.
+    /// Зелёный круг планеты альтернативного компаса.
+    pub compass_planet: CompassCircle,
+    /// Серый круг станции альтернативного компаса.
+    pub compass_station: CompassCircle,
+    /// Белый круг солнца альтернативного компаса.
+    pub compass_sun: CompassCircle,
+    /// Корабль вне планетной системы (`InFreeSpace`): в обычном режиме
+    /// компас показывает «стороны света» для солнца и планеты.
     pub in_free_space: bool,
-    /// Фаза мигания компаса: поочерёдно показывает солнце и планету.
-    pub compass_phase: bool,
+    /// Что рисовать сверху, когда круги солнца и планеты накладываются.
+    /// `true` — солнце, `false` — планета. Без наложения фаза не важна.
+    pub compass_overlap_phase: bool,
     /// Контакты радара в системе координат игрока.
     pub radar: RadarContacts,
     /// Станция рядом (`CoriolisNear`): на панели виден символ `S` и доступен
@@ -274,6 +308,22 @@ pub struct CockpitValues {
 }
 
 impl CockpitValues {
+    /// Накладываются ли круги солнца и планеты на компасе.
+    ///
+    /// Центры двух кругов радиуса 2,5 пикселя должны быть не дальше 5.
+    /// Позиции хранятся в тех же единицах, поэтому порог не зависит от
+    /// масштаба окна.
+    pub fn compass_bodies_overlap(&self) -> bool {
+        let sun = &self.compass_sun;
+        let planet = &self.compass_planet;
+        if !sun.visible || !planet.visible {
+            return false;
+        }
+        let dx = sun.x as i32 - planet.x as i32;
+        let dy = sun.y as i32 - planet.y as i32;
+        dx * dx + dy * dy <= COMPASS_OVERLAP_LIMIT_SQ
+    }
+
     /// Показания панели на заставке — как на титульном экране ZX.
     ///
     /// Оригинал не пересчитывает приборы на заставке: `PrnCocpit_Ifn`
@@ -309,10 +359,11 @@ impl CockpitValues {
             ],
             danger: Danger::Off,
             compass: Compass::hidden(),
-            compass_sun: Compass::hidden(),
-            compass_planet: Compass::hidden(),
+            compass_planet: CompassCircle::hidden(),
+            compass_station: CompassCircle::hidden(),
+            compass_sun: CompassCircle::hidden(),
             in_free_space: false,
-            compass_phase: true,
+            compass_overlap_phase: true,
             radar: RadarContacts::empty(),
             station_near: true,
             ecm_on: true,

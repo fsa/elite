@@ -3,49 +3,41 @@
 use crate::display::Frame;
 
 use super::geometry::CockpitGeom;
-use super::palette::CockpitStyle;
-use super::values::CockpitValues;
-
-/// Растры указателя компаса из таблицы `CompassInd*` оригинала.
-///
-/// Это 4 строки по 8 пикселей: `RenewCompass` сдвигает байт строки в
-/// трёхбайтовом окне, поэтому знак может уходить за центр кольца на 8 точек.
-/// Первые два растра — обычный ромб и полый квадрат, остальные четыре
-/// выбирает `sub_6F29` в межпланетном пространстве для солнца и планеты.
-const COMPASS_GLYPHS: [[u8; 4]; 6] = [
-    [0x18, 0x3C, 0x3C, 0x18], // CompassIndFill
-    [0x3C, 0x24, 0x24, 0x3C], // CompassIndEmpty
-    [0x09, 0x1A, 0x2C, 0x48], // CompassInd_N — солнце впереди
-    [0x0E, 0x10, 0x08, 0x70], // CompassInd_S — солнце позади
-    [0x41, 0x82, 0xB4, 0x58], // CompassInd_W — планета впереди
-    [0x0E, 0x1C, 0x20, 0x1C], // CompassInd_E — планета позади
-];
+use super::palette::{
+    BACKGROUND, COMPASS_PLANET, COMPASS_STATION, COMPASS_SUN, CockpitStyle,
+};
+use super::values::{
+    COMPASS_CIRCLE_MAX_OFFSET, COMPASS_CIRCLE_RADIUS_X2, CockpitValues, CompassCircle,
+};
 
 /// Режим круглого компаса в нативном кокпите.
 ///
 /// Это чисто нативный переключатель: он не посылает клавиши Z80 и не меняет
-/// режим сканера в эмуляторе. Клик по кружку в правом верхнем углу панели
-/// включает мигающий режим «солнце + планета» внутри планетной системы.
-/// В космосе он включается сам, а внутри системы станция перебивает мигание.
+/// режим сканера в эмуляторе. Клавиша `C` в паузе включает режим цветных
+/// кругов: зелёная планета, серый станция и белое солнце. В обычном режиме
+/// один круг тоже окрашен: зелёный для планеты и обычный белый для станции,
+/// чтобы было видно, что компас перестроился. Пока солнце и планета не
+/// накладываются, они просто видны одновременно; при наложении меняется
+/// порядок отрисовки, чтобы оба тела оставались различимы.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum CompassView {
     /// Один указатель на планету или станцию, как в обычном полёте.
-    PlanetStation,
-    /// Мигание: солнце и планета по очереди, каждый со своим значком.
-    PlanetSun,
+    Pointer,
+    /// Цветные круги тел: планета, станция и солнце.
+    Bodies,
 }
 
 impl Default for CompassView {
     fn default() -> Self {
-        CompassView::PlanetStation
+        CompassView::Pointer
     }
 }
 
-/// Нарисовать компас: окружность и указатели выбранного режима.
+/// Нарисовать компас: кольцо и круг цели.
 ///
-/// Размеры повторяют оригинал: круг 20x20 «пикселей» ZX и указатель 4x4,
-/// смещённый от центра на `-8..=8`. При увеличении окна один пиксель ZX
-/// превращается в восьмую часть диаметра.
+/// Размеры повторяют оригинал: кольцо 20x20 «пикселей» ZX, смещение цели
+/// `-8..=8`. Радиус круга согласован с порогом наложения в
+/// [`CockpitValues::compass_bodies_overlap`].
 pub(super) fn draw(
     f: &mut Frame,
     g: &CockpitGeom,
@@ -69,52 +61,100 @@ pub(super) fn draw(
     for k in 0..unit {
         f.circle(cx, cy, (radius - k).max(0), style.line);
     }
-    // Как и в оригинале, вне системы режим включается сам, а внутри системы
-    // пользователь задаёт его кликом. `sub_FD02` в космосе сбрасывает
-    // `CoriolisNear`, поэтому там станция режим не перебивает.
-    let station = values.station_near && !values.in_free_space;
-    let sun_planet = !station && (values.in_free_space || view == CompassView::PlanetSun);
-    if sun_planet {
-        let pointer = if values.compass_phase {
-            &values.compass_sun
+    if view == CompassView::Bodies {
+        // Станцию рисуем первой: при совпадении круг планеты или солнца
+        // должен оставаться сверху.
+        draw_circle(f, cx, cy, unit, COMPASS_STATION, &values.compass_station);
+        if values.compass_bodies_overlap() && !values.compass_overlap_phase {
+            // Наложение: меняем порядок, чтобы в общей области попеременно
+            // был виден то зелёный круг, то белый. Это заменяет старый хак с
+            // переключением цели `PrintCompass`: тела больше не пропадают.
+            draw_circle(f, cx, cy, unit, COMPASS_SUN, &values.compass_sun);
+            draw_circle(f, cx, cy, unit, COMPASS_PLANET, &values.compass_planet);
         } else {
-            &values.compass_planet
-        };
-        draw_pointer(f, cx, cy, unit, style, pointer);
+            draw_circle(f, cx, cy, unit, COMPASS_PLANET, &values.compass_planet);
+            draw_circle(f, cx, cy, unit, COMPASS_SUN, &values.compass_sun);
+        }
     } else {
-        draw_pointer(f, cx, cy, unit, style, &values.compass);
+        // Обычный режим: тот же круг, но зелёный для планеты и белый для
+        // станции. Так сразу видно, на что перестроился компас.
+        let pointer = &values.compass;
+        let color = if values.station_near && !values.in_free_space {
+            style.line
+        } else {
+            COMPASS_PLANET
+        };
+        draw_circle(
+            f,
+            cx,
+            cy,
+            unit,
+            color,
+            &CompassCircle {
+                x: pointer.x.clamp(-COMPASS_CIRCLE_MAX_OFFSET, COMPASS_CIRCLE_MAX_OFFSET),
+                y: pointer.y.clamp(-COMPASS_CIRCLE_MAX_OFFSET, COMPASS_CIRCLE_MAX_OFFSET),
+                behind: pointer.glyph.is_behind(),
+                visible: pointer.visible,
+            },
+        );
     }
 }
 
-/// Один указатель. Положительный `y` — вверх, как `CompasPointerCrdY`.
-fn draw_pointer(
+/// Круг тела: заливка для цели впереди, непрозрачный контур для сзади.
+fn draw_circle(
     f: &mut Frame,
     cx: i32,
     cy: i32,
     unit: i32,
-    style: CockpitStyle,
-    pointer: &super::values::Compass,
+    color: u32,
+    circle: &CompassCircle,
 ) {
-    if !pointer.visible {
+    if !circle.visible {
         return;
     }
-    // В оригинале байт строки занимает 8 пикселей, а смещение `-8..=8`
-    // сдвигает его в трёхбайтовом окне. Нативный компас рисует те же 8
-    // колонок, поэтому левый край знака отстоит от центра на 4 точки.
-    let x0 = cx + pointer.x as i32 * unit - 4 * unit;
-    let y0 = cy - pointer.y as i32 * unit - 2 * unit;
-    let sprite = &COMPASS_GLYPHS[pointer.glyph.index()];
-    for (row, bits) in sprite.iter().enumerate() {
-        for col in 0..8 {
-            if bits & (0x80 >> col) != 0 {
-                f.fill_rect(
-                    x0 + col as i32 * unit,
-                    y0 + row as i32 * unit,
-                    unit as usize,
-                    unit as usize,
-                    style.line,
-                );
-            }
+    let x = cx + circle.x as i32 * unit;
+    let y = cy - circle.y as i32 * unit;
+    let r = unit * COMPASS_CIRCLE_RADIUS_X2 / 2;
+    if circle.behind {
+        // Фон внутри контура не прозрачен: он перекрывает тела, нарисованные
+        // раньше, поэтому при наложении верхний круг всегда читается.
+        f.disc(x, y, r, BACKGROUND);
+        for k in 0..unit {
+            f.circle(x, y, (r - k).max(0), color);
         }
+    } else {
+        f.disc(x, y, r, color);
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::super::palette::{COMPASS_PLANET, COMPASS_STATION};
+    use super::super::values::{COMPASS_CIRCLE_RADIUS_X2, CompassCircle};
+    use super::*;
+
+    /// Контур перекрывает круг, нарисованный под ним, а не просвечивает.
+    #[test]
+    fn empty_circle_is_opaque() {
+        let unit = 4;
+        let center = (50, 50);
+        let filled = CompassCircle {
+            x: 0,
+            y: 0,
+            behind: false,
+            visible: true,
+        };
+        let outline = CompassCircle {
+            behind: true,
+            ..filled
+        };
+        let mut f = Frame::new(100, 100);
+        draw_circle(&mut f, center.0, center.1, unit, COMPASS_PLANET, &filled);
+        assert_eq!(f.pixels()[50 * 100 + 50], COMPASS_PLANET);
+
+        draw_circle(&mut f, center.0, center.1, unit, COMPASS_STATION, &outline);
+        assert_eq!(f.pixels()[50 * 100 + 50], BACKGROUND);
+        let rim = 50 + unit * COMPASS_CIRCLE_RADIUS_X2 / 2;
+        assert_eq!(f.pixels()[50 * 100 + rim as usize], COMPASS_STATION);
     }
 }

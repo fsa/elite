@@ -180,18 +180,18 @@ use crate::world::{
         let x = cell.x + cell.w / 2;
         let y = cell.y + cell.h / 2;
 
-        assert_eq!(app.compass_view, cockpit::CompassView::PlanetStation);
+        assert_eq!(app.compass_view, cockpit::CompassView::Pointer);
         app.state.screen = Screen::Flight;
         assert!(
             app.toggle_compass_at(x, y, w, h),
             "клик по компасу не сработал"
         );
-        assert_eq!(app.compass_view, cockpit::CompassView::PlanetSun);
+        assert_eq!(app.compass_view, cockpit::CompassView::Bodies);
         assert!(
             app.toggle_compass_at(x, y, w, h),
             "повторный клик по компасу не сработал"
         );
-        assert_eq!(app.compass_view, cockpit::CompassView::PlanetStation);
+        assert_eq!(app.compass_view, cockpit::CompassView::Pointer);
         assert!(!app.toggle_compass_at(0, 0, w, h), "клик вне компаса сработал");
 
         // Переключатель компаса не трогает вид радара.
@@ -202,6 +202,14 @@ use crate::world::{
             !app.toggle_compass_at(x, y, w, h),
             "клик по компасу на заставке сработал"
         );
+    }
+
+    /// Наложение солнца и планеты меняется раз в полсекунды.
+    #[test]
+    fn compass_overlap_blink_half_second_cycle() {
+        use super::frame::COMPASS_BLINK_MS;
+
+        assert_eq!(COMPASS_BLINK_MS, 250);
     }
 
     /// В игре показывается полный ZX-кадр: нижние 64 строки (родная растровая

@@ -11,8 +11,14 @@ pub const DANGER_COLOR: u32 = 0xFFFF_4040;
 pub const DANGER_GREEN: u32 = 0xFF00_D700;
 /// Жёлтый индикатор опасности (`IndDanger = 0x06`).
 pub const DANGER_YELLOW: u32 = 0xFFD7_D700;
-/// Цвет фона кокпита (paper 0).
+/// Фон кокпита (paper 0).
 pub const BACKGROUND: u32 = 0xFF00_0000;
+/// Зелёный круг планеты на альтернативном компасе.
+pub const COMPASS_PLANET: u32 = 0xFF00_D700;
+/// Серый «металлический» круг станции на альтернативном компасе.
+pub const COMPASS_STATION: u32 = 0xFF9A_9EA6;
+/// Белый круг солнца на альтернативном компасе.
+pub const COMPASS_SUN: u32 = FRAME_COLOR;
 /// Цвет длинных клеток у Cobra Mk III — красный (ZX paper 2).
 pub const BAR_RED: u32 = 0xFFD7_0000;
 /// Цвет длинных клеток у Cobra Mk IV — фиолетовый (ZX paper 3).

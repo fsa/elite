@@ -61,9 +61,11 @@ pub use self::layout::KLADOV_COCKPIT;
 pub use self::palette::{
     BACKGROUND, BAR_MAGENTA, BAR_RED, CockpitStyle, DANGER_COLOR, FRAME_COLOR,
 };
+#[cfg(test)]
+pub use self::palette::{COMPASS_PLANET, COMPASS_STATION, COMPASS_SUN};
 pub use self::compass::CompassView;
 pub use self::radar::RadarView;
-pub use self::values::{CockpitValues, Compass, RadarContacts};
+pub use self::values::{CockpitValues, Compass, CompassCircle, RadarContacts};
 
 // Элементы ниже нужны только тестам модуля: боевой код обращается к
 // подмодулям напрямую.
@@ -145,7 +147,7 @@ impl Cockpit {
             style,
             values,
             RadarView::Classic,
-            CompassView::PlanetStation,
+            CompassView::Pointer,
         );
     }
 

@@ -5,8 +5,8 @@
 //! о памяти ничего не знает.
 
 use super::values::{
-    CockpitValues, Compass, CompassGlyph, DEFLECTION_MAX, Danger, GAUGE_MAX, Indicator,
-    MISSILE_SLOTS, RadarContact, RadarContactKind, RadarContacts,
+    COMPASS_CIRCLE_MAX_OFFSET, CockpitValues, Compass, CompassCircle, CompassGlyph, DEFLECTION_MAX,
+    Danger, GAUGE_MAX, Indicator, MISSILE_SLOTS, RadarContact, RadarContactKind, RadarContacts,
 };
 
 /// Размер слота `SlotObj` в памяти Z80.
@@ -15,6 +15,9 @@ const SLOT_SIZE: u16 = 0x27;
 const SLOT_OENERG: u16 = 0x22;
 /// Число основных слотов объектов (без станции и ракеты).
 const SHIP_SLOTS: u16 = 6;
+/// Самомодифицируемый байт `sub_FD02+1` (`0` — солнце, `9` — планета).
+/// `sub_6F29` читает его, чтобы выбрать растр «стороны света» в космосе.
+const COMPASS_TARGET: u16 = 0xFD03;
 
 /// Адреса переменных панели в памяти игры (текущее значение показания).
 ///
@@ -52,8 +55,8 @@ pub struct CockpitLayout {
     pub compass_y: u16,
     /// Тип указателя (`CompasPointerType`): `0` — цель впереди.
     pub compass_type: u16,
-    /// Признак межпланетного пространства (`InFreeSpace`): включает мигающий
-    /// режим «солнце + планета» без участия пользователя.
+    /// Признак межпланетного пространства (`InFreeSpace`): обычный указатель
+    /// комбинирует «стороны света» для солнца и планеты.
     pub in_free_space: u16,
     /// Координаты солнца (`SunCrd`), три байта на ось.
     pub sun_crd: u16,
@@ -112,6 +115,25 @@ impl CockpitLayout {
                 offset.clamp(-(DEFLECTION_MAX as i16), DEFLECTION_MAX as i16) as i8,
             )
         };
+        let in_free_space = byte(self.in_free_space) != 0;
+        let flight_view = mem
+            .get(crate::flight::Z80_WHAT_ON_SCREEN)
+            .copied()
+            .unwrap_or(0)
+            < 4;
+        let circle = |base: u16| {
+            if flight_view {
+                self.read_compass_circle(mem, base)
+            } else {
+                CompassCircle::hidden()
+            }
+        };
+        let station = (self.coriolis_slot as usize) + SLOT_OENERG as usize;
+        let station = if flight_view && mem.get(station).copied().unwrap_or(0) != 0 {
+            circle(self.coriolis_slot)
+        } else {
+            CompassCircle::hidden()
+        };
         CockpitValues {
             left: [
                 gauge(self.shield_front),
@@ -133,20 +155,11 @@ impl CockpitLayout {
             ],
             danger: read_danger(mem),
             compass: self.read_compass(mem),
-            compass_sun: self.read_compass_body(
-                mem,
-                self.sun_crd,
-                CompassGlyph::SunFront,
-                CompassGlyph::SunBack,
-            ),
-            compass_planet: self.read_compass_body(
-                mem,
-                self.planet_crd,
-                CompassGlyph::PlanetFront,
-                CompassGlyph::PlanetBack,
-            ),
-            in_free_space: byte(self.in_free_space) != 0,
-            compass_phase: true,
+            compass_planet: circle(self.planet_crd),
+            compass_station: station,
+            compass_sun: circle(self.sun_crd),
+            in_free_space,
+            compass_overlap_phase: true,
             radar: self.read_radar(mem),
             station_near: byte(self.coriolis_near) != 0,
             ecm_on: byte(self.ecm_time) != 0,
@@ -179,41 +192,42 @@ impl CockpitLayout {
                 v as i8
             }
         };
+        let behind = byte(self.compass_type) != 0;
+        let glyph = if byte(self.in_free_space) != 0 {
+            // В космосе `sub_6F29` берёт «стороны света», а не ромб/квадрат.
+            if byte(COMPASS_TARGET) & 1 != 0 {
+                if behind {
+                    CompassGlyph::PlanetBack
+                } else {
+                    CompassGlyph::PlanetFront
+                }
+            } else if behind {
+                CompassGlyph::SunBack
+            } else {
+                CompassGlyph::SunFront
+            }
+        } else if behind {
+            CompassGlyph::Empty
+        } else {
+            CompassGlyph::Filled
+        };
         Compass {
             x: signed(byte(self.compass_x)),
             y: signed(byte(self.compass_y)),
-            glyph: if byte(self.compass_type) != 0 {
-                CompassGlyph::Empty
-            } else {
-                CompassGlyph::Filled
-            },
+            glyph,
             visible: true,
         }
     }
 
-    /// Вычислить указатель для солнца или планеты по их координатам в Z80.
+    /// Вычислить положение круга тела на альтернативном компасе.
     ///
-    /// Это нативный режим: он не меняет память игры и не зависит от того, какую
-    /// цель в этот кадр выбрал `sub_FD02`. Координаты уже ведутся относительно
-    /// игрока, поэтому смещение на компасе — это нормированная на длину
-    /// вектора проекция, умноженная на радиус 8 «пикселей» оригинала. Как и
-    /// `CalcLenVectorCrdH`/`CompasCrdXplanet`, используем только младшие 16 бит
-    /// координаты. Знак `Z` определяет, цель впереди или позади.
-    fn read_compass_body(
-        &self,
-        mem: &[u8],
-        base: u16,
-        front: CompassGlyph,
-        back: CompassGlyph,
-    ) -> Compass {
-        if mem
-            .get(crate::flight::Z80_WHAT_ON_SCREEN)
-            .copied()
-            .unwrap_or(0)
-            >= 4
-        {
-            return Compass::hidden();
-        }
+    /// Это нативный расчёт: не читается готовый указатель `PrintCompass`, а
+    /// направление считается по координатам самого тела. Координаты уже ведутся
+    /// относительно игрока, поэтому смещение — нормированная на длину вектора
+    /// проекция, умноженная на радиус 8 «пикселей» оригинала. Берём все 24 бита:
+    /// знак лежит в старшем бите третьего байта, остальные его биты — часть
+    /// величины. По знаку `Z` решается, тело впереди или позади.
+    fn read_compass_circle(&self, mem: &[u8], base: u16) -> CompassCircle {
         let at = base as usize;
         let read = |offset: usize| {
             let from = at + offset;
@@ -228,11 +242,18 @@ impl CockpitLayout {
         let z = read(6);
         let len = ((x as f32).powi(2) + (y as f32).powi(2) + (z as f32).powi(2)).sqrt();
         let scale = if len > 0.0 { 8.0 / len } else { 0.0 };
-        let offset = |v: i32| (v as f32 * scale).trunc().clamp(-8.0, 8.0) as i8;
-        Compass {
+        let offset = |v: i32| {
+            (v as f32 * scale)
+                .trunc()
+                .clamp(
+                    -(COMPASS_CIRCLE_MAX_OFFSET as f32),
+                    COMPASS_CIRCLE_MAX_OFFSET as f32,
+                ) as i8
+        };
+        CompassCircle {
             x: offset(x),
             y: offset(y),
-            glyph: if z < 0 { back } else { front },
+            behind: z < 0,
             visible: true,
         }
     }
@@ -328,15 +349,15 @@ fn read_game_coordinate(b: &[u8]) -> i32 {
     if b[2] & 0x80 != 0 { -mag } else { mag }
 }
 
-/// Координата для компаса в формате, который использует Z80.
+/// Координата тела для компаса в формате знак-величина Z80.
 ///
-/// `GetCrdObject`/`CalcLenVectorCrdH` считают длину по младшим 16 битам оси,
-/// а знак берётся из старшего байта координаты. Старшие биты третьего байта
-/// в расчёте компаса не участвуют.
+/// Старший бит третьего байта — знак, остальные семь битов — часть величины.
+/// Нативный расчёт использует все 24 бита: на больших расстояниях старший байт
+/// заметно влияет на направление.
 fn read_compass_coordinate(b: &[u8]) -> i32 {
     if b.len() < 3 {
         return 0;
     }
-    let mag = ((b[1] as i32) << 8) | b[0] as i32;
+    let mag = (((b[2] & 0x7F) as i32) << 16) | ((b[1] as i32) << 8) | b[0] as i32;
     if b[2] & 0x80 != 0 { -mag } else { mag }
 }

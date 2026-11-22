@@ -200,16 +200,16 @@ impl App<'_> {
         }
     }
 
-    /// Клавиша `C` переключает бит `1` ячейки `0xFD0A`, которую читает
-    /// оригинальный компас (`loc_7339` вызывает `sub_DFEE`). В нативном слое
-    /// режим меняется сразу, чтобы изменение было видно без кадра Z80.
+    /// Клавиша `C` переключает бит `1` ячейки `0xFD0A`, как в оригинале
+    /// (`loc_7339` вызывает `sub_DFEE`). В нативном слое она включает и
+    /// выключает режим цветных кругов, в том числе белый круг солнца.
     fn toggle_compass(&mut self) {
         if let Some(cell) = self.machine.mem.get_mut(flight::Z80_COMPASS_FLAG) {
             *cell ^= 2;
         }
         self.compass_view = match self.compass_view {
-            cockpit::CompassView::PlanetStation => cockpit::CompassView::PlanetSun,
-            cockpit::CompassView::PlanetSun => cockpit::CompassView::PlanetStation,
+            cockpit::CompassView::Pointer => cockpit::CompassView::Bodies,
+            cockpit::CompassView::Bodies => cockpit::CompassView::Pointer,
         };
     }
 }

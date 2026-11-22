@@ -77,8 +77,8 @@ impl App<'_> {
             return false;
         }
         self.compass_view = match self.compass_view {
-            cockpit::CompassView::PlanetStation => cockpit::CompassView::PlanetSun,
-            cockpit::CompassView::PlanetSun => cockpit::CompassView::PlanetStation,
+            cockpit::CompassView::Pointer => cockpit::CompassView::Bodies,
+            cockpit::CompassView::Bodies => cockpit::CompassView::Pointer,
         };
         true
     }

@@ -18,6 +18,13 @@ use crate::ui::menu::draw_pause_menu;
 use crate::ui::present::{blit_zx_frame, draw_debug_panel};
 use crate::{native, world};
 
+/// Длительность одной фазы наложения солнца и планеты на компасе.
+///
+/// Отсчёт идёт по настенным часам, а не по кадрам Z80: в паузе эмулятор стоит,
+/// а наложение должно продолжать мигать. 250 мс на фазу — полный цикл за
+/// полсекунды, как удобно различать глазами; частота не зависит от FPS.
+pub(super) const COMPASS_BLINK_MS: u128 = 250;
+
 impl App<'_> {
     /// Сколько фиксированных 50 Гц кадров Z80 накопилось за реальное время.
     ///
@@ -487,16 +494,22 @@ impl App<'_> {
                     let values = {
                         let mut values = cockpit::KLADOV_COCKPIT.read(&self.machine.mem);
                         values.blink = (self.machine.frames / 16) % 2 == 0;
-                        // sub_FD02 переключает цель каждый кадр Z80.
-                        values.compass_phase = self.machine.frames % 2 == 0;
+                        values.compass_overlap_phase = if values.compass_bodies_overlap() {
+                            (self.visual_phase_start.elapsed().as_millis() / COMPASS_BLINK_MS)
+                                % 2
+                                == 0
+                        } else {
+                            true
+                        };
                         if matches!(
                             self.flight.transition_kind(),
                             Some(crate::flight::TransitionKind::Launch)
                         ) {
                             values.radar = cockpit::RadarContacts::empty();
                             values.compass = cockpit::Compass::centered();
-                            values.compass_sun = cockpit::Compass::hidden();
-                            values.compass_planet = cockpit::Compass::hidden();
+                            values.compass_planet = cockpit::CompassCircle::hidden();
+                            values.compass_station = cockpit::CompassCircle::hidden();
+                            values.compass_sun = cockpit::CompassCircle::hidden();
                         }
                         values
                     };
