@@ -24,6 +24,9 @@ pub enum Sfx {
     /// Соответствует вызову ROM BEEPER (`0x03B5`) с `HL=0x0080`, `DE=0x0060`
     /// (подпрограмма `sub_E1E8` оригинала). 194 фронта, полупериод 630 тактов.
     DockedBeep,
+    /// Короткий отклик на клавишу паузы Кладова. Звук нативный: замороженный
+    /// Z80 не может подтвердить нажатие своим бипером.
+    PauseKey,
 }
 
 /// Описание звука: последовательность тонов бипера.
@@ -49,10 +52,18 @@ const DOCKED_BEEP: [Tone; 1] = [Tone {
     start_high: true,
 }];
 
+/// ~15 мс тона 875 Гц — короткий, но отчётливый отклик на нажатие.
+const PAUSE_KEY: [Tone; 1] = [Tone {
+    half_period_tstates: 2000,
+    edges: 26,
+    start_high: true,
+}];
+
 impl Sfx {
     fn seq(self) -> ToneSeq {
         match self {
             Sfx::DockedBeep => ToneSeq { tones: &DOCKED_BEEP },
+            Sfx::PauseKey => ToneSeq { tones: &PAUSE_KEY },
         }
     }
 }
@@ -194,6 +205,22 @@ mod tests {
         assert!(
             (1400..=1700).contains(&nonzero),
             "неожиданная длительность: {nonzero} ненулевых сэмплов"
+        );
+    }
+
+    #[test]
+    fn pause_key_is_short_and_audible() {
+        let mut player = SfxPlayer::new();
+        player.play(Sfx::PauseKey);
+        let mut buf = vec![0i16; 2048];
+        player.mix(&mut buf);
+        assert!(!player.is_playing(), "отклик паузы должен быть коротким");
+        assert!(buf.iter().any(|&s| s > 0), "нет положительных сэмплов");
+        assert!(buf.iter().any(|&s| s < 0), "нет отрицательных сэмплов");
+        let nonzero = buf.iter().filter(|&&s| s != 0).count();
+        assert!(
+            (500..=800).contains(&nonzero),
+            "неожиданная длительность отклика: {nonzero} сэмплов"
         );
     }
 

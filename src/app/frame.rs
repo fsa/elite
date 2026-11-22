@@ -252,8 +252,10 @@ impl App<'_> {
         // и перехват сообщений.
         self.sync_state();
         // Заглушка `DOCKED` живёт примерно секунду, затем экран возвращается
-        // к тому, что был открыт до неё.
-        self.docked.expire(Instant::now());
+        // к тому, что был открыт до неё. Во время паузы время игры стоит.
+        if !self.pause_active {
+            self.docked.expire(Instant::now());
+        }
         let capture = matches!(self.state.screen, Screen::Flight | Screen::Animation(_))
             && !self.state.menu
             && !self.save_editor_open;
@@ -264,7 +266,6 @@ impl App<'_> {
         let (game_w, game_h) = self.game_size(size.width, size.height);
         let is_alt_screen = self.station_native
             || self.pending_station_native.is_some()
-            || self.pause_stub
             || self.docked.is_active()
             || self.save_editor_open
             || !matches!(self.state.screen, Screen::Emulator(_));
@@ -284,7 +285,14 @@ impl App<'_> {
         // станции эмулятор стоит на экране капитана и больше не исполняется:
         // все данные уже доступны нативным экранам, ввод в Z80 не уходит.
         let mut emulator_ran = false;
-        if self.save_editor_open {
+        if self.pause_active {
+            // Z80 не исполняется и не получает ввод: экран заморожен, а
+            // сервисные клавиши уже разобраны в `key_event`.
+            self.machine.release_all_keys();
+            self.machine.release_joystick();
+            self.pending_key = None;
+            self.play_frame_audio(false);
+        } else if self.save_editor_open {
             self.machine.release_all_keys();
             self.machine.release_joystick();
             self.pending_key = None;
@@ -572,9 +580,10 @@ impl App<'_> {
             }
         }
         self.draw_speed_indicator();
-        // Временная страница клавиш паузы перекрывает нативный экран станции.
-        if !self.docked.is_active() && self.pause_stub {
-            crate::ui::message::draw(&mut self.machine.hd, ZX_FONT, "AVAILABLE LATER");
+        // В паузе поверх замороженного кадра показывается только короткая
+        // надпись по центру; сам кадр и нативный слой остаются на месте.
+        if self.pause_active {
+            crate::ui::message::draw_banner(&mut self.machine.hd, ZX_FONT, "PAUSE");
         }
 
         self.present(&window, &layout);
@@ -608,9 +617,7 @@ impl App<'_> {
         // показывается вместо ZX-кадра; сырой эмуляторный экран — с наложением
         // HD-слоя поверх масштабированного ZX-кадра.
         match self.state.screen {
-            Screen::Emulator(_)
-                if !self.station_native && !self.pause_stub && !self.docked.is_active() =>
-            {
+            Screen::Emulator(_) if !self.station_native && !self.docked.is_active() => {
                 blit_zx_frame(src, &mut out, ow, oh, l);
                 self.machine.hd.composite_onto(
                     &mut out,

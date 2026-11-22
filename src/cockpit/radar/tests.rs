@@ -2,7 +2,7 @@
 
 use crate::display::Frame;
 
-use super::super::geometry::{Rect, oval_radar_hit, panel_geometry};
+use super::super::geometry::{Rect, panel_geometry};
 use super::super::palette::{CockpitStyle, FRAME_COLOR};
 use super::super::values::{CockpitValues, RadarContact, RadarContactKind, RadarContacts};
 use super::{RadarView, draw_view, oval, plot_contact, RADAR_RANGE};
@@ -491,21 +491,3 @@ fn kladov_contact_size_depends_on_distance() {
     let far_extra = lit_in(&f_far, cell).saturating_sub(lit_in(&empty, cell));
     assert!(near_extra > far_extra, "близкий знак не больше дальнего: {near_extra} vs {far_extra}");
 }
-
-/// Клик переключает вид только по видимому овалу, не по углам клетки.
-#[test]
-fn radar_hit_covers_oval_not_bounding_box() {
-    let g = panel_geometry(W as u32, H as u32);
-    let cell = g.oval_radar_cell();
-    let (cx, cy, rx, ry) = ellipse_params(cell);
-
-    assert!(oval_radar_hit(&g, cx, cy), "центр овала не реагирует");
-    assert!(oval_radar_hit(&g, cx + rx - 1, cy), "правый край не реагирует");
-    assert!(oval_radar_hit(&g, cx, cy + ry - 1), "нижний край не реагирует");
-    assert!(!oval_radar_hit(&g, cell.x, cell.y), "клик в углу клетки сработал");
-    assert!(!oval_radar_hit(&g, cell.x - 1, cy), "клик вне клетки сработал");
-    assert!(!oval_radar_hit(&g, cx + rx + 3, cy), "клик за овалом сработал");
-}
-
-
-

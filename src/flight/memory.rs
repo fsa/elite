@@ -4,6 +4,8 @@
 //! в подсистеме полёта работает с уже прочитанными значениями и не знает,
 //! где именно они лежат в памяти Spectrum.
 
+use crate::cockpit::RadarView;
+
 // Адреса в памяти Z80 (версия Кладова). Координаты объектов ведутся уже
 // в системе координат игрока: камера стоит в начале координат вдоль +Z.
 /// Минимальный объём памяти, покрывающий все адреса полётных данных
@@ -48,6 +50,24 @@ pub const Z80_JUMP_COUNTDOWN: usize = 0xDBA1;
 pub const Z80_HIGH_ANGLE_LR: usize = 0x70E4;
 /// `HighAngleDU` — угловая скорость тангажа (знак-величина).
 pub const Z80_HIGH_ANGLE_DU: usize = 0x70E5;
+/// `ControlKey1` — флаги сервисных клавиш (инверсия тангажа, маскировка и т.п.).
+pub const Z80_CONTROL_KEY1: usize = 0xFC08;
+/// `ControlKey2`: бит `7` взведён, пока игра находится в паузе Кладова.
+pub const Z80_CONTROL_KEY2: usize = 0xFC0A;
+/// `PressKeyPrnSymbol`: символ последней клавиши, разобранной `ScanKeys`.
+pub const Z80_PRESS_KEY_SYMBOL: usize = 0xFC0D;
+/// `FlagsSetUp` — битовая маска настроек, переключаемых в паузе Кладова.
+pub const Z80_FLAGS_SETUP: usize = 0xFC0E;
+/// Байт `byte_72A2` — поворот станины лазеров на карте.
+pub const Z80_MAP_ROTATION: usize = 0x72A2;
+/// Флаг режима компаса, который переключает клавиша `C` в паузе.
+pub const Z80_COMPASS_FLAG: usize = 0xFD0A;
+/// Модифицируемый immediate в `CopyLocator2Scr`: `7` — сканер, `0` — локатор.
+pub const Z80_SCANNER_MODE: usize = 0xB3B3;
+/// `sub_7A84` меняет этот байт на `0x90` при включении локатора.
+pub const Z80_SCANNER_INVERT: usize = 0x972F;
+/// `FlgSaveScaner`: локатор копируется на экран на следующем игровом такте.
+pub const Z80_FLG_SAVE_SCANNER: usize = 0x96C4;
 /// `HighDeltaSpeed` — текущая скорость, 0..=31.
 pub(super) const Z80_HIGH_DELTA_SPEED: usize = 0x70E6;
 /// `Speed` — индикатор скорости: `5 * HighDeltaSpeed + 5`, 0..=0xA0.
@@ -58,10 +78,10 @@ pub(super) const Z80_SPEED_GAUGE: usize = 0x70F4;
 
 /// `byte_D08E`: <>0 — у игрока Cobra Mk IV (в блоке командира `PilotName`).
 /// От типа корабля зависит цвет длинных клеток приборной панели.
-pub(super) const Z80_COBRA_MK4: usize = 0xD08E;
+pub const Z80_COBRA_MK4: usize = 0xD08E;
 /// `PilotFrontLaser`: типы лазеров в креплениях FRONT, REAR, LEFT, RIGHT.
 /// `0` — лазер не установлен.
-pub(super) const Z80_LASER_MOUNTS: usize = 0xD07D;
+pub const Z80_LASER_MOUNTS: usize = 0xD07D;
 /// `ShieldFront` — передний щит, 0..0xA0.
 pub(super) const Z80_SHIELD_FRONT: usize = 0x70E8;
 /// `ShieldRear` — задний щит, 0..0xA0.
@@ -109,6 +129,20 @@ pub(super) const Z80_PLANET_CRD: usize = 0x7110;
 /// Находится ли корабль вне планетной системы (`InFreeSpace <> 0`).
 pub fn z80_in_free_space(mem: &[u8]) -> bool {
     mem.get(Z80_IN_FREE_SPACE).copied().unwrap_or(0) != 0
+}
+
+/// Вид радара, который включён в эмуляторе.
+///
+/// `sub_7A84` (клавиша `L` в паузе Кладова) меняет immediate в
+/// `CopyLocator2Scr` с `7` на `0`: при `7` вызывается классический сканер, при
+/// `0` — локатор Кладова. Именно этот байт и является источником правды для
+/// нативного кокпита, а не состояние мыши.
+pub fn z80_radar_view(mem: &[u8]) -> RadarView {
+    if mem.get(Z80_SCANNER_MODE).copied() == Some(0) {
+        RadarView::Kladov
+    } else {
+        RadarView::Classic
+    }
 }
 
 /// Идёт ли сейчас анимация вылета, прыжка или стыковки. В это время оригинал

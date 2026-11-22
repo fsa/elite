@@ -40,8 +40,8 @@ use crate::render3d::Rotation;
 use self::combat::Combat;
 use self::explosions::Explosions;
 use self::memory::{
-    Z80_COBRA_MK4, Z80_HIGH_DELTA_SPEED, Z80_MEM_MIN, Z80_SPEED_GAUGE, Z80_STARS_FAST_SCROLL,
-    Z80_STARS_LEN, Z80_STARS_TABLE,
+    Z80_HIGH_DELTA_SPEED, Z80_MEM_MIN, Z80_SPEED_GAUGE, Z80_STARS_FAST_SCROLL, Z80_STARS_LEN,
+    Z80_STARS_TABLE,
 };
 use self::messages::Messages;
 use self::palette::{planet_green, PLANET_COLOR};
@@ -67,10 +67,14 @@ mod view;
 // модуля полёта, поэтому не считаем их неиспользуемыми в обычной сборке.
 #[allow(unused_imports)]
 pub use self::memory::{
-    z80_in_cockpit, z80_in_transition, z80_is_docked, z80_player_dead, z80_stop_rotation,
-    Z80_FLG_JUMP_DOCKING, Z80_HIGH_ANGLE_DU, Z80_HIGH_ANGLE_LR, Z80_IND_DANGER,
-    Z80_JUMP_COUNTDOWN, Z80_JUMP_DOCKING, Z80_PLAYER_GAME_OVER, Z80_SCREEN_INFO_PLANET,
-    Z80_SCREEN_LOCAL_MAP, Z80_SCREEN_MARKET, Z80_SCREEN_PILOT_INFO, Z80_WHAT_ON_SCREEN,
+    z80_in_cockpit, z80_in_transition, z80_is_docked, z80_player_dead, z80_radar_view,
+    z80_stop_rotation, Z80_COBRA_MK4, Z80_COMPASS_FLAG, Z80_CONTROL_KEY1, Z80_CONTROL_KEY2,
+    Z80_FLG_SAVE_SCANNER, Z80_FLG_JUMP_DOCKING, Z80_FLAGS_SETUP, Z80_HIGH_ANGLE_DU,
+    Z80_HIGH_ANGLE_LR, Z80_IND_DANGER, Z80_JUMP_COUNTDOWN, Z80_JUMP_DOCKING, Z80_LASER_MOUNTS,
+    Z80_MAP_ROTATION, Z80_PLAYER_GAME_OVER, Z80_PRESS_KEY_SYMBOL, Z80_SCANNER_INVERT,
+    Z80_SCANNER_MODE,
+    Z80_SCREEN_INFO_PLANET, Z80_SCREEN_LOCAL_MAP, Z80_SCREEN_MARKET, Z80_SCREEN_PILOT_INFO,
+    Z80_WHAT_ON_SCREEN,
 };
 pub use self::transition::TransitionKind;
 pub use self::view::ViewDir;

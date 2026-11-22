@@ -55,40 +55,12 @@ impl App<'_> {
         self.cursor_visible = !hide;
     }
 
-    /// Клик по овалу радара в нативном кокпите переключает вид сканера.
-    ///
-    /// Координаты приходят в пикселях окна. Нативный кокпит рисуется в HD-слое
-    /// 1:1 в игровой области (слева от отладочной полосы), поэтому перевод в
-    /// координаты HD-слоя — это просто вычитание начала игровой области; здесь
-    /// она начинается в (0,0). Клик по радару поглощается, чтобы он не
-    /// срабатывал одновременно как выстрел.
-    pub(super) fn toggle_radar_at(&mut self, x: i32, y: i32, win_w: u32, win_h: u32) -> bool {
-        if self.menu
-            || self.docked.is_active()
-            || !matches!(self.state.screen, Screen::Flight | Screen::Animation(_))
-        {
-            return false;
-        }
-        let (game_w, game_h) = self.game_size(win_w, win_h);
-        if x < 0 || y < 0 || x >= game_w as i32 || y >= game_h as i32 {
-            return false;
-        }
-        let geom = cockpit::panel_geometry(game_w, game_h);
-        if !cockpit::radar_hit(&geom, self.radar_view, x, y) {
-            return false;
-        }
-        self.radar_view = match self.radar_view {
-            cockpit::RadarView::Classic => cockpit::RadarView::Kladov,
-            cockpit::RadarView::Kladov => cockpit::RadarView::Classic,
-        };
-        true
-    }
-
     /// Клик по кружку компаса переключает нативный режим цель/«планета + солнце».
     ///
-    /// Как и у радара, это только состояние приложения: в Z80 не уходит никакой
-    /// ключ, поэтому режимы сканера и компаса в эмуляторе не меняются. Клик
-    /// поглощается, чтобы он не стал выстрелом.
+    /// Это только состояние приложения: в Z80 не уходит никакой ключ, поэтому
+    /// режим компаса в эмуляторе не меняется. Клик поглощается, чтобы он не
+    /// стал выстрелом. Вид радара, наоборот, берётся из эмулятора и кликом не
+    /// переключается.
     pub(super) fn toggle_compass_at(&mut self, x: i32, y: i32, win_w: u32, win_h: u32) -> bool {
         if self.menu
             || self.docked.is_active()
@@ -231,6 +203,15 @@ impl ApplicationHandler for App<'_> {
             }
             WindowEvent::MouseInput { state, button, .. } => {
                 self.note_mouse_activity();
+                // В паузе мышь не должна готовить выстрел или действие экрана,
+                // которое сработает после выхода из неё.
+                if self.pause_active {
+                    self.mouse_left = false;
+                    self.mouse_right = false;
+                    self.mouse_wheel_up = false;
+                    self.mouse_wheel_down = false;
+                    return;
+                }
                 let pressed = state == ElementState::Pressed;
                 // Кнопки отладочной полосы переключают вид под миниатюрой и
                 // не попадают в игру.
@@ -318,17 +299,13 @@ impl ApplicationHandler for App<'_> {
                     self.return_from_sysinfo_to_map();
                     return;
                 }
-                // В полёте ЛКМ по овалу радара переключает вид локатора,
-                // а ЛКМ по кружку компаса — режим «планета + солнце».
+                // В полёте ЛКМ по кружку компаса переключает режим
+                // «планета + солнце». Радар кликом не переключается: его вид
+                // задаёт режим, включённый в эмуляторе (`L` в паузе Кладова).
                 if button == MouseButton::Left && pressed {
                     if let Some(w) = &self.window {
                         let size = w.inner_size();
-                        if self.toggle_radar_at(
-                            self.cursor_x as i32,
-                            self.cursor_y as i32,
-                            size.width,
-                            size.height,
-                        ) || self.toggle_compass_at(
+                        if self.toggle_compass_at(
                             self.cursor_x as i32,
                             self.cursor_y as i32,
                             size.width,

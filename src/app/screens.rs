@@ -24,7 +24,6 @@ impl App<'_> {
         self.close_market();
         self.flight.close();
         self.docked.close();
-        self.pause_stub = false;
         self.pending_status = false;
         self.pending_sysinfo = false;
         self.pending_market = false;

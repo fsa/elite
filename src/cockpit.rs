@@ -56,7 +56,7 @@
 
 use crate::display::Frame;
 
-pub use self::geometry::{CockpitGeom, LINE, Rect, compass_hit, panel_geometry, radar_hit};
+pub use self::geometry::{CockpitGeom, LINE, Rect, compass_hit, panel_geometry};
 pub use self::layout::KLADOV_COCKPIT;
 pub use self::palette::{
     BACKGROUND, BAR_MAGENTA, BAR_RED, CockpitStyle, DANGER_COLOR, FRAME_COLOR,

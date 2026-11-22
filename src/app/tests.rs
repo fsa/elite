@@ -154,27 +154,19 @@ use crate::world::{
         }
     }
 
-    /// Клик по овалу радара переключает вид локатора только в полёте.
+    /// Нативный радар — зеркало режима, включённого в эмуляторе. Клик сам по
+    /// себе его не меняет: переключает только `L` в паузе Кладова.
     #[test]
-    fn radar_click_toggles_view_only_in_flight() {
+    fn radar_view_follows_emulator_mode() {
         let opts = test_options();
         let mut app = App::new(boot(), &opts);
-        let (w, h) = (1280u32, 960u32);
-        let cell = cockpit::panel_geometry(w, h).oval_radar_cell();
-        let x = cell.x + cell.w / 2;
-        let y = cell.y + cell.h / 2;
 
         assert_eq!(app.radar_view, cockpit::RadarView::Classic);
-        app.state.screen = Screen::Flight;
-        assert!(app.toggle_radar_at(x, y, w, h), "клик по овалу не сработал");
+        app.machine.mem[flight::Z80_SCANNER_MODE] = 0;
+        app.sync_state();
         assert_eq!(app.radar_view, cockpit::RadarView::Kladov);
-        assert!(app.toggle_radar_at(x, y, w, h), "повторный клик не сработал");
-        assert_eq!(app.radar_view, cockpit::RadarView::Classic);
-        assert!(!app.toggle_radar_at(0, 0, w, h), "клик вне овала сработал");
-        assert_eq!(app.radar_view, cockpit::RadarView::Classic);
-
-        app.state.screen = Screen::Intro;
-        assert!(!app.toggle_radar_at(x, y, w, h), "клик на заставке сработал");
+        app.machine.mem[flight::Z80_SCANNER_MODE] = 7;
+        app.sync_state();
         assert_eq!(app.radar_view, cockpit::RadarView::Classic);
     }
 
@@ -2567,12 +2559,11 @@ use crate::world::{
         }
     }
 
-    /// В нативном режиме станции только Left Shift (в оригинале — вход в
-    /// паузу) показывает временную заглушку. Клавиши настроек из
-    /// `kladov_keys.md` сами по себе заглушку не открывают и в эмулятор не
-    /// уходят. Следующее нажатие закрывает заглушку и обрабатывается штатно.
+    /// Left Shift включает паузу Кладова в игре. Пока она активна, сервисные
+    /// клавиши меняют память Z80, а Space возвращает игру в обычный режим с
+    /// сохранёнными настройками. Замороженный эмулятор ввод не получает.
     #[test]
-    fn pause_key_shows_stub_on_station() {
+    fn left_shift_enters_kladov_pause_and_space_applies_settings() {
         let opts = test_options();
         let mut app = App::new(boot(), &opts);
         app.machine.intro_seen = false;
@@ -2581,48 +2572,162 @@ use crate::world::{
         app.machine.mem[flight::Z80_JUMP_DOCKING] = 0;
         app.machine.mem[flight::Z80_FLG_JUMP_DOCKING] = 0;
         app.maybe_enter_native_station();
-
         assert!(app.station_native, "подготовка: станция не в нативном режиме");
-        assert!(!app.pause_stub, "заглушка паузы уже показана");
 
-        // Клавиши настроек из `kladov_keys.md` больше не реагируют на заглушку.
-        for key in [
-            KeyCode::KeyY,
-            KeyCode::KeyB,
-            KeyCode::KeyC,
-            KeyCode::KeyR,
-            KeyCode::KeyF,
-            KeyCode::KeyQ,
-            KeyCode::KeyS,
-            KeyCode::Space,
+        let flags0 = app.machine.mem[flight::Z80_FLAGS_SETUP];
+        let scanner0 = app.machine.mem[flight::Z80_SCANNER_MODE];
+
+        // В обычном режиме клавиши настроек настройки не меняют.
+        app.key_event(KeyCode::KeyY, true, false);
+        assert_eq!(app.machine.mem[flight::Z80_FLAGS_SETUP], flags0);
+
+        app.key_event(KeyCode::ShiftLeft, true, false);
+        assert!(app.pause_active, "Shift не включил паузу");
+        assert_ne!(
+            app.machine.mem[flight::Z80_CONTROL_KEY2] & 0x80,
+            0,
+            "флаг паузы не выставлен в памяти Z80"
+        );
+        app.apply_input();
+        for (row, bits) in app.machine.keyboard.iter().enumerate() {
+            assert_eq!(*bits, 0xFF, "ряд {row} получил ввод в паузе");
+        }
+        assert_eq!(app.pending_key, None, "пауза оставила pending_key");
+
+        // `Y` и `L`: маска настроек и вид радара меняются сразу.
+        app.key_event(KeyCode::KeyY, true, false);
+        assert_eq!(
+            app.machine.mem[flight::Z80_FLAGS_SETUP],
+            flags0 ^ 0x20,
+            "Y не переключил инверсию тангажа"
+        );
+        app.key_event(KeyCode::KeyL, true, false);
+        assert_eq!(
+            app.machine.mem[flight::Z80_SCANNER_MODE],
+            scanner0 ^ 7,
+            "L не переключила локатор в памяти Z80"
+        );
+        assert_eq!(
+            app.radar_view,
+            flight::z80_radar_view(&app.machine.mem),
+            "нативный радар не последовал за эмулятором"
+        );
+
+        app.key_event(KeyCode::Space, true, false);
+        assert!(!app.pause_active, "Space не закрыл паузу");
+        assert_eq!(
+            app.machine.mem[flight::Z80_CONTROL_KEY2] & 0x80,
+            0,
+            "Space не снял флаг паузы"
+        );
+        assert_eq!(
+            app.machine.mem[flight::Z80_FLAGS_SETUP],
+            flags0 ^ 0x20,
+            "настройки потерялись при выходе из паузы"
+        );
+        assert_eq!(
+            app.radar_view,
+            flight::z80_radar_view(&app.machine.mem),
+            "радар не сохранил режим после выхода из паузы"
+        );
+    }
+
+    /// Остальные клавиши паузы повторяют таблицы `ScanKeyInPause`: маска
+    /// настроек, поворот лазеров и карты, компас и блок сервисных клавиш.
+    #[test]
+    fn pause_service_keys_match_kladov_tables() {
+        let opts = test_options();
+        let mut app = App::new(boot(), &opts);
+        app.machine.intro_seen = false;
+        app.key_event(KeyCode::ShiftLeft, true, false);
+        assert!(app.pause_active, "подготовка: пауза не открылась");
+
+        let flags = flight::Z80_FLAGS_SETUP;
+        app.machine.mem[flags] = 0;
+        for (key, bit) in [
+            (KeyCode::KeyB, 0x10),
+            (KeyCode::KeyD, 0x08),
+            (KeyCode::KeyF, 0x40),
+            (KeyCode::KeyR, 0x04),
+            (KeyCode::KeyY, 0x20),
+            (KeyCode::KeyS, 0x80),
         ] {
             app.key_event(key, true, false);
-            assert!(!app.pause_stub, "{key:?} открыл заглушку паузы");
-            assert!(app.station_native, "{key:?} отдал управление эмулятору");
+            assert_eq!(app.machine.mem[flags], bit, "{key:?} не взвёл бит {bit:02X}");
+            app.key_event(key, true, false);
+            assert_eq!(app.machine.mem[flags], 0, "{key:?} не сбросил бит {bit:02X}");
         }
 
-        // Left Shift включает паузу в оригинале — он один открывает заглушку.
-        app.key_event(KeyCode::ShiftLeft, true, false);
-        assert!(app.pause_stub, "Shift не показал заглушку паузы");
-        assert!(app.station_native, "заглушка паузы отдала управление эмулятору");
-        assert!(!app.station_emulator, "заглушка паузы включила эмулятор");
-        app.apply_input();
-        let (row, bit) = matrix_pos(KeyCode::ShiftLeft).expect("Shift в матрице");
-        assert_ne!(
-            app.machine.keyboard[row] & (1 << bit),
-            0,
-            "Shift ушёл в замороженный эмулятор"
-        );
-        assert_eq!(app.pending_key, None, "Shift оставил pending_key");
+        // `K` XOR-ит станину полным FlagsSetUp, но только если её младшие
+        // два бита уже ненулевые.
+        app.machine.mem[flags] = 0x8C;
+        app.machine.mem[flight::Z80_MAP_ROTATION] = 1;
+        app.key_event(KeyCode::KeyK, true, false);
+        assert_eq!(app.machine.mem[flight::Z80_MAP_ROTATION], 1 ^ 0x8C);
+        app.machine.mem[flight::Z80_MAP_ROTATION] = 0;
+        app.key_event(KeyCode::KeyK, true, false);
+        assert_eq!(app.machine.mem[flight::Z80_MAP_ROTATION], 0);
 
-        // Следующее нажатие закрывает заглушку и обрабатывается штатно.
-        app.key_event(KeyCode::KeyY, true, false);
-        assert!(!app.pause_stub, "следующее нажатие не закрыло заглушку");
-        assert!(app.station_native, "следующее нажатие отдало управление");
+        // `C` переключает бит 1 ячейки компаса, а не биты FlagsSetUp.
+        let compass0 = app.compass_view;
+        app.machine.mem[flight::Z80_COMPASS_FLAG] = 0;
+        app.key_event(KeyCode::KeyC, true, false);
+        assert_eq!(app.machine.mem[flight::Z80_COMPASS_FLAG], 2);
+        assert_ne!(app.compass_view, compass0);
 
-        // Повторный Shift снова показывает заглушку.
+        // `A` работает только на Cobra Mk IV и меняет пары лазеров местами.
+        let base = flight::Z80_LASER_MOUNTS;
+        app.machine.mem[flight::Z80_COBRA_MK4] = 1;
+        app.machine.mem[base..base + 4].copy_from_slice(&[1, 2, 3, 4]);
+        app.key_event(KeyCode::KeyA, true, false);
+        assert_eq!(&app.machine.mem[base..base + 4], &[3u8, 4, 1, 2][..]);
+        app.machine.mem[flight::Z80_COBRA_MK4] = 0;
+        app.machine.mem[base..base + 4].copy_from_slice(&[1, 2, 3, 4]);
+        app.key_event(KeyCode::KeyA, true, false);
+        assert_eq!(&app.machine.mem[base..base + 4], &[1u8, 2, 3, 4][..]);
+
+        // `Q` записывает FlagsSetUp в блок сервисных клавиш и не выходит из паузы.
+        app.machine.mem[flags] = 0x8C;
+        app.key_event(KeyCode::KeyQ, true, false);
+        for addr in flight::Z80_CONTROL_KEY1..flight::Z80_PRESS_KEY_SYMBOL {
+            assert_eq!(app.machine.mem[addr], 0x8C, "адрес {addr:04X} не записан Q");
+        }
+        assert_eq!(app.machine.mem[flight::Z80_PRESS_KEY_SYMBOL], 0xFF);
+        assert!(app.pause_active, "Q закрыл паузу");
+
+        // `Space` обнуляет блок и выходит из паузы.
+        app.key_event(KeyCode::Space, true, false);
+        assert!(!app.pause_active);
+        for addr in flight::Z80_CONTROL_KEY1..flight::Z80_PRESS_KEY_SYMBOL {
+            assert_eq!(app.machine.mem[addr], 0, "адрес {addr:04X} не очищен Space");
+        }
+    }
+
+    /// Пауза доступна не только в нативном режиме станции, но и в полёте,
+    /// включая экран эмулятора после `Backquote`.
+    #[test]
+    fn pause_works_in_flight() {
+        let opts = test_options();
+        let mut app = App::new(boot(), &opts);
+        app.machine.intro_seen = false;
+        app.machine.mem[flight::Z80_IND_DANGER] = 1;
+        app.machine.mem[flight::Z80_WHAT_ON_SCREEN] = 0;
+        app.machine.mem[flight::Z80_JUMP_DOCKING] = 0;
+        app.machine.mem[flight::Z80_FLG_JUMP_DOCKING] = 0;
+        app.key_event(KeyCode::F1, true, false);
+        assert!(app.flight.active, "подготовка: вид полёта не открылся");
+
         app.key_event(KeyCode::ShiftLeft, true, false);
-        assert!(app.pause_stub, "повторный Shift не показал заглушку");
+        assert!(app.pause_active, "Shift не включил паузу в полёте");
+        app.key_event(KeyCode::Space, true, false);
+        assert!(!app.pause_active, "Space не закрыл паузу в полёте");
+
+        app.key_event(KeyCode::Backquote, true, false);
+        assert!(app.flight_emulator, "подготовка: экран эмулятора не включён");
+        app.key_event(KeyCode::ShiftLeft, true, false);
+        assert!(app.pause_active, "Shift не включил паузу на экране эмулятора");
+        app.key_event(KeyCode::Space, true, false);
+        assert!(!app.pause_active, "Space не закрыл паузу на экране эмулятора");
     }
 
     /// В нативном режиме станции эмулятор заморожен: ввод не передаётся,

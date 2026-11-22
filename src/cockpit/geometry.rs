@@ -477,31 +477,11 @@ impl CockpitGeom {
     }
 }
 
-/// Попадает ли точка (в пикселях HD-слоя) в овал радара.
-///
-/// Клик принимается по видимому контуру, а не по всей прямоугольной клетке:
-/// иначе переключение вида срабатывало бы в пустых углах между овалом и
-/// кружками компаса. Небольшой запас по краю нужен, чтобы цель попадалась
-/// и при неточном наведении мыши.
-pub fn oval_radar_hit(g: &CockpitGeom, x: i32, y: i32) -> bool {
-    let cell = g.oval_radar_cell();
-    if !cell.contains(x, y) {
-        return false;
-    }
-    let cx = cell.x + cell.w / 2;
-    let cy = cell.y + cell.h / 2;
-    let rx = ((cell.w - 1) / 2 + 2).max(1) as f32;
-    let ry = ((cell.h - 1) / 2 + 2).max(1) as f32;
-    let dx = (x - cx) as f32 / rx;
-    let dy = (y - cy) as f32 / ry;
-    dx * dx + dy * dy <= 1.0
-}
-
 /// Попадает ли точка в кружок компаса.
 ///
-/// Как и у овала радара, клик принимается по видимому контуру, а не по всей
-/// клетке: рядом с кружком нет других элементов, которые можно было бы
-/// случайно переключить. Небольшой запас по краю упрощает наведение.
+/// Клик принимается по видимому контуру, а не по всей клетке: рядом с кружком
+/// нет других элементов, которые можно было бы случайно переключить. Небольшой
+/// запас по краю упрощает наведение.
 pub fn compass_hit(g: &CockpitGeom, x: i32, y: i32) -> bool {
     let cell = g.compass_cell();
     if !cell.contains(x, y) {
@@ -513,16 +493,6 @@ pub fn compass_hit(g: &CockpitGeom, x: i32, y: i32) -> bool {
     let dx = (x - cx) as f32 / r;
     let dy = (y - cy) as f32 / r;
     dx * dx + dy * dy <= 1.0
-}
-
-/// Попадает ли точка в активный радар.
-///
-/// Классический радар проверяется по овалу, радар Кладова — по квадрату.
-pub fn radar_hit(g: &CockpitGeom, view: super::radar::RadarView, x: i32, y: i32) -> bool {
-    match view {
-        super::radar::RadarView::Classic => oval_radar_hit(g, x, y),
-        super::radar::RadarView::Kladov => g.kladov_radar_cell().contains(x, y),
-    }
 }
 
 /// Вписать прямоугольник с соотношением сторон `num/den` в клетку по центру.

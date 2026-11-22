@@ -38,6 +38,7 @@ use crate::world;
 
 mod frame;
 mod input;
+mod pause;
 mod screens;
 #[cfg(test)]
 mod tests;
@@ -105,8 +106,8 @@ struct App<'a> {
     hdmap_move_rem_y: f32,
     /// Нативный экран закупки оборудования (F5) — заменяет экран игры.
     shop: equip::Shop,
-    /// Вид радара в нативном кокпите: классический сканер или локатор Кладова.
-    /// Переключается кликом по овалу радара.
+    /// Вид радара в нативном кокпите: зеркало режима, включённого в эмуляторе.
+    /// Клик по радару его не меняет — переключает только `L` в паузе Кладова.
     radar_view: cockpit::RadarView,
     /// Режим круглого компаса: обычная цель или пара «солнце + планета».
     /// Переключается кликом по правому верхнему кружку панели.
@@ -137,10 +138,9 @@ struct App<'a> {
     station_emulator: bool,
     /// Вход в нативный режим станции отложен до обработки `L` эмулятором.
     pending_station_native: Option<StationNativePending>,
-    /// Временная страница на месте будущего меню настроек: открывается только
-    /// паузной клавишей Left Shift (`kladov_keys.md`), закрывается любым
-    /// следующим нажатием.
-    pause_stub: bool,
+    /// Пауза Кладова: Z80 заморожен, сервисные клавиши меняют его настройки,
+    /// пока `Space` не вернёт игру в обычный режим.
+    pause_active: bool,
     /// Экран-заглушка `DOCKED`, который на станции заменяет ответ эмулятора
     /// на `G`/`H` и показывается примерно секунду.
     docked: docked::Docked,
@@ -247,6 +247,7 @@ struct App<'a> {
 
 impl<'a> App<'a> {
     pub(crate) fn new(machine: Spectrum, opts: &'a Options) -> Self {
+        let radar_view = flight::z80_radar_view(&machine.mem);
         let mut app = Self {
             state: GameState::default(),
             machine,
@@ -263,7 +264,7 @@ impl<'a> App<'a> {
             hdmap_move_rem_x: 0.0,
             hdmap_move_rem_y: 0.0,
             shop: equip::Shop::new(),
-            radar_view: cockpit::RadarView::Classic,
+            radar_view,
             compass_view: cockpit::CompassView::PlanetStation,
             status: status::Status::new(),
             pending_status: false,
@@ -274,7 +275,7 @@ impl<'a> App<'a> {
             station_native: false,
             station_emulator: false,
             pending_station_native: None,
-            pause_stub: false,
+            pause_active: false,
             docked: docked::Docked::new(),
             market: market::Market::new(),
             pending_market: false,
@@ -415,6 +416,8 @@ impl<'a> App<'a> {
             system: world::current_system_name(&self.machine.mem),
             planet: world::selected_planet_name(&self.machine.mem),
         };
+        // Нативный радар — только зеркало включённого в эмуляторе режима.
+        self.radar_view = flight::z80_radar_view(&self.machine.mem);
     }
 }
 

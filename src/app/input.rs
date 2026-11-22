@@ -513,6 +513,23 @@ impl App<'_> {
         if code == KeyCode::F10 {
             return;
         }
+        // Пауза Кладова перехватывает все игровые клавиши: Z80 в это время
+        // заморожен, поэтому сервисные настройки применяет нативный слой.
+        // Системные команды выше (полный экран, частота эмуляции) и Ctrl+Q
+        // остаются доступными.
+        if self.pause_active {
+            if code == KeyCode::KeyQ && self.ctrl {
+                self.quit = true;
+                self.release_pressed(code);
+                return;
+            }
+            self.handle_pause_key(code, repeat);
+            return;
+        }
+        if code == KeyCode::ShiftLeft && !repeat && self.can_enter_pause() {
+            self.enter_pause();
+            return;
+        }
         // Alt+E — открыть/закрыть редактор сейва (секретная комбинация). Игра на паузе, пока открыт.
         if code == KeyCode::KeyE && self.alt && !repeat {
             // `intro_seen` взведён на заставке: до входа в игру комбинация
@@ -532,11 +549,6 @@ impl App<'_> {
                 self.save_editor_hex_input.clear();
             }
             return;
-        }
-        // Временная страница клавиш паузы закрывается следующим нажатием;
-        // само нажатие при этом продолжает обрабатываться обычным порядком.
-        if self.pause_stub && !repeat {
-            self.pause_stub = false;
         }
         // Полноэкранный редактор сейва: перехватываем ввод.
         if self.save_editor_open && !repeat {
@@ -961,17 +973,6 @@ impl App<'_> {
             }
             return;
         }
-        // Left Shift в оригинале Кладова включает паузу, в которой остальные
-        // клавиши меняют настройки. В нативном режиме станции вместо будущего
-        // меню настроек показывается заглушка, и открывает её только сама
-        // паузная клавиша — остальные клавиши настроек пока ничего не делают.
-        // В эмуляторе (после handoff) Shift работает по-родному. `Ctrl+Q`
-        // остаётся глобальной командой выхода.
-        if self.station_native && !self.menu && !repeat && code == KeyCode::ShiftLeft {
-            self.pause_stub = true;
-            self.release_pressed(code);
-            return;
-        }
         // Нативные экраны капитана (F9) и информации о планете (F7) не
         // перехватывают ввод: это альтернативная отрисовка экранов `L`/`P`,
         // управление остаётся за эмулятором.
@@ -1108,7 +1109,7 @@ impl App<'_> {
 
     /// Снять нажатие из матрицы и джойстика: клавиша не должна уйти в
     /// эмулятор, если её обработал нативный экран.
-    fn release_pressed(&mut self, code: KeyCode) {
+    pub(super) fn release_pressed(&mut self, code: KeyCode) {
         if let Some((row, bit)) = matrix_pos(code) {
             self.matrix[row][bit as usize] = false;
         }
