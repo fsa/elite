@@ -37,8 +37,7 @@ struct Shared {
     samples: VecDeque<i16>,
     /// Последний отданный сэмпл — им добиваем недобор и держим при паузах.
     last: i16,
-    /// Накопитель дробной части числа сэмплов, привязанный к часам.
-    acc: f64,
+
     last_push: Option<Instant>,
     underruns: u64,
     dropped: u64,
@@ -51,7 +50,6 @@ impl Shared {
         Self {
             samples: VecDeque::with_capacity(MAX_QUEUED),
             last: 0,
-            acc: 0.0,
             last_push: None,
             underruns: 0,
             dropped: 0,

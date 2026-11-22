@@ -351,6 +351,31 @@ impl CockpitGeom {
         fit_aspect(self.radar_area(), OVAL_RADAR_ASPECT_NUM, OVAL_RADAR_ASPECT_DEN)
     }
 
+    /// Клетка квадратного радара Кладова.
+    ///
+    /// В оригинале внешний квадрат сверху и снизу делит линию с основной рамкой
+    /// кокпита, поэтому он занимает всю высоту внутренней области панели.
+    /// Ширина равна высоте, квадрат центрируется в центральной клетке.
+    pub fn kladov_radar_cell(&self) -> Rect {
+        let inner = self.panel_inner();
+        let center = self.center_cell();
+        if inner.is_empty() || center.is_empty() {
+            return Rect {
+                x: center.x,
+                y: center.y,
+                w: 0,
+                h: 0,
+            };
+        }
+        let size = inner.h.min(center.w).max(0);
+        Rect {
+            x: center.x + (center.w - size) / 2,
+            y: inner.y,
+            w: size,
+            h: size,
+        }
+    }
+
     /// Размер глифа `E`/`S`.
     ///
     /// Буквы примерно вдвое меньше диаметра кружка опасности (как 8×8
@@ -470,6 +495,16 @@ pub fn oval_radar_hit(g: &CockpitGeom, x: i32, y: i32) -> bool {
     let dx = (x - cx) as f32 / rx;
     let dy = (y - cy) as f32 / ry;
     dx * dx + dy * dy <= 1.0
+}
+
+/// Попадает ли точка в активный радар.
+///
+/// Классический радар проверяется по овалу, радар Кладова — по квадрату.
+pub fn radar_hit(g: &CockpitGeom, view: super::radar::RadarView, x: i32, y: i32) -> bool {
+    match view {
+        super::radar::RadarView::Classic => oval_radar_hit(g, x, y),
+        super::radar::RadarView::Kladov => g.kladov_radar_cell().contains(x, y),
+    }
 }
 
 /// Вписать прямоугольник с соотношением сторон `num/den` в клетку по центру.

@@ -538,7 +538,7 @@ impl Flight {
     /// идёт с частотой кадра. Без интерполяции корабли и станция заметно
     /// «прыгают». Звёзды не интерполируются: они рисуются из живого поля,
     /// которое уже обновляется по `dt`.
-    pub(super) fn render_bodies(&self) -> Vec<Body> {
+    pub(in crate::flight) fn render_bodies(&self) -> Vec<Body> {
         let alpha = if self.tick_interval > 0.0 {
             (self.tick_accum / self.tick_interval).clamp(0.0, 1.0)
         } else {

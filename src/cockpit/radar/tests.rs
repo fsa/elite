@@ -39,7 +39,11 @@ fn draw_radar_view(contacts: &[RadarContact], view: RadarView) -> (Frame, Rect) 
     let mut f = Frame::new(W, H);
     let g = panel_geometry(W as u32, H as u32);
     draw_view(&mut f, &g, CockpitStyle::COBRA_MK3, &values(contacts), view);
-    (f, g.oval_radar_cell())
+    let cell = match view {
+        RadarView::Classic => g.oval_radar_cell(),
+        RadarView::Kladov => g.kladov_radar_cell(),
+    };
+    (f, cell)
 }
 
 fn draw_radar(contacts: &[RadarContact]) -> (Frame, Rect) {
@@ -411,45 +415,82 @@ fn tiny_cells_are_skipped() {
     }
 }
 
-/// Альтернативный локатор рисуется в той же клетке, но своей разметкой.
+/// Радар Кладова: два квадрата, внешний на всю высоту панели.
 #[test]
-fn kladov_radar_differs_from_classic_and_stays_in_cell() {
-    let (classic, cell) = draw_radar(&[]);
-    let (kladov, kladov_cell) = draw_radar_view(&[], RadarView::Kladov);
-    assert_eq!(cell, kladov_cell);
-    assert!(lit_in(&kladov, cell) > 0, "локатор ничего не нарисовал");
-    assert_ne!(classic.pixels(), kladov.pixels(), "виды радара не различаются");
-    assert_only_in(&kladov, cell);
-}
+fn kladov_radar_has_two_squares() {
+    let g = panel_geometry(W as u32, H as u32);
+    let cell = g.kladov_radar_cell();
+    let inner = g.panel_inner();
+    assert_eq!(cell.y, inner.y, "внешний квадрат не на верхней линии рамки");
+    assert_eq!(
+        cell.y + cell.h,
+        inner.y + inner.h,
+        "внешний квадрат не на нижней линии рамки"
+    );
+    assert_eq!(cell.w, cell.h, "радар Кладова должен быть квадратным");
 
-/// Кольца дальности видны между внешним овалом и крестом.
-#[test]
-fn kladov_radar_has_range_rings() {
-    let (f, cell) = draw_radar_view(&[], RadarView::Kladov);
-    let (cx, cy, rx, ry) = ellipse_params(cell);
-
-    // Точки на 45° внутренних колец (1/3 и 2/3 радиуса). Проверяем с запасом,
-    // потому что кольца рисуются по точкам, а не сплошной кривой.
-    let inner_x = cx + (rx as f32 / 3.0 * 0.866).round() as i32;
-    let inner_y = cy + ry / 6;
-    let outer_x = cx + (rx as f32 * 2.0 / 3.0 * 0.866).round() as i32;
-    let outer_y = cy + ry / 3;
-    for (name, x, y) in [("внутреннее кольцо", inner_x, inner_y), ("внешнее кольцо", outer_x, outer_y)] {
-        let lit = (x - 3..=x + 3).any(|px_| px(&f, px_, y) == ink());
-        assert!(lit, "нет {name} в точке ({x},{y})");
+    let (f, _) = draw_radar_view(&[], RadarView::Kladov);
+    let cx = cell.x + cell.w / 2;
+    let cy = cell.y + cell.h / 2;
+    let half = cell.w / 2 - 2;
+    for (name, x, y) in [
+        ("верх", cx, cell.y),
+        ("низ", cx, cell.y + cell.h - 1),
+        ("лево", cell.x, cy),
+        ("право", cell.x + cell.w - 1, cy),
+    ] {
+        assert_eq!(px(&f, x, y), ink(), "нет внешнего квадрата: {name}");
+    }
+    let inner_side = ((cell.w as f32 / 2.455).round() as i32).max(3).min(cell.w - 2);
+    let inner_half = inner_side / 2;
+    for (name, x, y) in [
+        ("внутр верх", cx, cy - inner_half),
+        ("внутр низ", cx, cy + inner_half),
+        ("внутр лево", cx - inner_half, cy),
+        ("внутр право", cx + inner_half, cy),
+    ] {
+        let lit = (x - 2..=x + 2).any(|px_| (y - 2..=y + 2).any(|py_| px(&f, px_, py_) == ink()));
+        assert!(lit, "нет внутреннего квадрата: {name}");
     }
 }
 
-/// Контакты меняют и альтернативный локатор.
+/// Отношение сторон внешнего и внутреннего квадратов — 2,455.
+#[test]
+fn kladov_inner_square_ratio() {
+    let g = panel_geometry(W as u32, H as u32);
+    let cell = g.kladov_radar_cell();
+    let inner_side = ((cell.w as f32 / 2.455).round() as i32).max(3).min(cell.w - 2);
+    let ratio = cell.w as f32 / inner_side as f32;
+    assert!(
+        (ratio - 2.455).abs() < 0.02,
+        "отношение сторон не 2.455: {ratio}"
+    );
+}
+
+/// Контакты: `+` впереди, `x` сзади.
 #[test]
 fn kladov_radar_draws_contacts() {
-    let c = contact(RADAR_RANGE as i32 / 2, 0, 0);
+    let ahead = contact(0, 0, RADAR_RANGE as i32 / 2);
+    let behind = contact(RADAR_RANGE as i32 / 4, 0, -(RADAR_RANGE as i32 / 2));
     let (empty, cell) = draw_radar_view(&[], RadarView::Kladov);
-    let (full, _) = draw_radar_view(&[c], RadarView::Kladov);
-    assert!(
-        lit_in(&full, cell) > lit_in(&empty, cell),
-        "локатор не показал контакт"
-    );
+    let (fa, _) = draw_radar_view(&[ahead], RadarView::Kladov);
+    let (fb, _) = draw_radar_view(&[behind], RadarView::Kladov);
+    assert!(lit_in(&fa, cell) > lit_in(&empty, cell), "нет контакта впереди");
+    assert!(lit_in(&fb, cell) > lit_in(&empty, cell), "нет контакта сзади");
+    assert_ne!(fa.pixels(), fb.pixels(), "знаки впереди/сзади не различаются");
+}
+
+/// Размер знака зависит от удаления.
+#[test]
+fn kladov_contact_size_depends_on_distance() {
+    let near = contact(RADAR_RANGE as i32 / 6, 0, RADAR_RANGE as i32 / 6);
+    let far = contact(RADAR_RANGE as i32, 0, RADAR_RANGE as i32);
+    let (f_near, cell) = draw_radar_view(&[near], RadarView::Kladov);
+    let (f_far, _) = draw_radar_view(&[far], RadarView::Kladov);
+    let empty = draw_radar_view(&[], RadarView::Kladov).0;
+    let near_extra = lit_in(&f_near, cell).saturating_sub(lit_in(&empty, cell));
+    let far_extra = lit_in(&f_far, cell).saturating_sub(lit_in(&empty, cell));
+    assert!(near_extra > far_extra, "близкий знак не больше дальнего: {near_extra} vs {far_extra}");
 }
 
 /// Клик переключает вид только по видимому овалу, не по углам клетки.

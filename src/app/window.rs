@@ -73,7 +73,8 @@ impl App<'_> {
         if x < 0 || y < 0 || x >= game_w as i32 || y >= game_h as i32 {
             return false;
         }
-        if !cockpit::oval_radar_hit(&cockpit::panel_geometry(game_w, game_h), x, y) {
+        let geom = cockpit::panel_geometry(game_w, game_h);
+        if !cockpit::radar_hit(&geom, self.radar_view, x, y) {
             return false;
         }
         self.radar_view = match self.radar_view {
