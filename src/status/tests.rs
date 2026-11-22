@@ -165,6 +165,20 @@ fn rating_names_follow_the_game_tables() {
     }
 }
 
+/// Флаги войны/ранга в `PilotRating2` не должны влиять на числовой рейтинг.
+#[test]
+fn rating_ignores_war_and_rank_flags() {
+    let mut mem = fake_mem();
+    // PilotRating0=0, PilotRating1=0, PilotRating2 has war/rank flags set.
+    mem[0xD054 + 12] = 0x00;
+    mem[0xD054 + 13] = 0x00;
+    mem[0xD054 + 14] = 0xCF; // bits 7,6,3-1 and bit 0 set
+    let mut status = Status::new();
+    status.open(&mem, KLADOV_STATUS);
+    assert_eq!(status.info.rating, 0x0001_0000);
+    assert_eq!(status.rating_text(), "Elite");
+}
+
 /// Повреждённый блок командира не должен ломать экран: имя обрезается по
 /// `NUL`, непечатаемые байты заменяются.
 #[test]

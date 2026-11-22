@@ -398,7 +398,7 @@ impl App<'_> {
                     true
                 }
                 ArrowDown => {
-                    if self.save_editor_sel < 6 {
+                    if self.save_editor_sel < 11 {
                         self.save_editor_sel += 1;
                     }
                     true
@@ -459,6 +459,56 @@ impl App<'_> {
                             true
                         }
                         5 => {
+                            // RATING: меняем только числовую часть, флаги/ранг в R2 сохраняем.
+                            let r0 = base + 0x0C;
+                            let r1 = base + 0x0D;
+                            let r2 = base + 0x0E;
+                            if r2 < self.machine.mem.len() {
+                                let r0v = self.machine.mem[r0] as u32;
+                                let r1v = self.machine.mem[r1] as u32;
+                                let r2v = self.machine.mem[r2] as u32;
+                                let rating = r0v | (r1v << 8) | ((r2v & 0x31) << 16);
+                                let nv = (rating as i64 + delta as i64 * 256).clamp(0, 0x31_FF_FF) as u32;
+                                self.machine.mem[r0] = (nv & 0xFF) as u8;
+                                self.machine.mem[r1] = ((nv >> 8) & 0xFF) as u8;
+                                self.machine.mem[r2] = (r2v as u8 & 0xCE) | (((nv >> 16) as u8) & 0x31);
+                            }
+                            true
+                        }
+                        6 => {
+                            let off = base + 0x0E;
+                            if off < self.machine.mem.len() {
+                                self.machine.mem[off] ^= 0x80;
+                            }
+                            true
+                        }
+                        7 => {
+                            let off = base + 0x0E;
+                            if off < self.machine.mem.len() {
+                                self.machine.mem[off] ^= 0x40;
+                            }
+                            true
+                        }
+                        8 => {
+                            let off = base + 0x0E;
+                            if off < self.machine.mem.len() {
+                                let v = self.machine.mem[off];
+                                let rank = ((v >> 1) & 0x07) as i32;
+                                let nv = (rank + delta).rem_euclid(8) as u8;
+                                self.machine.mem[off] = (v & !0x0E) | (nv << 1);
+                            }
+                            true
+                        }
+                        9 => {
+                            let off = base + 0x0E;
+                            if off < self.machine.mem.len() {
+                                let v = self.machine.mem[off] as i32;
+                                let nv = (v + delta).clamp(0, 255) as u8;
+                                self.machine.mem[off] = nv;
+                            }
+                            true
+                        }
+                        10 => {
                             let off = base + 0x28;
                             if off < self.machine.mem.len() {
                                 let v = self.machine.mem[off] as i32;
@@ -467,7 +517,7 @@ impl App<'_> {
                             }
                             true
                         }
-                        6 => {
+                        11 => {
                             let off = base + 0x29;
                             if off < self.machine.mem.len() {
                                 let v = self.machine.mem[off] as i32;

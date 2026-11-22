@@ -96,7 +96,8 @@ struct Info {
     fuel: u8,
     /// `PilotLegalStatus`.
     legal: u8,
-    /// Боевой рейтинг (`PilotRating0..2`, 24 бита).
+    /// Боевой рейтинг: `PilotRating0..1` и счётчик из `PilotRating2`
+    /// без флагов войны/ранга (биты 7,6,3-1).
     rating: u32,
     /// Установленное оборудование в порядке оригинала.
     equipment: Vec<String>,
@@ -141,12 +142,7 @@ impl Status {
                 + u16::from_le_bytes([mem[p + OFF_CASH1], mem[p + OFF_CASH1 + 1]]) as u32,
             fuel: mem[p + OFF_FUEL],
             legal: mem[p + OFF_LEGAL],
-            rating: u32::from_le_bytes([
-                mem[p + OFF_RATING],
-                mem[p + OFF_RATING + 1],
-                mem[p + OFF_RATING + 2],
-                0,
-            ]),
+            rating: commander_rating(&mem[p + OFF_RATING..p + OFF_RATING + 3]),
             equipment: read_equipment(&mem[p..]),
         };
         self.active = true;
@@ -201,6 +197,18 @@ impl Default for Status {
     fn default() -> Self {
         Status::new()
     }
+}
+
+/// Числовая часть боевого рейтинга командира из `PilotRating0..2`.
+///
+/// `PilotRating2` совмещает счётчик и флаги: бит 7 — война была/идёт,
+/// бит 6 — война закончилась, биты 3-1 — ранг. Эти биты не входят в
+/// числовой рейтинг и маскируются при отображении.
+fn commander_rating(bytes: &[u8]) -> u32 {
+    let r0 = bytes.first().copied().unwrap_or(0) as u32;
+    let r1 = bytes.get(1).copied().unwrap_or(0) as u32;
+    let r2 = bytes.get(2).copied().unwrap_or(0) as u32;
+    r0 | (r1 << 8) | ((r2 & 0x31) << 16)
 }
 
 /// Список установленного оборудования в порядке `Cmd_L_PilotInfo`:

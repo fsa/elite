@@ -225,6 +225,11 @@ pub(crate) fn draw_save_editor_fullscreen(
     let cash = crate::world::commander_cash_tenths(save_data, 0);
     let fuel = b(0x2E);
     let missiles = b(0x2F);
+    let rating = commander_rating(save_data);
+    let r2 = b(0x0E);
+    let war = r2 & 0x80 != 0;
+    let war_end = r2 & 0x40 != 0;
+    let rank = (r2 >> 1) & 0x07;
 
     let draw_field = |out: &mut [u32], y: &mut i32, label: &str, value: &str, sel: bool, scale: usize| {
         let line_h = 8 * scale as i32;
@@ -244,8 +249,13 @@ pub(crate) fn draw_save_editor_fullscreen(
     draw_field(out, &mut y, "FUEL 0.1LY", &format!("{}.{}", fuel / 10, fuel % 10), edit_sel == 2, scale);
     draw_field(out, &mut y, "MISSILES", &format!("{}", missiles), edit_sel == 3, scale);
     draw_field(out, &mut y, "LEGAL", &format!("{}", b(0x0B)), edit_sel == 4, scale);
-    draw_field(out, &mut y, "BAY (t)", &format!("{}", b(0x28)), edit_sel == 5, scale);
-    draw_field(out, &mut y, "FRONT LASER", &format!("{}", b(0x29)), edit_sel == 6, scale);
+    draw_field(out, &mut y, "RATING", &format!("{} {}", rating, rating_text(rating)), edit_sel == 5, scale);
+    draw_field(out, &mut y, "WAR FLAG", if war { "ON" } else { "OFF" }, edit_sel == 6, scale);
+    draw_field(out, &mut y, "WAR END", if war_end { "ON" } else { "OFF" }, edit_sel == 7, scale);
+    draw_field(out, &mut y, "RANK", &format!("{}", rank), edit_sel == 8, scale);
+    draw_field(out, &mut y, "R2 RAW", &format!("{:02X}", r2), edit_sel == 9, scale);
+    draw_field(out, &mut y, "BAY (t)", &format!("{}", b(0x28)), edit_sel == 10, scale);
+    draw_field(out, &mut y, "FRONT LASER", &format!("{}", b(0x29)), edit_sel == 11, scale);
 
     y += 6;
     if name_editing {
@@ -262,7 +272,19 @@ pub(crate) fn draw_save_editor_fullscreen(
     } else if edit_sel == 1 {
         draw_text(out, out_w, out_h, left, y, "Enter: input number", GREY, GREY, scale);
         y += (8 * scale as i32) + 6;
-    } else if edit_sel >= 2 && edit_sel <= 6 {
+    } else if edit_sel == 5 {
+        draw_text(out, out_w, out_h, left, y, "Left/Right: change rating", GREY, GREY, scale);
+        y += (8 * scale as i32) + 6;
+    } else if edit_sel == 6 || edit_sel == 7 {
+        draw_text(out, out_w, out_h, left, y, "Left/Right: toggle", GREY, GREY, scale);
+        y += (8 * scale as i32) + 6;
+    } else if edit_sel == 8 {
+        draw_text(out, out_w, out_h, left, y, "Left/Right: change rank (0..7)", GREY, GREY, scale);
+        y += (8 * scale as i32) + 6;
+    } else if edit_sel == 9 {
+        draw_text(out, out_w, out_h, left, y, "Left/Right: change raw R2 byte", GREY, GREY, scale);
+        y += (8 * scale as i32) + 6;
+    } else if edit_sel >= 2 && edit_sel <= 11 {
         draw_text(out, out_w, out_h, left, y, "Left/Right: change (0..255)", GREY, GREY, scale);
         y += (8 * scale as i32) + 6;
     }
@@ -292,7 +314,7 @@ fn draw_save_summary(
 
     let name = summary_name(save_data);
     let legal = b(0x0B);
-    let rating = u32::from_le_bytes([b(0x0C), b(0x0D), b(0x0E), 0]);
+    let rating = commander_rating(save_data);
     let cash = crate::world::commander_cash_tenths(save_data, 0);
 
     let rows: [(usize, &str, String); 26] = [
@@ -379,6 +401,13 @@ fn legal_text(legal: u8) -> &'static str {
         1..=0x31 => "Offender",
         _ => "Fugitive",
     }
+}
+
+/// Числовая часть боевого рейтинга из блока командира (`PilotRating0..2`).
+/// Биты 7,6,3-1 в `PilotRating2` — флаги войны/ранга, не часть счётчика.
+fn commander_rating(data: &[u8]) -> u32 {
+    let b = |off: usize| data.get(off).copied().unwrap_or(0) as u32;
+    b(0x0C) | (b(0x0D) << 8) | ((b(0x0E) & 0x31) << 16)
 }
 
 /// Боевой рейтинг по таблицам `byte_F0AE`/`byte_F0B4`.
