@@ -151,6 +151,7 @@ impl ApplicationHandler for App<'_> {
                 self.kempston = [false; 5];
                 self.ctrl = false;
                 self.alt = false;
+                self.cancel_speed_hold();
             }
             WindowEvent::ModifiersChanged(m) => {
                 self.ctrl = m.state().contains(ModifiersState::CONTROL);

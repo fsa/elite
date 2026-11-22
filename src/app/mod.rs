@@ -44,6 +44,17 @@ mod screens;
 mod tests;
 mod window;
 
+/// Удержание клавиши переключения множителя эмуляции.
+///
+/// Короткое нажатие переключает множитель по кругу, а долгое — сразу сбрасывает
+/// его на x1. `reset_done` не даёт последующему отпусканию клавиши снова
+/// сдвинуть множитель.
+#[derive(Clone, Copy)]
+struct SpeedKeyHold {
+    started: Instant,
+    reset_done: bool,
+}
+
 /// Причина отложенного входа в нативный режим станции. Перед заморозкой Z80
 /// должен получить `L`, чтобы оригинал вышел из режима покупки.
 #[derive(Clone, Copy, PartialEq, Eq)]
@@ -59,6 +70,8 @@ const Z80_FRAME_TIME: Duration = Duration::from_micros(1_000_000 / 50);
 /// Целевая частота отображения. Держим 50 Гц, чтобы 1 кадр рендера = 1 кадр
 /// Z80/звука и форма бипера сохранялась по тактам CPU.
 const DISPLAY_FRAME_TIME: Duration = Duration::from_micros(1_000_000 / 50);
+/// Удержание `F12` дольше этого времени сбрасывает множитель эмуляции на x1.
+const SPEED_HOLD_RESET: Duration = Duration::from_secs(1);
 
 /// Запустить оконный режим и крутить цикл событий до выхода.
 pub(crate) fn run(machine: Spectrum, opts: &Options) {
@@ -204,9 +217,11 @@ struct App<'a> {
     ctrl: bool,
     /// Зажата ли Alt (для переключения полного экрана по Alt+Enter).
     alt: bool,
-    /// F12: ускорение эмуляции Z80 вдвое — за кадр показа прогоняются два
-    /// кадра Z80. На отрисовку и звук это не влияет, кроме темпа.
-    accelerated: bool,
+    /// Множитель эмуляции Z80: 1, 2, 5 или 10 кадров за кадр показа. На
+    /// отрисовку это не влияет, а звук играет во столько же раз быстрее.
+    speed_multiplier: u32,
+    /// Текущее удержание `F12`, если клавиша нажата.
+    speed_key_hold: Option<SpeedKeyHold>,
     /// Что показывать под миниатюрой в отладочной полосе. По умолчанию —
     /// сокращённая сводка; дамп всех байтов включается второй кнопкой.
     debug_view: DebugView,
@@ -304,7 +319,8 @@ impl<'a> App<'a> {
             kempston: [false; 5],
             ctrl: false,
             alt: false,
-            accelerated: false,
+            speed_multiplier: 1,
+            speed_key_hold: None,
             debug_view: DebugView::default(),
             save_editor_open: false,
             save_editor_sel: 0,

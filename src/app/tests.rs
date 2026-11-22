@@ -5,6 +5,7 @@
 
 use std::env;
 use std::fs;
+use std::time::{Duration, Instant};
 
 use winit::keyboard::KeyCode;
 
@@ -600,24 +601,65 @@ use crate::world::{
         assert_eq!(app.machine.kempston, 0, "стрелка дошла до эмулятора");
     }
 
-    /// F12 переключает ускорение эмуляции Z80 вдвое. Автоповтор не должен
-    /// мигать режимом, а за кадр показа при ускорении идёт два кадра Z80.
+    /// Короткое нажатие `F12` перебирает множители x1 → x2 → x5 → x10 → x1,
+    /// автоповтор не меняет множитель, а долгое удержание сбрасывает на x1.
     #[test]
-    fn f12_toggles_double_speed() {
+    fn f12_cycles_speeds_and_long_hold_resets() {
         let opts = test_options();
         let mut app = App::new(boot(), &opts);
-        assert!(!app.accelerated);
+        assert_eq!(app.speed_multiplier, 1);
+
+        for expected in [2, 5, 10, 1] {
+            let before = app.speed_multiplier;
+            app.key_event(KeyCode::F12, true, false);
+            app.key_event(KeyCode::F12, true, true);
+            assert_eq!(
+                app.speed_multiplier, before,
+                "автоповтор F12 изменил множитель"
+            );
+            app.key_event(KeyCode::F12, false, false);
+            assert_eq!(app.speed_multiplier, expected, "F12 не выбрал x{expected}");
+        }
 
         app.key_event(KeyCode::F12, true, false);
-        assert!(app.accelerated, "F12 не включил ускорение");
-
-        // Автоповтор удерживаемой клавиши режим не переключает.
-        app.key_event(KeyCode::F12, true, true);
-        assert!(app.accelerated, "автоповтор F12 сбросил ускорение");
-
+        // Подводим момент нажатия к далёкому прошлому без риска вычесть из
+        // `Instant` больше, чем прошло с начала отсчёта.
+        let future = Instant::now() + Duration::from_secs(2);
+        if let Some(hold) = app.speed_key_hold.as_mut() {
+            hold.started = future - Duration::from_secs(2) - super::SPEED_HOLD_RESET;
+        }
+        app.update_speed_hold();
+        assert_eq!(app.speed_multiplier, 1, "удержание F12 не сбросило x1");
         app.key_event(KeyCode::F12, false, false);
+        assert_eq!(
+            app.speed_multiplier, 1,
+            "отпускание после долгого удержания снова сдвинуло множитель"
+        );
+        assert!(app.speed_key_hold.is_none());
+
+        // Потеря фокуса не оставляет `F12` зажатой.
         app.key_event(KeyCode::F12, true, false);
-        assert!(!app.accelerated, "F12 не выключил ускорение");
+        app.cancel_speed_hold();
+        app.key_event(KeyCode::F12, false, false);
+        assert_eq!(app.speed_multiplier, 1);
+    }
+
+    /// За один кадр показа выполняется ровно `speed_multiplier` кадров Z80.
+    #[test]
+    fn emulation_frames_follow_speed_multiplier() {
+        let opts = test_options();
+        let mut app = App::new(boot(), &opts);
+        let now = Instant::now();
+        for (multiplier, expected) in [(1, 1), (2, 2), (5, 5), (10, 10)] {
+            app.speed_multiplier = multiplier;
+            app.last_tick = now;
+            app.z80_accum = super::Z80_FRAME_TIME;
+            assert_eq!(
+                app.take_emulation_frames(now),
+                expected,
+                "множитель x{multiplier} дал неверное число кадров Z80"
+            );
+        }
     }
 
     /// F5 — нативный экран закупки оборудования на станции. Экран открывается
@@ -2983,13 +3025,14 @@ use crate::world::{
         assert_eq!(app.pending_key, None);
     }
 
-    /// Индикатор ускорения эмуляции появляется только при `F12` и занимает
-    /// клетку слева от радара, зеркальную паре `ES` справа.
+    /// Индикатор ускорения эмуляции появляется только при множителе больше
+    /// единицы и занимает клетку слева от радара, зеркальную паре `ES` справа.
     #[test]
     fn speed_indicator_shows_only_when_accelerated() {
         let opts = test_options();
         let mut app = App::new(boot(), &opts);
         let (w, h) = (1024usize, 768usize);
+        app.state.screen = Screen::Flight;
         app.machine.hd.resize(w, h);
         app.machine.hd.clear(display::TRANSPARENT);
         app.draw_speed_indicator();
@@ -2998,7 +3041,7 @@ use crate::world::{
             "индикатор нарисован без ускорения"
         );
 
-        app.accelerated = true;
+        app.speed_multiplier = 2;
         app.draw_speed_indicator();
         let g = cockpit::panel_geometry(w as u32, h as u32);
         let speed = g.speed_cell();
@@ -3038,4 +3081,63 @@ use crate::world::{
             h: (g.panel_y - g.margin).max(0),
         };
         assert!(!lit_in(top), "индикатор ушёл в верхнюю часть экрана");
+    }
+
+    /// Индикатор рисуется для каждого выбранного множителя, а не только x2.
+    #[test]
+    fn speed_indicator_draws_x5_and_x10() {
+        let opts = test_options();
+        let mut app = App::new(boot(), &opts);
+        let (w, h) = (1024usize, 768usize);
+        app.state.screen = Screen::Flight;
+        app.machine.hd.resize(w, h);
+
+        for multiplier in [2, 5, 10] {
+            app.speed_multiplier = multiplier;
+            app.machine.hd.clear(display::TRANSPARENT);
+            app.draw_speed_indicator();
+            assert!(
+                app.machine.hd.pixels().iter().any(|&p| p != display::TRANSPARENT),
+                "индикатор x{multiplier} не нарисован"
+            );
+        }
+    }
+
+    /// Индикатор множителя относится только к кокпиту: на картах,
+    /// информационных экранах, заставке и экране эмулятора его нет.
+    #[test]
+    fn speed_indicator_absent_outside_cockpit() {
+        let opts = test_options();
+        let mut app = App::new(boot(), &opts);
+        let (w, h) = (1024usize, 768usize);
+        app.machine.hd.resize(w, h);
+        app.speed_multiplier = 2;
+
+        let screens = [
+            Screen::Intro,
+            Screen::GalacticMap,
+            Screen::EquipShop,
+            Screen::PilotStatus,
+            Screen::PlanetInfo,
+            Screen::Market,
+            Screen::Emulator(crate::state::OriginalScreen::FrontView),
+        ];
+        for screen in screens {
+            app.state.screen = screen;
+            app.machine.hd.clear(display::TRANSPARENT);
+            app.draw_speed_indicator();
+            assert!(
+                app.machine.hd.pixels().iter().all(|&p| p == display::TRANSPARENT),
+                "индикатор показан на экране {screen:?}"
+            );
+        }
+
+        // Анимации переходов показываются поверх того же кокпита.
+        app.state.screen = Screen::Animation(crate::state::Animation::Hyperspace);
+        app.machine.hd.clear(display::TRANSPARENT);
+        app.draw_speed_indicator();
+        assert!(
+            app.machine.hd.pixels().iter().any(|&p| p != display::TRANSPARENT),
+            "индикатор пропал в анимации перехода"
+        );
     }

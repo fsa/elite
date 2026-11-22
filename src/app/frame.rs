@@ -31,7 +31,7 @@ impl App<'_> {
     /// Эмулятор привязан к настенным часам, а не к частоте отрисовки. Это
     /// позволяет рендерить чаще 50 Гц и не дёргать игру при пропусках кадров
     /// рендера: Z80 просто догонит накопленное время несколькими шагами.
-    fn take_emulation_frames(&mut self, now: std::time::Instant) -> u64 {
+    pub(super) fn take_emulation_frames(&mut self, now: std::time::Instant) -> u64 {
         let mut dt = now.saturating_duration_since(self.last_tick);
         self.last_tick = now;
         // При паузе/подвисании не копим огромный долг.
@@ -45,8 +45,8 @@ impl App<'_> {
             self.z80_accum -= Z80_FRAME_TIME;
             frames += 1;
         }
-        if self.accelerated {
-            frames = frames.saturating_mul(2);
+        if self.speed_multiplier > 1 {
+            frames = frames.saturating_mul(self.speed_multiplier.into());
         }
         // Не даём одному кадру рендера превращаться в минутный догон.
         frames.min(10)
@@ -116,9 +116,14 @@ impl App<'_> {
     ///
     /// Множитель рисуется тем же шрифтом ПЗУ, что подписи панели, в клетке,
     /// зеркальной паре `ES` (`x2` слева, `ES` справа). Обычно множитель равен
-    /// единице и ничего не рисуется, чтобы не засорять кадр.
+    /// единице и ничего не рисуется, чтобы не засорять кадр. Индикатор
+    /// относится к панели кокпита, поэтому он не должен появляться на карте,
+    /// информационных экранах, заставке или экране эмулятора.
     pub(super) fn draw_speed_indicator(&mut self) {
-        if !self.accelerated {
+        if !matches!(self.state.screen, Screen::Flight | Screen::Animation(_)) {
+            return;
+        }
+        if self.speed_multiplier == 1 {
             return;
         }
         let (w, h) = (self.machine.hd.width as u32, self.machine.hd.height as u32);
@@ -130,9 +135,10 @@ impl App<'_> {
         let scale = (cell.h / 8).min(cell.w / 16).max(1) as usize;
         let x = cell.x + (cell.w - 16 * scale as i32) / 2;
         let y = cell.y + (cell.h - 8 * scale as i32) / 2;
+        let text = format!("x{}", self.speed_multiplier);
         self.machine
             .hd
-            .draw_text(ZX_FONT, x, y, "x2", cockpit::FRAME_COLOR, scale);
+            .draw_text(ZX_FONT, x, y, &text, cockpit::FRAME_COLOR, scale);
     }
 
     /// Полукруг индикатора опасности в правом верхнем углу вспомогательного
@@ -286,6 +292,7 @@ impl App<'_> {
             self.machine.hd.clear(display::TRANSPARENT);
         }
 
+        self.update_speed_hold();
         let z80_frames = self.take_emulation_frames(std::time::Instant::now());
 
         // Эмуляция и ввод зависят от текущего экрана. В нативном режиме

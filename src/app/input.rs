@@ -1,9 +1,11 @@
 //! Обработка клавиатуры и мыши: нативные экраны, меню и передача ввода в Z80.
 
+use std::time::Instant;
+
 use winit::keyboard::KeyCode;
 use winit::window::Fullscreen;
 
-use super::App;
+use super::{App, SPEED_HOLD_RESET, SpeedKeyHold};
 use crate::flight;
 use crate::hdmap;
 use crate::keys::{
@@ -482,6 +484,51 @@ impl App<'_> {
         }
     }
 
+    /// Короткое нажатие `F12` выбирает следующий множитель, долгое — x1.
+    ///
+    /// Переключение происходит на отпускании: пока клавиша зажата, ещё нельзя
+    /// знать, будет ли это короткий цикл или долгий сброс. Автоповтор не меняет
+    /// множитель и не мешает отсчёту удержания.
+    fn handle_speed_key(&mut self, pressed: bool, repeat: bool) {
+        if pressed {
+            if repeat || self.speed_key_hold.is_some() {
+                return;
+            }
+            self.speed_key_hold = Some(SpeedKeyHold {
+                started: Instant::now(),
+                reset_done: false,
+            });
+            return;
+        }
+        let Some(hold) = self.speed_key_hold.take() else {
+            return;
+        };
+        if !hold.reset_done && hold.started.elapsed() < SPEED_HOLD_RESET {
+            self.speed_multiplier = match self.speed_multiplier {
+                1 => 2,
+                2 => 5,
+                5 => 10,
+                _ => 1,
+            };
+        }
+    }
+
+    /// Сбросить множитель, если `F12` удерживается дольше порога.
+    pub(super) fn update_speed_hold(&mut self) {
+        let Some(hold) = self.speed_key_hold.as_mut() else {
+            return;
+        };
+        if !hold.reset_done && hold.started.elapsed() >= SPEED_HOLD_RESET {
+            self.speed_multiplier = 1;
+            hold.reset_done = true;
+        }
+    }
+
+    /// Потеря фокуса не должна оставлять `F12` зажатой.
+    pub(super) fn cancel_speed_hold(&mut self) {
+        self.speed_key_hold = None;
+    }
+
     /// Обработать событие клавиши (по физической позиции, раскладка не важна).
     pub(super) fn key_event(&mut self, code: KeyCode, pressed: bool, repeat: bool) {
         if let Some((row, bit)) = matrix_pos(code) {
@@ -493,13 +540,13 @@ impl App<'_> {
         // Состояние станции могло измениться между кадрами (стыковка, вылет,
         // загрузка). Синхронизируем режим до обработки нажатия.
         self.maybe_enter_native_station();
-        if !pressed {
+        // F12 обрабатываем и на отпускании: короткое нажатие переключает
+        // множитель, а долгое удержание уже сбросило его в `update_speed_hold`.
+        if code == KeyCode::F12 {
+            self.handle_speed_key(pressed, repeat);
             return;
         }
-        // F12 — ускорение эмуляции Z80 вдвое. Работает в любом режиме и в игру
-        // не передаётся (в матрице ZX такой клавиши нет).
-        if code == KeyCode::F12 && !repeat {
-            self.accelerated = !self.accelerated;
+        if !pressed {
             return;
         }
         // F11 / Alt+Enter — переключение полноэкранного режима во всех режимах.
