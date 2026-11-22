@@ -963,6 +963,7 @@ fn cockpit_draws_radar_with_contacts() {
         y: 0,
         z: 0,
         kind: RadarContactKind::Ship,
+        slot: 0,
     });
     let mut full = Frame::new(1280, 960);
     Cockpit::new().draw(&mut full, &font, CockpitStyle::COBRA_MK3, &v);

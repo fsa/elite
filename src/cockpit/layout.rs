@@ -245,16 +245,17 @@ impl CockpitLayout {
     /// радарам не нужно ничего пересчитывать.
     fn read_radar(&self, mem: &[u8]) -> RadarContacts {
         let mut contacts = RadarContacts::empty();
-        self.push_slot(mem, self.coriolis_slot, RadarContactKind::Station, &mut contacts);
+        self.push_slot(mem, self.coriolis_slot, RadarContactKind::Station, 0, &mut contacts);
         for i in 0..SHIP_SLOTS {
             self.push_slot(
                 mem,
                 self.ship_slot0.wrapping_add(i.wrapping_mul(SLOT_SIZE)),
                 RadarContactKind::Ship,
+                (i + 1) as u8,
                 &mut contacts,
             );
         }
-        self.push_slot(mem, self.missile_slot, RadarContactKind::Missile, &mut contacts);
+        self.push_slot(mem, self.missile_slot, RadarContactKind::Missile, 7, &mut contacts);
         contacts
     }
 
@@ -264,6 +265,7 @@ impl CockpitLayout {
         mem: &[u8],
         base: u16,
         kind: RadarContactKind,
+        slot: u8,
         contacts: &mut RadarContacts,
     ) {
         if base == 0 {
@@ -279,6 +281,7 @@ impl CockpitLayout {
             y: read_game_coordinate(&mem[base + 3..base + 6]),
             z: read_game_coordinate(&mem[base + 6..base + 9]),
             kind,
+            slot,
         });
     }
 }

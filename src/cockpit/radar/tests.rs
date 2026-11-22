@@ -5,7 +5,8 @@ use crate::display::Frame;
 use super::super::geometry::{Rect, panel_geometry};
 use super::super::palette::{CockpitStyle, FRAME_COLOR};
 use super::super::values::{CockpitValues, RadarContact, RadarContactKind, RadarContacts};
-use super::{RadarView, draw_view, oval, plot_contact, RADAR_RANGE};
+use super::kladov::plot_contact as plot_kladov_contact;
+use super::{RadarView, RADAR_RANGE, draw_view, oval, plot_contact};
 
 const W: usize = 1280;
 const H: usize = 960;
@@ -21,6 +22,7 @@ fn contact(x: i32, y: i32, z: i32) -> RadarContact {
         y,
         z,
         kind: RadarContactKind::Ship,
+        slot: 0,
     }
 }
 
@@ -440,7 +442,7 @@ fn kladov_radar_has_two_squares() {
     ] {
         assert_eq!(px(&f, x, y), ink(), "нет внешнего квадрата: {name}");
     }
-    let inner_side = ((cell.w as f32 / 2.455).round() as i32).max(3).min(cell.w - 2);
+    let inner_side = ((cell.w as f32 * 23.0 / 55.0).round() as i32).max(3).min(cell.w - 2);
     let inner_half = inner_side / 2;
     for (name, x, y) in [
         ("внутр верх", cx, cy - inner_half),
@@ -453,16 +455,16 @@ fn kladov_radar_has_two_squares() {
     }
 }
 
-/// Отношение сторон внешнего и внутреннего квадратов — 2,455.
+/// Отношение сторон внешнего и внутреннего квадратов — 55:23.
 #[test]
 fn kladov_inner_square_ratio() {
     let g = panel_geometry(W as u32, H as u32);
     let cell = g.kladov_radar_cell();
-    let inner_side = ((cell.w as f32 / 2.455).round() as i32).max(3).min(cell.w - 2);
+    let inner_side = ((cell.w as f32 * 23.0 / 55.0).round() as i32).max(3).min(cell.w - 2);
     let ratio = cell.w as f32 / inner_side as f32;
     assert!(
-        (ratio - 2.455).abs() < 0.02,
-        "отношение сторон не 2.455: {ratio}"
+        (ratio - 55.0 / 23.0).abs() < 0.02,
+        "отношение сторон не 55:23: {ratio}"
     );
 }
 
@@ -482,12 +484,46 @@ fn kladov_radar_draws_contacts() {
 /// Размер знака зависит от удаления.
 #[test]
 fn kladov_contact_size_depends_on_distance() {
-    let near = contact(RADAR_RANGE as i32 / 6, 0, RADAR_RANGE as i32 / 6);
-    let far = contact(RADAR_RANGE as i32, 0, RADAR_RANGE as i32);
+    let near = contact(0, 0, RADAR_RANGE as i32 / 64);
+    let far = contact(0, 0, RADAR_RANGE as i32 / 2);
     let (f_near, cell) = draw_radar_view(&[near], RadarView::Kladov);
     let (f_far, _) = draw_radar_view(&[far], RadarView::Kladov);
     let empty = draw_radar_view(&[], RadarView::Kladov).0;
     let near_extra = lit_in(&f_near, cell).saturating_sub(lit_in(&empty, cell));
     let far_extra = lit_in(&f_far, cell).saturating_sub(lit_in(&empty, cell));
     assert!(near_extra > far_extra, "близкий знак не больше дальнего: {near_extra} vs {far_extra}");
+}
+
+/// Положение знака повторяет оригинальные пиксели 55-пиксельного квадрата.
+#[test]
+fn kladov_contact_matches_original_pixel_positions() {
+    let cell = Rect { x: 0, y: 0, w: 55, h: 55 };
+
+    let center = plot_kladov_contact(cell, &contact(0, 0, 0x1000)).unwrap();
+    assert_eq!(center, (28, 27, 4, true));
+
+    // X делится на длину вектора: одинаковый X при разной глубине даёт
+    // разные положения, а не один и тот же столбец.
+    let oblique = plot_kladov_contact(cell, &contact(0x1000, 0, 0x1000)).unwrap();
+    let shallow = plot_kladov_contact(cell, &contact(0x1000, 0, 0x3000)).unwrap();
+    assert_eq!(oblique.0, 43);
+    assert_eq!(shallow.0, 34);
+
+    // Близкий объект сдвигает знак на пиксель влево и увеличивает луч.
+    let near = plot_kladov_contact(cell, &contact(0, 0, 0x100)).unwrap();
+    assert_eq!(near, (27, 27, 7, true));
+
+    // Позади — тот же механизм, но знак `x`.
+    let behind = plot_kladov_contact(cell, &contact(0, 0, -0x1000)).unwrap();
+    assert_eq!(behind, (28, 27, 4, false));
+}
+
+/// Слот Z80 добавляет ступенчатую поправку к вертикали знака.
+#[test]
+fn kladov_contact_uses_slot_offset() {
+    let cell = Rect { x: 0, y: 0, w: 55, h: 55 };
+    let mut contact = contact(0, 0, 0x1000);
+    contact.slot = 1;
+    let plot = plot_kladov_contact(cell, &contact).unwrap();
+    assert_eq!(plot.1, 24);
 }

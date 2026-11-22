@@ -187,6 +187,10 @@ pub struct RadarContact {
     pub y: i32,
     pub z: i32,
     pub kind: RadarContactKind,
+    /// Индекс слота Z80, из которого прочитан контакт. Локатор Кладова
+    /// использует младшие биты адреса слота как небольшую ступенчатую
+    /// поправку к вертикали, чтобы знаки не слипались.
+    pub slot: u8,
 }
 
 impl RadarContact {
@@ -195,6 +199,7 @@ impl RadarContact {
         y: 0,
         z: 0,
         kind: RadarContactKind::Ship,
+        slot: 0,
     };
 }
 
