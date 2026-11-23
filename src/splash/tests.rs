@@ -487,21 +487,24 @@ fn yaw_rot(angle: f32) -> Rotation {
     Rotation::axis_angle([0.0, 1.0, 0.0], angle)
 }
 
-/// Видимость грани — по знаку Z повёрнутой нормали (тест оригинала).
+/// Видимость грани — по скалярному произведению нормали и позиции объекта.
 ///
 /// Раньше в тесте участвовал бит 7 `Face::flags`, который на самом деле
 /// задаёт знак X-компоненты нормали, — из-за чего видимая и невидимая
-/// стороны менялись местами.
+/// стороны менялись местами. Для объекта на оси взгляда тест сводится к
+/// знаку Z повёрнутой нормали, как в упрощённой формулировке.
 #[test]
 fn face_visibility_follows_rotated_normal_z() {
     let ship = cobra();
+    let pos = [0.0, 0.0, 512.0];
     for yaw in [0.0f32, 0.7, 1.5, 2.4, 3.0, 4.5] {
         let rot = yaw_rot(yaw);
-        let vis = face_visibility(ship, &rot);
+        let vis = face_visibility(ship, &rot, pos);
         assert_eq!(vis.len(), ship.faces.len());
         for (f, &v) in ship.faces.iter().zip(vis.iter()) {
             let n = rot.apply([f.nx as f32, f.ny as f32, f.nz as f32]);
-            assert_eq!(v, n[2] < 0.0, "грань видна не по знаку нормали");
+            let dot = n[0] * pos[0] + n[1] * pos[1] + n[2] * pos[2];
+            assert_eq!(v, dot < 0.0, "грань видна не по знаку скалярного произведения");
         }
     }
 }
@@ -513,7 +516,8 @@ fn face_visibility_follows_rotated_normal_z() {
 fn face_visibility_shows_tail_side_at_identity() {
     let ship = cobra();
     let rot = yaw_rot(0.0);
-    let vis = face_visibility(ship, &rot);
+    let pos = [0.0, 0.0, 512.0];
+    let vis = face_visibility(ship, &rot, pos);
     // Нормаль хвоста (0, 0, -80) — видна.
     let tail = ship
         .faces
@@ -521,7 +525,7 @@ fn face_visibility_shows_tail_side_at_identity() {
         .position(|f| f.nx == 0 && f.ny == 0 && f.nz < 0)
         .expect("нормаль хвоста не найдена");
     assert!(vis[tail], "хвост должен быть виден");
-    // Верхние грани (nz > 0) — не видны.
+    // Верхние грани (nz > 0) — не видны при объекте на оси взгляда.
     for (i, f) in ship.faces.iter().enumerate() {
         if f.nz > 0 {
             assert!(!vis[i], "верхняя грань {i} не должна быть видна");
@@ -529,22 +533,25 @@ fn face_visibility_shows_tail_side_at_identity() {
     }
 }
 
-/// Видимая половина модели смотрит к наблюдателю: сумма Z-компонент
-/// видимых нормалей отрицательна, а невидимых — положительна.
+/// Видимая половина модели смотрит к наблюдателю: скалярное произведение
+/// видимых нормалей с позицией объекта отрицательно, а невидимых —
+/// положительно.
 #[test]
 fn face_visibility_culls_far_half_only() {
     let ship = cobra();
+    let pos = [0.0, 0.0, 512.0];
     for yaw in [0.0f32, 0.9, 2.0, 3.3, 5.0] {
         let rot = yaw_rot(yaw);
-        let vis = face_visibility(ship, &rot);
+        let vis = face_visibility(ship, &rot, pos);
         let mut near = 0.0f32;
         let mut far = 0.0f32;
         for (f, &v) in ship.faces.iter().zip(vis.iter()) {
-            let z = rot.apply([f.nx as f32, f.ny as f32, f.nz as f32])[2];
+            let n = rot.apply([f.nx as f32, f.ny as f32, f.nz as f32]);
+            let dot = n[0] * pos[0] + n[1] * pos[1] + n[2] * pos[2];
             if v {
-                near += z;
+                near += dot;
             } else {
-                far += z;
+                far += dot;
             }
         }
         assert!(near < 0.0, "видимые грани должны смотреть к наблюдателю");
