@@ -545,7 +545,12 @@ impl App<'_> {
                         self.compass_view,
                     );
                     if self.state.menu {
-                        draw_pause_menu(&mut self.machine.hd, ZX_FONT, self.menu_sel, false);
+                        draw_pause_menu(
+                            &mut self.machine.hd,
+                            ZX_FONT,
+                            self.menu_sel,
+                            self.machine.intro_seen,
+                        );
                     }
                 }
                 Screen::EquipShop => {
@@ -563,7 +568,12 @@ impl App<'_> {
                     self.draw_danger_half();
                     self.draw_jump_countdown();
                     if self.state.menu {
-                        draw_pause_menu(&mut self.machine.hd, ZX_FONT, self.menu_sel, true);
+                        draw_pause_menu(
+                            &mut self.machine.hd,
+                            ZX_FONT,
+                            self.menu_sel,
+                            self.machine.intro_seen,
+                        );
                     }
                 }
                 Screen::PlanetInfo => {
@@ -572,7 +582,12 @@ impl App<'_> {
                     self.draw_danger_half();
                     self.draw_jump_countdown();
                     if self.state.menu {
-                        draw_pause_menu(&mut self.machine.hd, ZX_FONT, self.menu_sel, true);
+                        draw_pause_menu(
+                            &mut self.machine.hd,
+                            ZX_FONT,
+                            self.menu_sel,
+                            self.machine.intro_seen,
+                        );
                     }
                 }
                 Screen::Market => {
@@ -600,7 +615,12 @@ impl App<'_> {
                         &self.splash_values,
                     );
                     if self.state.menu {
-                        draw_pause_menu(&mut self.machine.hd, ZX_FONT, self.menu_sel, true);
+                        draw_pause_menu(
+                            &mut self.machine.hd,
+                            ZX_FONT,
+                            self.menu_sel,
+                            self.machine.intro_seen,
+                        );
                     }
                 }
                 Screen::Emulator(_) => {
