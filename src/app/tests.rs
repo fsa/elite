@@ -2593,6 +2593,77 @@ use crate::world::{
         assert_eq!(app.pending_key, None, "Backquote отправил клавишу в игру");
     }
 
+    /// Стрелки на заставке: ◄/► переключают корабль, ▲/▼ в `--debug`
+    /// наклоняют его. Наклон работает и на автоповторе, но не в обычной
+    /// заставке, и ни одна стрелка не уходит в Z80.
+    #[test]
+    fn splash_arrows_control_debug_view() {
+        let opts = Options {
+            debug: true,
+            ..test_options()
+        };
+        let mut app = App::new(boot(), &opts);
+        app.machine.intro_seen = true;
+        app.sync_state();
+        for _ in 0..30 {
+            app.splash.tick();
+        }
+
+        let spun = app.splash.rotation();
+        app.key_event(KeyCode::ArrowUp, true, false);
+        let tilted = app.splash.rotation();
+        assert_ne!(spun.m, tilted.m, "▲ не наклонил корабль");
+
+        // Удержание стрелки приходит как повторные нажатия.
+        app.key_event(KeyCode::ArrowDown, true, true);
+        assert_ne!(
+            tilted.m,
+            app.splash.rotation().m,
+            "автоповтор ▼ не наклонил корабль"
+        );
+
+        let intro = splash::Splash::new().rotation();
+        app.key_event(KeyCode::ArrowRight, true, false);
+        assert_eq!(
+            intro.m,
+            app.splash.rotation().m,
+            "► не сбросил ракурс на стартовый"
+        );
+        let cycled = app.splash.rotation();
+        app.key_event(KeyCode::ArrowRight, true, true);
+        assert_eq!(
+            cycled.m,
+            app.splash.rotation().m,
+            "автоповтор ► не должен переключать корабль"
+        );
+        for code in [
+            KeyCode::ArrowLeft,
+            KeyCode::ArrowRight,
+            KeyCode::ArrowUp,
+            KeyCode::ArrowDown,
+        ] {
+            app.key_event(code, false, false);
+            assert_eq!(
+                kempston_bit(code).map(|bit| app.kempston[bit as usize]),
+                Some(false),
+                "{code:?} ушла в джойстик Z80"
+            );
+        }
+
+        let plain_opts = test_options();
+        let mut plain = App::new(boot(), &plain_opts);
+        plain.machine.intro_seen = true;
+        plain.sync_state();
+        let before = plain.splash.rotation();
+        plain.key_event(KeyCode::ArrowUp, true, false);
+        plain.key_event(KeyCode::ArrowDown, true, true);
+        assert_eq!(
+            before.m,
+            plain.splash.rotation().m,
+            "▲/▼ не должны работать вне отладочной заставки"
+        );
+    }
+
     /// Кнопка ` есть и на заставке: она переключает нативный титр и родное
     /// интро. Z80 продолжает играть заставку в обоих состояниях, а SPACE по-прежнему
     /// запускает игру через нативные хуки.

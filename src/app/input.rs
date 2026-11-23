@@ -652,6 +652,28 @@ impl App<'_> {
         }
     }
 
+    /// Стрелки на заставке: ◄/► переключают корабль, ▲/▼ в отладочном режиме
+    /// наклоняют его. Возвращает `true`, если клавиша поглощена заставкой.
+    ///
+    /// Вызывается до общего запрета автоповтора: удержание ▲/▼ должно
+    /// вращать модель, а ◄/► переключают её только по первому нажатию.
+    fn splash_arrow_key(&mut self, code: KeyCode, repeat: bool) -> bool {
+        if !self.machine.intro_seen || self.menu {
+            return false;
+        }
+        match code {
+            KeyCode::ArrowLeft if !repeat => self.splash.cycle_ship(-1),
+            KeyCode::ArrowRight if !repeat => self.splash.cycle_ship(1),
+            KeyCode::ArrowUp => self.splash.rotate_vertical(1),
+            KeyCode::ArrowDown => self.splash.rotate_vertical(-1),
+            _ => return false,
+        }
+        // Пока виден родной интро-кадр, стрелки не должны уходить в Z80:
+        // они управляют витриной, а не кораблем в игре.
+        self.release_pressed(code);
+        true
+    }
+
     /// Обработать событие клавиши (по физической позиции, раскладка не важна).
     pub(super) fn key_event(&mut self, code: KeyCode, pressed: bool, repeat: bool) {
         if let Some((row, bit)) = matrix_pos(code) {
@@ -1102,6 +1124,9 @@ impl App<'_> {
         // Нативные экраны капитана (F9) и информации о планете (F7) не
         // перехватывают ввод: это альтернативная отрисовка экранов `L`/`P`,
         // управление остаётся за эмулятором.
+        if self.splash_arrow_key(code, repeat) {
+            return;
+        }
         if repeat {
             return;
         }
@@ -1150,10 +1175,10 @@ impl App<'_> {
             return;
         }
         // На заставке своя нативная логика: запускает игру только SPACE,
-        // стрелки влево/вправо переключают корабль (как в оригинальном
-        // интро), остальные клавиши (кроме меню и ` из обработчика выше)
-        // игнорируются. SPACE работает и после выхода в эмулятор, чтобы
-        // старт игры всегда шёл через нативные хуки.
+        // стрелки обработаны выше (◄/► — корабль, ▲/▼ — наклон в `--debug`),
+        // остальные клавиши (кроме меню и ` из обработчика выше) игнорируются.
+        // SPACE работает и после выхода в эмулятор, чтобы старт игры всегда
+        // шёл через нативные хуки.
         if self.machine.intro_seen {
             if code == KeyCode::Space && !repeat {
                 // SPACE запускает игру обычным родным путём. Ветка старта
@@ -1171,14 +1196,6 @@ impl App<'_> {
                 }
                 self.pending_key = None;
                 self.pending_status = true;
-            } else if code == KeyCode::ArrowLeft {
-                self.splash.cycle_ship(-1);
-                // Пока виден родной интро-кадр, стрелки не должны уходить в
-                // Z80: они переключают витрину, а не корабль в игре.
-                self.release_pressed(code);
-            } else if code == KeyCode::ArrowRight {
-                self.splash.cycle_ship(1);
-                self.release_pressed(code);
             } else if code == KeyCode::Escape {
                 self.menu = true;
                 self.menu_sel = 0;

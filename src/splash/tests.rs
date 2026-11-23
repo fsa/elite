@@ -9,7 +9,7 @@ use crate::shipdata::{self, Ship};
 
 use super::Splash;
 use super::cycle::{INTRO_CYCLE, debug_cycle};
-use super::motion::{STEP_ANGLE, STEP_AXIS, STEP_FRAMES};
+use super::motion::{STEP_ANGLE, STEP_AXIS, STEP_FRAMES, VERTICAL_STEP_ANGLE};
 
 /// Совпадает ли геометрия двух объектов.
 ///
@@ -753,6 +753,111 @@ fn splash_rotation_matches_original_step() {
         (190.0..230.0).contains(&half),
         "полуповорот за {half} кадров — скорость не как у оригинала (~200)"
     );
+}
+
+/// В отладочном режиме ▲/▼ наклоняют корабль вокруг горизонтали экрана.
+/// ▲ поднимает нос (+Z модели), ▼ возвращает ракурс и опускает нос.
+#[test]
+fn debug_vertical_arrows_tilt_ship_around_screen_x() {
+    let mut st = Splash::with_debug(true);
+    let start = st.rot;
+    let nose_y = start.apply([0.0, 0.0, 1.0])[1];
+
+    st.rotate_vertical(1);
+    assert!(
+        (angle_between(&start, &st.rot) - VERTICAL_STEP_ANGLE).abs() < 1e-3,
+        "▲ повернул корабль не на шаг наклона"
+    );
+    assert!(
+        st.rot.apply([0.0, 0.0, 1.0])[1] > nose_y,
+        "▲ должен поднимать нос корабля"
+    );
+
+    st.rotate_vertical(-1);
+    assert!(
+        angle_between(&start, &st.rot) < 1e-3,
+        "▼ не вернул исходный ракурс"
+    );
+
+    st.rotate_vertical(-1);
+    assert!(
+        st.rot.apply([0.0, 0.0, 1.0])[1] < nose_y,
+        "▼ должен опускать нос корабля"
+    );
+}
+
+/// Наклон добавляется к текущему ракурсу, а не сбрасывает анимацию:
+/// после нескольких кадров вращения ▲ всё равно даёт ровно свой шаг.
+#[test]
+fn debug_vertical_tilt_keeps_intro_animation() {
+    let mut st = Splash::with_debug(true);
+    for _ in 0..100 {
+        st.tick();
+    }
+    let spun = st.rot;
+    st.rotate_vertical(1);
+    assert!(
+        (angle_between(&spun, &st.rot) - VERTICAL_STEP_ANGLE).abs() < 1e-3,
+        "наклон сбросил или изменил текущее вращение"
+    );
+}
+
+/// При наклоне в отладочном режиме корабль не выходит за отведённую полосу
+/// между надписями: калибровка масштаба учитывает и поворот вокруг X.
+#[test]
+fn debug_vertical_tilt_keeps_ship_inside_band() {
+    let st = Splash::with_debug(true);
+    let r = INTRO_SHIP_RADIUS * 5;
+    let mut worst = (0.0f32, "");
+    for name in super::cycle::debug_cycle() {
+        let ship = shipdata::SHIPS.iter().find(|s| s.name == *name).unwrap();
+        let cen = crate::render3d::model_center(ship);
+        let k = st.ship_scale(ship, cen, INTRO_DIST, r);
+        let (bx, by) = st.intro_screen_center(ship, cen, INTRO_DIST);
+        let intro = Rotation::intro();
+        for i in 0..24 {
+            let tilt =
+                Rotation::axis_angle([1.0, 0.0, 0.0], i as f32 * std::f32::consts::TAU / 24.0);
+            for j in 0..72 {
+                let spin = Rotation::axis_angle(STEP_AXIS, j as f32 * std::f32::consts::TAU / 72.0);
+                let rot = tilt.mul(&spin.mul(&intro));
+                for v in ship.vertices {
+                    let w = rot.apply([
+                        v.x as f32 - cen[0],
+                        v.y as f32 - cen[1],
+                        v.z as f32 - cen[2],
+                    ]);
+                    let z = INTRO_DIST + w[2];
+                    let reach = ((w[0] / z - bx) * k).abs().max(((w[1] / z - by) * k).abs());
+                    if reach > worst.0 {
+                        worst = (reach, name);
+                    }
+                }
+            }
+        }
+    }
+    assert!(
+        worst.0 <= r as f32 + 1.0,
+        "модель {} выходит за полосу: {:.1} > {r}",
+        worst.1,
+        worst.0
+    );
+}
+
+/// В обычной заставке ▲/▼ не работают: поведение оригинала не меняется.
+#[test]
+fn vertical_rotation_is_debug_only() {
+    let mut st = Splash::new();
+    let start = st.rot;
+    st.rotate_vertical(1);
+    for i in 0..3 {
+        for j in 0..3 {
+            assert_eq!(
+                st.rot.m[i][j], start.m[i][j],
+                "обычная заставка должна игнорировать ▲/▼"
+            );
+        }
+    }
 }
 
 /// «Карусель» оригинала: ось вращения близка к направлению взгляда,
