@@ -52,4 +52,5 @@ pub(super) static SHIP_D_CARGO: Ship = Ship {
         Face { nx: 0, ny: 41, nz: -30, flags: 0x3f },
         Face { nx: 0, ny: 41, nz: 30, flags: 0x1e },
     ],
+    face_styles: &[],
 };

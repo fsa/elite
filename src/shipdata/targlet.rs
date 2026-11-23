@@ -52,4 +52,5 @@ pub(super) static SHIP_DTARGLETH: Ship = Ship {
         Face { nx: 20, ny: 5, nz: 7, flags: 0x1f },
         Face { nx: 20, ny: -5, nz: 7, flags: 0x5e },
     ],
+    face_styles: &[],
 };

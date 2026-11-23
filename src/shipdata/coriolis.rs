@@ -1,8 +1,12 @@
 //! `d_Coriolis` (адрес 0x63c6).
 //!
-//! Модель из таблицы `AdrDataShips` версии Кладова.
+//! Модель из таблицы `AdrDataShips` версии Кладова. Единственное отличие от
+//! импортированной геометрии — грань 14: поверх входа (передняя сторона,
+//! локальная `+Z`) добавлена чёрная поверхность. В оригинале вход оставался
+//! чёрным просто потому, что фон сцены чёрный; нативная заливка корпуса
+//! сделала бы его «прозрачным», поэтому вырез получил отдельную грань.
 
-use super::{Edge, Face, Ship, Stats, Vertex};
+use super::{Edge, Face, FaceStyle, Ship, Stats, Vertex};
 
 pub(super) static SHIP_D_CORIOLIS: Ship = Ship {
     name: "d_Coriolis",
@@ -27,10 +31,10 @@ pub(super) static SHIP_D_CORIOLIS: Ship = Ship {
         Vertex { x: 0, y: 160, z: -160, lod: 0x1e, faces: [107, 151] },
         Vertex { x: 0, y: -160, z: 160, lod: 0x1e, faces: [8, 163] },
         Vertex { x: 0, y: -160, z: -160, lod: 0x1e, faces: [74, 149] },
-        Vertex { x: 10, y: -30, z: 160, lod: 0x1f, faces: [136, 136] },
-        Vertex { x: 10, y: 30, z: 160, lod: 0x1e, faces: [136, 136] },
-        Vertex { x: -10, y: 30, z: 160, lod: 0x1e, faces: [136, 136] },
-        Vertex { x: -10, y: -30, z: 160, lod: 0x1e, faces: [136, 136] },
+        Vertex { x: 10, y: -30, z: 160, lod: 0x1f, faces: [8, 14] },
+        Vertex { x: 10, y: 30, z: 160, lod: 0x1e, faces: [8, 14] },
+        Vertex { x: -10, y: 30, z: 160, lod: 0x1e, faces: [8, 14] },
+        Vertex { x: -10, y: -30, z: 160, lod: 0x1e, faces: [8, 14] },
     ],
     edges: &[
         Edge { lod: 0x1f, v: [10, 0], faces: 0x80 },
@@ -57,10 +61,10 @@ pub(super) static SHIP_D_CORIOLIS: Ship = Ship {
         Edge { lod: 0x1f, v: [3, 6], faces: 0xd7 },
         Edge { lod: 0x1f, v: [3, 7], faces: 0xd4 },
         Edge { lod: 0x1f, v: [11, 7], faces: 0xa4 },
-        Edge { lod: 0x1e, v: [13, 12], faces: 0x88 },
-        Edge { lod: 0x1e, v: [14, 13], faces: 0x88 },
-        Edge { lod: 0x1e, v: [15, 14], faces: 0x88 },
-        Edge { lod: 0x1e, v: [12, 15], faces: 0x88 },
+        Edge { lod: 0x1e, v: [13, 12], faces: 0xe8 },
+        Edge { lod: 0x1e, v: [14, 13], faces: 0xe8 },
+        Edge { lod: 0x1e, v: [15, 14], faces: 0xe8 },
+        Edge { lod: 0x1e, v: [12, 15], faces: 0xe8 },
     ],
     faces: &[
         Face { nx: 107, ny: -107, nz: 107, flags: 0x5f },
@@ -77,5 +81,10 @@ pub(super) static SHIP_D_CORIOLIS: Ship = Ship {
         Face { nx: 0, ny: 160, nz: 0, flags: 0x1e },
         Face { nx: 160, ny: 0, nz: 0, flags: 0x1f },
         Face { nx: -160, ny: 0, nz: 0, flags: 0x9e },
+        // Поверхность входа: та же нормаль, что у грани 8; её контур — только
+        // внутренний квадрат из вершин 12..15, который у грани 8 является
+        // вырезом. Поэтому заливки не перекрывают друг друга.
+        Face { nx: 0, ny: 0, nz: 160, flags: 0x1f },
     ],
+    face_styles: &[(14, FaceStyle::Color(0xFF00_0000))],
 };

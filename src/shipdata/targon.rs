@@ -76,4 +76,5 @@ pub(super) static SHIP_D_TARGON: Ship = Ship {
         Face { nx: 103, ny: -25, nz: 60, flags: 0x5e },
         Face { nx: -48, ny: 0, nz: 0, flags: 0x9f },
     ],
+    face_styles: &[],
 };

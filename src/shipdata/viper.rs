@@ -62,4 +62,5 @@ pub(super) static SHIP_D_VIPER: Ship = Ship {
         Face { nx: 0, ny: -32, nz: 0, flags: 0x5f },
         Face { nx: 0, ny: 32, nz: 0, flags: 0x1e },
     ],
+    face_styles: &[],
 };

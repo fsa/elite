@@ -99,4 +99,5 @@ pub(super) static SHIP_D_COBRA2: Ship = Ship {
         Face { nx: 0, ny: -30, nz: 6, flags: 0x5f },
         Face { nx: 7, ny: -42, nz: 9, flags: 0x5f },
     ],
+    face_styles: &[],
 };

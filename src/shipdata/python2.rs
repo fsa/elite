@@ -70,4 +70,5 @@ pub(super) static SHIP_D_PYTHON2: Ship = Ship {
         Face { nx: -25, ny: -37, nz: -11, flags: 0xfe },
         Face { nx: 0, ny: 0, nz: -112, flags: 0x3f },
     ],
+    face_styles: &[],
 };

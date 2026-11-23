@@ -76,4 +76,5 @@ pub(super) static SHIP_D_FERDELANCE: Ship = Ship {
         Face { nx: 12, ny: 46, nz: -19, flags: 0x3e },
         Face { nx: 0, ny: -28, nz: 0, flags: 0x5f },
     ],
+    face_styles: &[],
 };

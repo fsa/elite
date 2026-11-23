@@ -70,4 +70,5 @@ pub(super) static SHIP_D_MISSILE: Ship = Ship {
         Face { nx: 0, ny: 32, nz: 0, flags: 0x1e },
         Face { nx: 0, ny: 0, nz: -176, flags: 0x3f },
     ],
+    face_styles: &[],
 };

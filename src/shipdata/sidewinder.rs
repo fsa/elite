@@ -52,4 +52,5 @@ pub(super) static SHIP_DSIDEWINDERH: Ship = Ship {
         Face { nx: 0, ny: -32, nz: 8, flags: 0x5f },
         Face { nx: 0, ny: 32, nz: 8, flags: 0x1e },
     ],
+    face_styles: &[],
 };

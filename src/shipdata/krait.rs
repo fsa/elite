@@ -64,4 +64,5 @@ pub(super) static SHIP_D_KRAIT: Ship = Ship {
         Face { nx: 38, ny: 0, nz: -77, flags: 0x3f },
         Face { nx: -38, ny: 0, nz: -77, flags: 0xbe },
     ],
+    face_styles: &[],
 };

@@ -15,6 +15,10 @@ pub(super) struct FaceShape {
     /// Плоскость `1/z = aa*x + bb*y + cc` и её ошибка по вершинам.
     pub(super) plane: Option<(f32, f32, f32)>,
     pub(super) plane_error: f32,
+    /// Внешний вид грани из данных модели.
+    pub(super) style: FaceStyle,
+    /// Средняя обратная глубина вершин — для заливки от дальней к ближней.
+    pub(super) invz: f32,
 }
 
 /// Собрать контуры всех видимых граней.
@@ -73,6 +77,7 @@ pub(super) fn face_shapes(ship: &Ship, scr: &[(f32, f32, f32)], vis: &[bool]) ->
                 y1 = y1.max(scr[k].1);
             }
         }
+        let invz = pts.iter().map(|&(_, _, i)| i).sum::<f32>() / pts.len() as f32;
         out.push(FaceShape {
             edges: edges.clone(),
             x0,
@@ -81,6 +86,8 @@ pub(super) fn face_shapes(ship: &Ship, scr: &[(f32, f32, f32)], vis: &[bool]) ->
             y1,
             plane,
             plane_error,
+            style: ship.face_style(fi),
+            invz,
         });
     }
     out
@@ -90,15 +97,22 @@ pub(super) fn face_shapes(ship: &Ship, scr: &[(f32, f32, f32)], vis: &[bool]) ->
 ///
 /// Каждый контур заполняется построчно по правилу «чёт-нечёт»: это корректно
 /// и для нескольких петель (вырезы двигателей), и для невыпуклых граней.
-/// Все грани заливаются одним цветом, поэтому порядок заливки не важен —
-/// перекрывающиеся видимые грани всё равно дают один и тот же тёмный тон.
+/// Грани идут от дальней к ближней: у выделенных поверхностей свой цвет, и
+/// они должны перекрывать корпус, оказавшийся позади них на экране.
 pub(super) fn fill_faces(frame: &mut Frame, shapes: &[FaceShape], scr: &[(f32, f32, f32)]) {
     let w = frame.width as i32;
     let h = frame.height as i32;
     if w == 0 || h == 0 {
         return;
     }
-    for shape in shapes {
+    let mut order: Vec<&FaceShape> = shapes.iter().collect();
+    order.sort_by(|a, b| a.invz.total_cmp(&b.invz));
+    for shape in order {
+        let color = match shape.style {
+            FaceStyle::Hull => SHIP_FACE_COLOR,
+            FaceStyle::Color(color) => color,
+            FaceStyle::Flame => FLAME_COLOR,
+        };
         let y_lo = ((shape.y0 - 0.5).ceil() as i32).max(0);
         let y_hi = ((shape.y1 - 0.5).ceil() as i32 - 1).min(h - 1);
         if y_lo > y_hi {
@@ -120,7 +134,7 @@ pub(super) fn fill_faces(frame: &mut Frame, shapes: &[FaceShape], scr: &[(f32, f
                 let x_lo = ((pair[0] - 0.5).ceil() as i32).max(0);
                 let x_hi = ((pair[1] - 0.5).ceil() as i32 - 1).min(w - 1);
                 if x_lo <= x_hi {
-                    frame.hline(x_lo, y, (x_hi - x_lo + 1) as usize, SHIP_FACE_COLOR);
+                    frame.hline(x_lo, y, (x_hi - x_lo + 1) as usize, color);
                 }
             }
         }

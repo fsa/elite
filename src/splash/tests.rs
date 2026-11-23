@@ -987,6 +987,7 @@ fn cube_ship() -> &'static Ship {
         vertices: &VERTS,
         edges: &EDGES,
         faces: &FACES,
+        face_styles: &[],
         stats: unsafe { std::mem::zeroed() },
     };
     &SHIP

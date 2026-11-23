@@ -89,4 +89,5 @@ pub(super) static SHIP_STRU_6398: Ship = Ship {
         Face { nx: 0, ny: 10, nz: 1, flags: 0x1f },
         Face { nx: 0, ny: -10, nz: 1, flags: 0x5e },
     ],
+    face_styles: &[],
 };

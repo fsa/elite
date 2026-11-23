@@ -34,4 +34,5 @@ pub(super) static SHIP_D_MINERALS: Ship = Ship {
         Face { nx: -202, ny: 104, nz: -34, flags: 0xbf },
         Face { nx: -2, ny: -51, nz: -74, flags: 0xff },
     ],
+    face_styles: &[],
 };

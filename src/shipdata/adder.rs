@@ -80,4 +80,5 @@ pub(super) static SHIP_D_ADDER: Ship = Ship {
         Face { nx: 0, ny: -28, nz: 0, flags: 0x5e },
         Face { nx: 0, ny: 0, nz: -160, flags: 0x3f },
     ],
+    face_styles: &[],
 };

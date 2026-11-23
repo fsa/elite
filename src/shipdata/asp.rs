@@ -79,4 +79,5 @@ pub(super) static SHIP_D_ASP: Ship = Ship {
         Face { nx: -80, ny: 46, nz: 50, flags: 0x9e },
         Face { nx: 0, ny: 0, nz: -90, flags: 0x3f },
     ],
+    face_styles: &[],
 };

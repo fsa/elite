@@ -64,4 +64,5 @@ pub(super) static SHIP_D_ASTEROID2: Ship = Ship {
         Face { nx: 81, ny: 9, nz: -67, flags: 0x3f },
         Face { nx: 47, ny: 94, nz: -63, flags: 0x3f },
     ],
+    face_styles: &[],
 };
