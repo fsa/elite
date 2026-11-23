@@ -1316,6 +1316,126 @@ use crate::world::{
         }
     }
 
+    /// Под картой посторонние клавиши не должны закрывать её и уходить в Z80:
+    /// эмулятор продолжает полёт, но все нажатия принадлежат нативному экрану.
+    #[test]
+    fn map_keeps_foreign_and_control_keys_out_of_emulator_in_flight() {
+        let opts = test_options();
+        let mut app = App::new(boot(), &opts);
+        app.machine.mem[flight::Z80_WHAT_ON_SCREEN] = 0;
+        app.machine.mem[flight::Z80_IND_DANGER] = 1;
+        app.key_event(KeyCode::F1, true, false);
+        assert!(app.flight.active, "подготовка: полёт не открылся");
+        app.key_event(KeyCode::F6, true, false);
+        assert!(app.hdmap.active, "подготовка: карта не открылась");
+
+        for code in [KeyCode::KeyT, KeyCode::KeyF, KeyCode::Digit9, KeyCode::KeyQ] {
+            app.key_event(code, true, false);
+            assert!(app.hdmap.active, "{code:?} закрыл карту");
+            assert_eq!(app.pending_key, None, "{code:?} оставил отложенную клавишу");
+            app.apply_input();
+            let (row, bit) = matrix_pos(code).expect("клавиша в матрице");
+            assert_ne!(
+                app.machine.keyboard[row] & (1 << bit),
+                0,
+                "{code:?} ушёл в эмулятор под картой"
+            );
+            app.key_event(code, false, false);
+        }
+
+        // Управление картой работает, но тоже не протекает в эмулятор.
+        for code in [KeyCode::KeyD, KeyCode::KeyB, KeyCode::Enter] {
+            app.key_event(code, true, false);
+            assert!(app.hdmap.active, "{code:?} закрыл карту");
+            app.apply_input();
+            let (row, bit) = matrix_pos(code).expect("клавиша в матрице");
+            assert_ne!(
+                app.machine.keyboard[row] & (1 << bit),
+                0,
+                "{code:?} ушёл в эмулятор под картой"
+            );
+            app.key_event(code, false, false);
+        }
+        app.key_event(KeyCode::ArrowRight, true, false);
+        assert!(app.kempston[0], "стрелка должна двигать курсор карты");
+        app.apply_input();
+        assert_eq!(app.machine.kempston, 0, "стрелка ушла в джойстик Z80");
+        app.key_event(KeyCode::ArrowRight, false, false);
+    }
+
+    /// Повторный F6 на открытой карте ставит масштаб «вся галактика», как I,
+    /// и не передаёт управление эмулятору.
+    #[test]
+    fn f6_on_open_map_switches_to_galaxy_scale() {
+        let opts = test_options();
+        let mut app = App::new(boot(), &opts);
+        app.machine.intro_seen = false;
+        app.machine.mem[flight::Z80_IND_DANGER] = 0;
+        app.machine.mem[flight::Z80_WHAT_ON_SCREEN] = 0x0B;
+        app.key_event(KeyCode::KeyO, true, false);
+        assert!(app.hdmap.active, "подготовка: карта не открылась");
+        assert_eq!(app.hdmap.mode(), hdmap::MapMode::Local);
+
+        app.key_event(KeyCode::F6, true, false);
+        assert!(app.hdmap.active, "F6 закрыл карту");
+        assert_eq!(app.hdmap.mode(), hdmap::MapMode::Galaxy);
+        assert!(app.station_native, "F6 отдал управление эмулятору");
+        assert_eq!(app.pending_key, None, "F6 отправил клавишу в игру");
+    }
+
+    /// Карта, открытая из эмулятора, переключается на нативные экраны
+    /// оригинальными клавишами, не возвращая управление Z80.
+    #[test]
+    fn map_from_emulator_switches_to_native_screens() {
+        let opts = test_options();
+        let mut app = App::new(boot(), &opts);
+        app.machine.intro_seen = false;
+        app.machine.mem[flight::Z80_IND_DANGER] = 0;
+        app.machine.mem[flight::Z80_WHAT_ON_SCREEN] = 7;
+        app.close_status();
+        app.sync_state();
+        app.handoff_to_emulator();
+        app.key_event(KeyCode::KeyI, true, false);
+        assert!(app.hdmap.active, "подготовка: карта не открылась");
+        assert!(app.station_emulator, "подготовка: эмулятор не активен");
+
+        app.key_event(KeyCode::KeyL, true, false);
+        assert!(!app.hdmap.active, "L не закрыл карту");
+        assert!(app.status.active, "L не открыл нативный экран капитана");
+        assert_eq!(
+            app.pending_key,
+            matrix_pos(KeyCode::KeyL),
+            "L не отложен для входа в нативную станцию"
+        );
+        app.finish_pending_station_native();
+        assert!(app.station_native, "L не забрал управление у эмулятора");
+        assert!(!app.station_emulator, "L оставил эмулятор активным");
+    }
+
+    /// Цифры 1-4 в полёте под картой — переходы к видам, а не сырой ввод в Z80.
+    #[test]
+    fn map_digits_switch_flight_view() {
+        let opts = test_options();
+        let mut app = App::new(boot(), &opts);
+        app.machine.mem[flight::Z80_WHAT_ON_SCREEN] = 0;
+        app.machine.mem[flight::Z80_IND_DANGER] = 1;
+        app.key_event(KeyCode::F1, true, false);
+        app.key_event(KeyCode::F6, true, false);
+        assert!(app.hdmap.active, "подготовка: карта не открылась");
+
+        app.key_event(KeyCode::Digit3, true, false);
+        assert!(!app.hdmap.active, "цифра 3 не закрыла карту");
+        assert!(app.flight.active, "цифра 3 закрыла нативный полёт");
+        assert_eq!(app.flight.view_dir, flight::ViewDir::Left);
+        app.apply_input();
+        let (row, bit) = matrix_pos(KeyCode::Digit3).expect("3 в матрице");
+        assert_eq!(
+            app.machine.keyboard[row] & (1 << bit),
+            0,
+            "переход не передал игре клавишу 3"
+        );
+    }
+
     /// Когда Z80 уходит с вида из кабины (карта по `O`, инвентарь по `Enter`
     /// и т.п.), нативный вид закрывается и показывается настоящий экран игры.
     #[test]
