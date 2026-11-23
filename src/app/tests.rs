@@ -107,6 +107,21 @@ use crate::world::{
         };
         assert!(has_color(WHITE), "нет белой половины заголовка");
         assert!(has_color(LABEL), "нет голубой половины заголовка");
+        // Полоса выделения — как в маркете: высота строки текста плюс по две
+        // строки пикселей с каждой стороны, без захода на соседние пункты.
+        const SELECT_BG: u32 = 0xFF00_5458;
+        let first_row_y = r.y + border + cell + cell + cell / 2;
+        let sel_pad = 2 * text as i32;
+        let band_x = r.x + border + 1;
+        let band: Vec<i32> = (0..r.h as i32)
+            .filter(|&yy| at(band_x as usize, (r.y + yy) as usize) == SELECT_BG)
+            .collect();
+        assert_eq!(
+            band.len(),
+            (cell + 2 * sel_pad) as usize,
+            "полоса выделения слишком высокая"
+        );
+        assert_eq!(band.first(), Some(&(first_row_y - r.y - sel_pad)));
         // Внутри панели нарисован текст: заметное число белых пикселей.
         let white = hd.pixels().iter().filter(|&&p| p == WHITE).count();
         assert!(white > 5000, "menu text too sparse: white={white}");

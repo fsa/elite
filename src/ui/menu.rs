@@ -108,12 +108,15 @@ pub(crate) fn draw_pause_menu(
         let dimmed = save_disabled && i == SAVE_ITEM;
         let selected = i == sel && !dimmed;
         if selected {
-            let pad = (l.line / 4).max(1);
+            // Как на экранах рынка и закупки: полоса на ширину содержимого,
+            // выступает на две строки пикселей за глифы, но не заходит на
+            // соседние пункты. Высота берётся от строки текста, не от шага строк.
+            let pad = 2 * l.text as i32;
             frame.fill_rect(
                 r.x + b,
                 ry - pad,
                 r.w.saturating_sub(2 * bw),
-                (l.row_h + 2 * pad) as usize,
+                (l.line + 2 * pad) as usize,
                 SELECT_BG,
             );
         }
