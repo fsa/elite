@@ -4,7 +4,10 @@ use crate::display::Frame;
 use crate::shipdata::{self, Edge, Face, FaceStyle, Ship, Vertex};
 
 use super::faces::face_color;
-use super::{FLAME_COLOR, Rotation, SHIP_COLOR, SHIP_FACE_COLOR, Screen, ShipTint, draw_ship};
+use super::{
+    FLAME_COLOR, Rotation, SHIP_COLOR, SHIP_FACE_COLOR, SHIP_TINT_COUNT, Screen, ShipTint,
+    draw_ship_tinted,
+};
 
 /// Вход в станцию — чёрная поверхность, а не дыра, сквозь которую виден фон.
 ///
@@ -30,7 +33,7 @@ fn station_opening_is_black() {
         by: 0.0,
     };
     let rot = Rotation::axis_angle([0.0, 1.0, 0.0], std::f32::consts::PI);
-    draw_ship(&mut f, ship, &rot, [0.0, 0.0, 512.0], &screen, SHIP_COLOR);
+    draw_ship_tinted(&mut f, ship, &rot, [0.0, 0.0, 512.0], &screen, SHIP_COLOR, None);
 
     assert_eq!(
         f.pixels()[200 * 400 + 200],
@@ -66,7 +69,7 @@ fn ship_debris_is_filled_with_hull_color() {
     ] {
         let mut f = Frame::new(400, 400);
         f.clear(0xFFFF_0000);
-        draw_ship(&mut f, ship, &rot, [0.0, 0.0, 512.0], &screen, SHIP_COLOR);
+        draw_ship_tinted(&mut f, ship, &rot, [0.0, 0.0, 512.0], &screen, SHIP_COLOR, None);
         assert_eq!(
             f.pixels()[200 * 400 + 200],
             SHIP_FACE_COLOR,
@@ -126,7 +129,15 @@ fn nearer_face_color_wins_over_farther_one() {
         bx: 0.0,
         by: 0.0,
     };
-    draw_ship(&mut f, &SHIP, &Rotation::identity(), [0.0, 0.0, 512.0], &screen, SHIP_COLOR);
+    draw_ship_tinted(
+        &mut f,
+        &SHIP,
+        &Rotation::identity(),
+        [0.0, 0.0, 512.0],
+        &screen,
+        SHIP_COLOR,
+        None,
+    );
 
     assert_eq!(
         f.pixels()[100 * 200 + 100],
@@ -182,6 +193,31 @@ fn tint_keeps_original_brightness_and_changes_all_hull_faces() {
         ShipTint::from_seed(0).apply(SHIP_FACE_COLOR),
         ShipTint::from_seed(4).apply(SHIP_FACE_COLOR),
         "разные номера тона должны давать разные оттенки"
+    );
+}
+
+#[test]
+fn tints_use_only_red_green_and_blue_hues() {
+    let channels = |c: u32| [(c >> 16) & 0xFF, (c >> 8) & 0xFF, c & 0xFF];
+    let base = channels(SHIP_FACE_COLOR);
+    let mut raised = [false; 3];
+    for id in 0..SHIP_TINT_COUNT {
+        let tinted = channels(ShipTint::from_seed(id).apply(SHIP_FACE_COLOR));
+        let up: Vec<usize> = (0..3).filter(|&i| tinted[i] > base[i]).collect();
+        assert_eq!(
+            up.len(),
+            1,
+            "тон {id} смешивает несколько каналов: {tinted:?}"
+        );
+        raised[up[0]] = true;
+        assert!(
+            tinted.iter().sum::<u32>() <= base.iter().sum::<u32>(),
+            "тон {id} делает корпус ярче"
+        );
+    }
+    assert!(
+        raised.iter().all(|&seen| seen),
+        "палитра должна содержать красный, зелёный и синий: {raised:?}"
     );
 }
 
