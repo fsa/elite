@@ -19,6 +19,8 @@
 
 use crate::display::Frame;
 use crate::shipdata::{FaceStyle, Ship};
+use std::sync::OnceLock;
+use std::time::Instant;
 
 mod faces;
 mod occlusion;
@@ -43,6 +45,14 @@ pub const SHIP_FACE_COLOR: u32 = 0xFF20_2832;
 /// Пока это сплошная заливка: стиль задаёт место для будущей анимации
 /// двигателей, не меняя формат геометрии.
 pub const FLAME_COLOR: u32 = 0xFFF0_7020;
+
+/// Цвет сияния двигателя.
+const ENGINE_GLOW_BASE: (f32, f32, f32) = (0.20, 0.80, 1.0);
+
+fn engine_glow_phase() -> f32 {
+    static START: OnceLock<Instant> = OnceLock::new();
+    START.get_or_init(Instant::now).elapsed().as_secs_f32() * 4.0
+}
 
 /// Радиус, в который должна вписываться модель на заставке (в «пикселях ZX»).
 ///
@@ -253,8 +263,9 @@ pub fn draw_ship(
     }
     let vis = face_visibility(ship, rot, pos);
     let shapes = face_shapes(ship, &scr, &vis);
+    let glow_phase = engine_glow_phase();
     // Сначала непрозрачные грани, затем рёбра поверх них.
-    fill_faces(frame, &shapes, &scr);
+    fill_faces(frame, &shapes, &scr, glow_phase);
     let occl = occluders(&shapes);
     for e in ship.edges {
         let (a, b) = (e.v[0] as usize, e.v[1] as usize);

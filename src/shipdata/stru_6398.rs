@@ -4,7 +4,7 @@
 //! канонического названия; подпись `Kladov Interceptor` для витрины задана
 //! локально, в ROM имени нет.
 
-use super::{Edge, Face, Ship, Stats, Vertex};
+use super::{Edge, Face, FaceStyle, Ship, Stats, Vertex};
 
 pub(super) static SHIP_STRU_6398: Ship = Ship {
     name: "stru_6398",
@@ -74,12 +74,22 @@ pub(super) static SHIP_STRU_6398: Ship = Ship {
         Edge { lod: 0xd, v: [27, 26], faces: 0x88 },
         Edge { lod: 0xe, v: [26, 25], faces: 0x88 },
         Edge { lod: 0xe, v: [28, 27], faces: 0x88 },
-        Edge { lod: 0xe, v: [21, 19], faces: 0x66 },
-        Edge { lod: 0xe, v: [23, 19], faces: 0x66 },
-        Edge { lod: 0xe, v: [22, 20], faces: 0x66 },
-        Edge { lod: 0xe, v: [24, 20], faces: 0x66 },
-        Edge { lod: 0xd, v: [24, 22], faces: 0x66 },
-        Edge { lod: 0xd, v: [23, 21], faces: 0x66 },
+        // Модификация модели: задние треугольники двигателей выделены в
+        // отдельные грани со стилем EngineGlow (см. faces/face_styles ниже).
+        Edge { lod: 0xe, v: [21, 19], faces: 0xf9 },
+        Edge { lod: 0xe, v: [23, 19], faces: 0xf9 },
+        Edge { lod: 0xe, v: [22, 20], faces: 0xfa },
+        Edge { lod: 0xe, v: [24, 20], faces: 0xfa },
+        Edge { lod: 0xd, v: [24, 22], faces: 0xfa },
+        Edge { lod: 0xd, v: [23, 21], faces: 0xf9 },
+        // Модификация модели: закрывающие рёбра для узких боковых граней,
+        // которые в ROM заданы открытым контуром и не заливаются.
+        Edge { lod: 0x1f, v: [1, 3], faces: 0xf0 },
+        Edge { lod: 0x1f, v: [2, 4], faces: 0xf1 },
+        Edge { lod: 0x1f, v: [5, 7], faces: 0xf2 },
+        Edge { lod: 0x1f, v: [6, 8], faces: 0xf3 },
+        Edge { lod: 0x1f, v: [5, 7], faces: 0xf4 },
+        Edge { lod: 0x1f, v: [6, 8], faces: 0xf5 },
     ],
     faces: &[
         Face { nx: 24, ny: 0, nz: 18, flags: 0x1f },
@@ -91,6 +101,13 @@ pub(super) static SHIP_STRU_6398: Ship = Ship {
         Face { nx: 0, ny: 0, nz: -40, flags: 0x3f },
         Face { nx: 0, ny: 10, nz: 1, flags: 0x1f },
         Face { nx: 0, ny: -10, nz: 1, flags: 0x5e },
+        // Модификация модели: недостающие боковые грани (открытый контур в ROM).
+        Face { nx: 24, ny: 0, nz: 18, flags: 0x1f },
+        Face { nx: -24, ny: 0, nz: 18, flags: 0x9e },
+        Face { nx: 24, ny: 0, nz: 12, flags: 0x1f },
+        Face { nx: -24, ny: 0, nz: 12, flags: 0x9e },
+        Face { nx: 10, ny: 0, nz: 10, flags: 0x1f },
+        Face { nx: -10, ny: 0, nz: 10, flags: 0x9e },
     ],
-    face_styles: &[],
+    face_styles: &[(9, FaceStyle::EngineGlow), (10, FaceStyle::EngineGlow)],
 };

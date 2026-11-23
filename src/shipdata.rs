@@ -94,6 +94,8 @@ pub enum FaceStyle {
     /// динамический эффект. Модели пока не используют этот стиль.
     #[allow(dead_code)]
     Flame,
+    /// Сияние двигателя: сине-голубой цвет с пульсацией яркости.
+    EngineGlow,
 }
 
 impl Default for FaceStyle {

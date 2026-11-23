@@ -45,6 +45,14 @@ fn prune_spurs(edges: &mut Vec<(usize, usize)>) {
     }
 }
 
+fn engine_glow_color(phase: f32) -> u32 {
+    // Пульсация яркости: мягкое мерцание, не «мигание».
+    let pulse = 0.72 + 0.28 * phase.sin();
+    let (r, g, b) = super::ENGINE_GLOW_BASE;
+    let ch = |v: f32| ((v * pulse).clamp(0.0, 1.0) * 255.0) as u32;
+    0xFF00_0000 | (ch(r) << 16) | (ch(g) << 8) | ch(b)
+}
+
 /// Убрать внутренние диагонали, разбивающие грань на подтреугольники.
 ///
 /// Некоторые грани (например, задние грани Python) содержат общее ребро
@@ -160,7 +168,13 @@ pub(super) fn face_shapes(ship: &Ship, scr: &[(f32, f32, f32)], vis: &[bool]) ->
 /// и для нескольких петель (вырезы двигателей), и для невыпуклых граней.
 /// Грани идут от дальней к ближней: у выделенных поверхностей свой цвет, и
 /// они должны перекрывать корпус, оказавшийся позади них на экране.
-pub(super) fn fill_faces(frame: &mut Frame, shapes: &[FaceShape], scr: &[(f32, f32, f32)]) {
+/// `glow_phase` — фаза [0, 2π) для пульсации [`FaceStyle::EngineGlow`].
+pub(super) fn fill_faces(
+    frame: &mut Frame,
+    shapes: &[FaceShape],
+    scr: &[(f32, f32, f32)],
+    glow_phase: f32,
+) {
     let w = frame.width as i32;
     let h = frame.height as i32;
     if w == 0 || h == 0 {
@@ -173,6 +187,7 @@ pub(super) fn fill_faces(frame: &mut Frame, shapes: &[FaceShape], scr: &[(f32, f
             FaceStyle::Hull => SHIP_FACE_COLOR,
             FaceStyle::Color(color) => color,
             FaceStyle::Flame => FLAME_COLOR,
+            FaceStyle::EngineGlow => engine_glow_color(glow_phase),
         };
         let y_lo = ((shape.y0 - 0.5).ceil() as i32).max(0);
         let y_hi = ((shape.y1 - 0.5).ceil() as i32 - 1).min(h - 1);
