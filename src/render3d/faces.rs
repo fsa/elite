@@ -36,10 +36,47 @@ fn prune_spurs(edges: &mut Vec<(usize, usize)>) {
             *deg.entry(b).or_insert(0) += 1;
         }
         let before = edges.len();
-        edges.retain(|&(a, b)| deg.get(&a).copied().unwrap_or(0) >= 2 && deg.get(&b).copied().unwrap_or(0) >= 2);
+        edges.retain(|&(a, b)| {
+            deg.get(&a).copied().unwrap_or(0) >= 2 && deg.get(&b).copied().unwrap_or(0) >= 2
+        });
         if edges.len() == before {
             break;
         }
+    }
+}
+
+/// Убрать внутренние диагонали, разбивающие грань на подтреугольники.
+///
+/// Некоторые грани (например, задние грани Python) содержат общее ребро
+/// между двумя треугольниками одной грани. Для заливки это внутреннее
+/// ребро: оно создаёт вершины степени 3 и заставляет scanline по правилу
+/// «чёт-нечёт» выключать заливку на диагонали. Удаляем рёбра, оба конца
+/// которых имеют степень > 2; после этого возможные усики дочищает
+/// `prune_spurs`. Применяем результат только если он стал набором
+/// замкнутых контуров, иначе оставляем исходный контур.
+fn remove_internal_edges(edges: &mut Vec<(usize, usize)>) {
+    let original = edges.clone();
+    loop {
+        let mut deg: std::collections::HashMap<usize, usize> = std::collections::HashMap::new();
+        for &(a, b) in edges.iter() {
+            *deg.entry(a).or_insert(0) += 1;
+            *deg.entry(b).or_insert(0) += 1;
+        }
+        let before = edges.len();
+        edges.retain(|&(a, b)| {
+            !(deg.get(&a).copied().unwrap_or(0) > 2 && deg.get(&b).copied().unwrap_or(0) > 2)
+        });
+        if edges.len() == before {
+            break;
+        }
+        prune_spurs(edges);
+    }
+    let clean = edges.iter().all(|&(a, b)| {
+        let deg = |v: usize| edges.iter().filter(|&&(x, y)| x == v || y == v).count();
+        deg(a) == 2 && deg(b) == 2
+    });
+    if !clean {
+        *edges = original;
     }
 }
 
@@ -74,6 +111,7 @@ pub(super) fn face_shapes(ship: &Ship, scr: &[(f32, f32, f32)], vis: &[bool]) ->
         }
         let mut edges = face_edges[fi].clone();
         prune_spurs(&mut edges);
+        remove_internal_edges(&mut edges);
         if edges.len() < 3 {
             continue;
         }
