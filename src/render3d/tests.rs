@@ -78,6 +78,46 @@ fn ship_debris_is_filled_with_hull_color() {
     }
 }
 
+/// Оперение ракеты — отдельные грани, а не прозрачные рёбра чужих граней.
+/// Два противоположных пера лежат в одной плоскости, поэтому проверяем
+/// заливку с обеих сторон этой плоскости.
+#[test]
+fn missile_fins_are_filled() {
+    let ship = shipdata::find("d_Missile").expect("модель ракеты не найдена");
+    let screen = Screen {
+        cx: 200.0,
+        cy: 200.0,
+        k: 1000.0,
+        bx: 0.0,
+        by: 0.0,
+    };
+    let render = |angle: f32| {
+        let rot = Rotation::axis_angle([0.0, 1.0, 0.0], angle);
+        let mut f = Frame::new(400, 400);
+        f.clear(0xFFFF_0000);
+        draw_ship_tinted(&mut f, ship, &rot, [0.0, 0.0, 512.0], &screen, SHIP_COLOR, None);
+        f
+    };
+
+    // Маленькие треугольники за задним срезом корпуса: без нормалей оперения
+    // там оставался бы фон.
+    let front = render(std::f32::consts::FRAC_PI_4);
+    for &(x, y) in &[(110, 179), (110, 220)] {
+        assert_eq!(
+            front.pixels()[y * 400 + x],
+            SHIP_FACE_COLOR,
+            "перо ({x},{y}) не залито"
+        );
+    }
+
+    let back = render(-std::f32::consts::FRAC_PI_4);
+    let fin_pixels = (0..180)
+        .flat_map(|y| (270..400).map(move |x| (x, y)))
+        .filter(|&(x, y)| back.pixels()[y * 400 + x] == SHIP_FACE_COLOR)
+        .count();
+    assert!(fin_pixels > 0, "перо не залито с другой стороны плоскости");
+}
+
 /// Ближняя грань со своим цветом перекрывает дальную, даже если в списке
 /// граней она идёт первой.
 #[test]
