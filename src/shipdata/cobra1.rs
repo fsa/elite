@@ -2,7 +2,7 @@
 //!
 //! Модель из таблицы `AdrDataShips` версии Кладова.
 
-use super::{Edge, Face, Ship, Stats, Vertex};
+use super::{Edge, Face, FaceStyle, Ship, Stats, Vertex};
 
 pub(super) static SHIP_D_COBRA1: Ship = Ship {
     name: "d_Cobra1",
@@ -74,14 +74,14 @@ pub(super) static SHIP_D_COBRA1: Ship = Ship {
         Edge { lod: 0x7, v: [24, 23], faces: 0x99 },
         Edge { lod: 0x7, v: [26, 25], faces: 0x99 },
         Edge { lod: 0x7, v: [27, 25], faces: 0x99 },
-        Edge { lod: 0x15, v: [13, 12], faces: 0x99 },
-        Edge { lod: 0x15, v: [15, 14], faces: 0x99 },
-        Edge { lod: 0x15, v: [17, 16], faces: 0x99 },
-        Edge { lod: 0x15, v: [19, 18], faces: 0x99 },
-        Edge { lod: 0x11, v: [14, 17], faces: 0x99 },
-        Edge { lod: 0x13, v: [15, 16], faces: 0x99 },
-        Edge { lod: 0x13, v: [13, 18], faces: 0x99 },
-        Edge { lod: 0x13, v: [12, 19], faces: 0x99 },
+        Edge { lod: 0x15, v: [13, 12], faces: 0xdd }, // модификация: двигатель, грань 13
+        Edge { lod: 0x15, v: [15, 14], faces: 0xee }, // модификация: двигатель, грань 14
+        Edge { lod: 0x15, v: [17, 16], faces: 0xee },
+        Edge { lod: 0x15, v: [19, 18], faces: 0xdd },
+        Edge { lod: 0x11, v: [14, 17], faces: 0xee },
+        Edge { lod: 0x13, v: [15, 16], faces: 0xee },
+        Edge { lod: 0x13, v: [13, 18], faces: 0xdd },
+        Edge { lod: 0x13, v: [12, 19], faces: 0xdd },
         Edge { lod: 0x9, v: [23, 22], faces: 0x99 },
         Edge { lod: 0x9, v: [27, 26], faces: 0x99 },
     ],
@@ -99,6 +99,9 @@ pub(super) static SHIP_D_COBRA1: Ship = Ship {
         Face { nx: -7, ny: -42, nz: 9, flags: 0xdf },
         Face { nx: 0, ny: -30, nz: 6, flags: 0x5f },
         Face { nx: 7, ny: -42, nz: 9, flags: 0x5f },
+        // Модификация модели: параллелограммы двигателей в основании.
+        Face { nx: 0, ny: 0, nz: -80, flags: 0x3f },
+        Face { nx: 0, ny: 0, nz: -80, flags: 0x3f },
     ],
-    face_styles: &[],
+    face_styles: &[(13, FaceStyle::EngineGlow), (14, FaceStyle::EngineGlow)],
 };
