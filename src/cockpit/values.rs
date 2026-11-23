@@ -287,7 +287,7 @@ pub struct CockpitValues {
     pub compass: Compass,
     /// Зелёный круг планеты альтернативного компаса.
     pub compass_planet: CompassCircle,
-    /// Серый круг станции альтернативного компаса.
+    /// Синеватый круг станции альтернативного компаса.
     pub compass_station: CompassCircle,
     /// Белый круг солнца альтернативного компаса.
     pub compass_sun: CompassCircle,

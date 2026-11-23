@@ -42,7 +42,7 @@ const COMPASS_GLYPHS: [[u8; 4]; 6] = [
 pub enum CompassView {
     /// Один указатель на планету или станцию, как в обычном полёте.
     Pointer,
-    /// Цветные круги тел: планета, станция и солнце.
+    /// Дополнительный режим: станция, если она есть, иначе планета и солнце.
     Bodies,
 }
 
@@ -81,10 +81,11 @@ pub(super) fn draw(
         f.circle(cx, cy, (radius - k).max(0), style.line);
     }
     if view == CompassView::Bodies {
-        // Станцию рисуем первой: при совпадении круг планеты или солнца
-        // должен оставаться сверху.
-        draw_circle(f, cx, cy, unit, COMPASS_STATION, &values.compass_station);
-        if values.compass_bodies_overlap() && !values.compass_overlap_phase {
+        // При наличии станции дополнительный режим показывает только её: планета
+        // и солнце в этом режиме больше не нужны и только засоряют компас.
+        if values.compass_station.visible {
+            draw_circle(f, cx, cy, unit, COMPASS_STATION, &values.compass_station);
+        } else if values.compass_bodies_overlap() && !values.compass_overlap_phase {
             // Наложение: меняем порядок, чтобы в общей области попеременно
             // был виден то зелёный круг, то белый. Это заменяет старый хак с
             // переключением цели `PrintCompass`: тела больше не пропадают.

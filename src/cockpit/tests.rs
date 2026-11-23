@@ -904,18 +904,19 @@ fn compass_draws_colored_bodies_without_blinking() {
     let station_mode = draw(CompassView::Pointer, true);
     assert_eq!(px(&station_mode, pointer_px.0, pointer_px.1), FRAME_COLOR);
 
-    // Альтернативный режим показывает все три круга сразу.
+    // Дополнительный режим: при наличии станции показываем только её,
+    // планету и солнце скрываем.
     let bodies = draw(CompassView::Bodies, false);
     assert_eq!(px(&bodies, pointer_px.0, pointer_px.1), BACKGROUND);
-    assert_eq!(px(&bodies, planet_px.0, planet_px.1), COMPASS_PLANET);
+    assert_eq!(px(&bodies, planet_px.0, planet_px.1), BACKGROUND);
     assert_eq!(px(&bodies, station_px.0, station_px.1), BACKGROUND);
     assert_eq!(px(&bodies, station_rim.0, station_rim.1), COMPASS_STATION);
-    assert_eq!(px(&bodies, sun_px.0, sun_px.1), COMPASS_SUN);
+    assert_eq!(px(&bodies, sun_px.0, sun_px.1), BACKGROUND);
 
-    // Если солнце выключено, зелёная планета и серый станция остаются.
+    // Без станции дополнительный режим показывает планету и солнце.
     let mut v = values(MISSILE_SLOTS as u8);
     v.compass_planet = circle(-4, 0, false);
-    v.compass_station = circle(0, -4, true);
+    v.compass_sun = circle(4, 0, false);
     let mut f = Frame::new(1280, 960);
     Cockpit::new().draw_with_geom_views(
         &mut f,
@@ -926,9 +927,9 @@ fn compass_draws_colored_bodies_without_blinking() {
         RadarView::Classic,
         CompassView::Bodies,
     );
-    assert_eq!(px(&f, sun_px.0, sun_px.1), BACKGROUND);
+    assert_eq!(px(&f, sun_px.0, sun_px.1), COMPASS_SUN);
     assert_eq!(px(&f, planet_px.0, planet_px.1), COMPASS_PLANET);
-    assert_eq!(px(&f, station_rim.0, station_rim.1), COMPASS_STATION);
+    assert_eq!(px(&f, station_rim.0, station_rim.1), BACKGROUND);
 }
 
 /// При наложении солнца и планеты меняется только их порядок: в общей
