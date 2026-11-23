@@ -4804,6 +4804,8 @@ PrnNameViewScrInBuf:			; CODE XREF: PrnTxtOnViewScr+9j
 
 
 
+; Обработка боевых клавиш: индикаторы опасности/ECM/стыковки, запуск ракеты,
+; аварийной капсулы и энергобомбы. Работает только на экране полёта (WhatOnScreen < 4).
 ; === Process_MissBombEPod === CODE XREF: RAM:750Cp
 Process_MissBombEPod:			; CODE XREF: RAM:750Cp
 		ld	a, (WhatOnScreen)
@@ -8121,6 +8123,9 @@ loc_AA27:				; DATA XREF: TestVergesVisible+14w
 
 
 ; === UpdateAllIndicators === CODE XREF: RAM:7505p
+; Синхронизация экранных индикаторов со значениями состояния: сравнивает
+; текущие уровни (щиты и т.п.) с ранее показанными и перерисовывает
+; только изменившиеся шкалы.
 UpdateAllIndicators:			; CODE XREF: RAM:7505p
 					; LaunchDocking+D0p
 		ld	de, word_8524
@@ -28215,6 +28220,7 @@ loc_ED56:				; DATA XREF: sub_FB03+3o
 
 
 
+; Завершение кадра: наложить взрывы, вывести буфер на экран и отрисовать радар.
 ; === sub_ED60 === CODE XREF: RAM:loc_7502p
 sub_ED60:				; CODE XREF: RAM:loc_7502p
 
@@ -30741,6 +30747,8 @@ sub_F8D7:				; CODE XREF: PrnExplodeObj+47p
 
 
 
+; Вызывается из sub_9D40: сохраняет/восстанавливает ближайшую область
+; экрана в 40F0h..4120h и запускает AI (MoveAllObjAI) после обработки объекта.
 ; === sub_F8E4 === CODE XREF: sub_9D40+123j
 sub_F8E4:				; CODE XREF: sub_9D40+123j
 		jp	nz, loc_9D38

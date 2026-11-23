@@ -211,6 +211,9 @@ PrintStars:				; CODE XREF: sub_728D+264p RAM:753Ep ...
 
 
 
+; Обновление станции (objCoriolis) в звёздной системе. В межпланетном
+; пространстве не вызывается. После пересчёта координат проверяется,
+; не вышла ли станция за пределы видимости, и сбрасывается флаг J-двигателя.
 ; === CalcCrdCoriolis2 === CODE XREF: sub_728D+226p
 CalcCrdCoriolis2:			; CODE XREF: sub_728D+226p
 
@@ -3406,6 +3409,10 @@ PrnCrd_CRLF:				; CODE XREF: RAM:6F0Ej
 
 
 ; === ReCalcCrdObj === CODE XREF: sub_9D40:loc_9E29p
+; Пересчёт состояния одного объекта в системе координат игрока:
+; сначала перенос/поворот координат (CalcNewCrdObj_Pl), затем проверка
+; дальности (слишком далёкие объекты удаляются), после чего обновляются
+; собственные углы и скорость вращения/полёта (DemoRotateObj).
 ReCalcCrdObj:				; CODE XREF: sub_9D40:loc_9E29p
 		call	CalcNewCrdObj_Pl
 		bit	2, (ix+26h)

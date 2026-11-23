@@ -609,6 +609,9 @@ loc_9F11:				; CODE XREF: Sqrt_H_HL+24j
 
 
 ; === MoveAllObjects === CODE XREF: j_MoveAllObjectsp
+; Один проход конвейера объектов за кадр: подготовка режима печати, счётчик
+; кадров, случайное появление корабля, сброс накопителей урона и обход
+; дополнительных слотов SlotObj. Каждый слот обрабатывается sub_9D40.
 MoveAllObjects:				; CODE XREF: j_MoveAllObjectsp
 		ld	a, (PilotMission3) ; =#06 при стыковке будет захват таргонами (вроде нереальная	ситуация)
 					; =#04 в системе со танцией таргонов во	время войны
@@ -629,6 +632,7 @@ loc_9CD1:				; CODE XREF: MoveAllObjects+12j
 		ld	(loc_B18B), a
 		ld	(loc_B18E), a
 		ld	(loc_B1A6), a
+; FrameCounter — кадровый счётчик: по нулю может появиться случайный корабль.
 		ld	a, (FrameCounter)
 		dec	a
 		ld	(FrameCounter),	a
@@ -650,6 +654,7 @@ loc_9CD1:				; CODE XREF: MoveAllObjects+12j
 loc_9CFD:				; CODE XREF: MoveAllObjects+2Ej
 					; MoveAllObjects+34j ...
 		xor	a
+; Накопители урона и флаги сбрасываются в начале каждого прохода объектов.
 		ld	(DamageEnergyUnit), a
 		ld	(DamageRearShield), a
 		ld	(DamageFrontShield), a
@@ -675,6 +680,7 @@ loc_9D2A:				; CODE XREF: MoveAllObjects+66j
 		add	ix, de
 		djnz	loc_9D1D
 		ld	a, c		; a,c кол-во ракет в пространстве
+; Далее обходятся все дополнительные слоты объектов (по 8 штук).
 		call	SetFirstExtSlot	; установка адреса первого допслота
 		ld	a, d
 		ld	(PrintObject_2+1), a ; a=0
@@ -1673,6 +1679,10 @@ RotateCrdNSCO:				; CODE XREF: DemoRotateObj+5p
 ; =============== S U B	R O U T	I N E =======================================
 
 
+; Перенос точки в систему координат игрока: поворот по HighAngleDU,
+; HighAngleLR и сдвиг на HighDeltaSpeed. При выходе координаты за границу
+; системы sub_5FD5 либо переводит игру в межпланетное пространство (для
+; солнца/планеты), либо просто ограничивает координату.
 CalcNewCrdObj_Pl:			; CODE XREF: j_CalcNewCrdObj_Plj
 					; ReCalcCrdObjp
 		call	sub_7F81

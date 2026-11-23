@@ -71,6 +71,8 @@ ABS_A_sub_B:				; CODE XREF: CalcDistanceToCursor2+4p
 
 
 
+; Счётчик гиперпрыжка врага: по истечении таймера объект исчезает,
+; ракеты, целившиеся в него, снимаются с цели.
 ; === CounterShipHyperJump === CODE XREF: sub_9D40:loc_9D50p
 CounterShipHyperJump:			; CODE XREF: sub_9D40:loc_9D50p
 		ld	a, (FrameCounter)
@@ -123,6 +125,10 @@ loc_7ECE:				; CODE XREF: FindObjInExtSlot+11j
 
 
 ; === GoJump === CODE XREF: j_GoJumpj
+; Запуск подготовки гиперпрыжка по битам 4/5 ControlKey2. Запрещено во время
+; прыжка/стыковки. Межгалактический прыжок требует гипердвигателя,
+; межпланетный — топлива до ближайшей планеты. Успешный запуск ставит
+; JumpDocking и обратный отсчёт JumpCountdown = 15h.
 GoJump:					; CODE XREF: j_GoJumpj
 		ld	hl, ControlKey2
 		ld	a, (hl)
@@ -474,6 +480,10 @@ loc_DCC0:				; CODE XREF: PrnCountdownJump+8Ej
 
 
 
+; Обратный отсчёт прыжка печатается вместе с индикатором тревоги. Каждый кадр
+; уменьшает JumpCountdown; на нуле вызывается HyperspaceBegin, который
+; генерирует новую систему/галактику и выполняет сам переход.
+; (Вызывается из j_PrnTxtOnViewScr -> sub_DAB4.)
 ; === PrnCountdownJump === CODE XREF: sub_DAB4p
 PrnCountdownJump:			; CODE XREF: sub_DAB4p
 

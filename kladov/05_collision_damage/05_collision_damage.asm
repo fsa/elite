@@ -2,6 +2,10 @@
 ; Количество подпрограмм: 7
 
 ; === CollisionWithObj === CODE XREF: sub_9D40:loc_9E41p
+; Проверка столкновения игрока с объектом после обновления координат.
+; Сравнение идёт по трём осям с радиусом из iy+1 (для станции — 0B4h).
+; Варианты: захват груза черпаком, ручная стыковка, повреждение щита
+; (накопление в DamageFrontShield/DamageRearShield) либо гибель игрока.
 CollisionWithObj:			; CODE XREF: sub_9D40:loc_9E41p
 
 ; FUNCTION CHUNK AT D0E4 SIZE 00000003 BYTES
@@ -396,6 +400,10 @@ SetFirstExtSlot:			; CODE XREF: MoveAllObjects+74p
 
 
 ; === Damage2Pilot === CODE XREF: sub_74C6+9p
+; Применение урона, накопленного за кадр в Damage* ячейках: восстановление
+; энергии, вычитание из переднего/заднего щитов, дополнительный расход
+; энергии при включённом маскировочном устройстве. Полное разрушение щитов
+; выставляет PlayerGameOver.
 Damage2Pilot:				; CODE XREF: sub_74C6+9p
 		ld	hl, IndDanger
 		xor	a
