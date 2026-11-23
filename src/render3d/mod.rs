@@ -272,6 +272,11 @@ pub fn draw_ship(
         if a >= scr.len() || b >= scr.len() {
             continue;
         }
+        // lod==0 — конструктивное ребро: участвует в контурах граней для
+        // заливки, но не рисуется как видимая линия.
+        if e.lod & 0x1F == 0 {
+            continue;
+        }
         let f0 = (e.faces & 0x0F) as usize;
         let f1 = (e.faces >> 4) as usize;
         let seen = |f: usize| f == 0xF || vis.get(f).copied().unwrap_or(false);
