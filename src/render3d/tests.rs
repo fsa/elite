@@ -135,7 +135,21 @@ fn nearer_face_color_wins_over_farther_one() {
 }
 
 #[test]
-fn tint_keeps_metal_light_and_changes_all_hull_faces() {
+fn tint_keeps_metal_moderate_and_changes_all_hull_faces() {
+    let channels = [
+        (SHIP_FACE_COLOR >> 16) & 0xFF,
+        (SHIP_FACE_COLOR >> 8) & 0xFF,
+        SHIP_FACE_COLOR & 0xFF,
+    ];
+    assert!(
+        channels.iter().all(|&c| c <= 160),
+        "базовый корпус слишком яркий: {channels:?}"
+    );
+    assert!(
+        channels.iter().all(|&c| c >= 100),
+        "базовый корпус слишком тёмный: {channels:?}"
+    );
+
     let tint = ShipTint::from_seed(5);
     let hull = tint.apply(SHIP_FACE_COLOR);
     assert_eq!(hull >> 24, 0xFF, "альфа не должна меняться");

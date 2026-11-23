@@ -15,7 +15,7 @@ use std::sync::OnceLock;
 use crate::render3d::Rotation;
 use crate::shipdata::{self, Ship};
 
-use super::Splash;
+use super::{Splash, next_tint};
 
 /// Цикл кораблей на заставке (имена моделей в [`shipdata::SHIPS`]).
 pub(super) const INTRO_CYCLE: [&str; 8] = [
@@ -64,6 +64,7 @@ impl Splash {
     /// В режиме отладки добавляются остальные уникальные модели из
     /// [`shipdata::SHIPS`]. Как и в оригинале, смена корабля заново выставляет
     /// СКО из `SKO4Intro`, поэтому поворот начинается с исходного ракурса.
+    /// Новая модель получает следующий псевдослучайный оттенок металла.
     pub fn cycle_ship(&mut self, dir: i32) {
         let step = if dir < 0 { -1 } else { 1 };
         if self.cycle.is_empty() {
@@ -82,6 +83,7 @@ impl Splash {
             .unwrap_or(0);
         self.index = idx;
         self.ship = Some(&shipdata::SHIPS[idx]);
+        self.tint = next_tint(&mut self.tint_seed);
         self.rot = Rotation::intro();
     }
 }

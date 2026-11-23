@@ -20,8 +20,8 @@ fn same_hull(a: &Ship, b: &Ship) -> bool {
     a.vertices == b.vertices && a.edges == b.edges && a.faces == b.faces
 }
 
-/// Заставка: непрозрачный чёрный фон, белый заголовок, корабль со
-/// светлыми гранями и белыми рёбрами, жёлтое приглашение.
+/// Заставка: непрозрачный чёрный фон, белый заголовок, корабль с
+/// металлическими гранями и белыми рёбрами, жёлтое приглашение.
 #[test]
 fn splash_draws_title_ship_and_hints() {
     let font = vec![0xFFu8; 0x300]; // шрифт «все биты залиты»
@@ -37,14 +37,14 @@ fn splash_draws_title_ship_and_hints() {
         f.pixels().iter().any(|&p| p == 0xFFD7_D7D7),
         "заголовок не нарисован"
     );
+    let edge = st.tint.apply(SHIP_COLOR);
+    let face = st.tint.apply(crate::render3d::SHIP_FACE_COLOR);
     assert!(
-        f.pixels().iter().any(|&p| p == SHIP_COLOR),
+        f.pixels().iter().any(|&p| p == edge),
         "рёбра корабля не нарисованы"
     );
     assert!(
-        f.pixels()
-            .iter()
-            .any(|&p| p == crate::render3d::SHIP_FACE_COLOR),
+        f.pixels().iter().any(|&p| p == face),
         "грани корабля не залиты"
     );
     assert!(
@@ -172,12 +172,12 @@ fn splash_texts_are_centered_and_inset_from_frame() {
     );
 }
 
-/// Видимые грани корабля залиты непрозрачным светлым металлом, а рёбра
+/// Видимые грани корабля залиты непрозрачным металлом, а рёбра
 /// нарисованы поверх ярко-белым.
 ///
 /// Проверяем область корабля (центр по центру полосы между надписями,
-/// радиус `SHIP_RADIUS_S*s`, `s = 5` при окне 1280x960): светлых пикселей
-/// должно быть много (заливка, а не каркас), а белые рёбра — заметны.
+/// радиус `SHIP_RADIUS_S*s`, `s = 5` при окне 1280x960): пикселей заливки
+/// должно быть много (а не только каркас), а белые рёбра — заметны.
 #[test]
 fn splash_ship_faces_are_filled() {
     let font = vec![0u8; 0x300];
@@ -185,6 +185,8 @@ fn splash_ship_faces_are_filled() {
     let st = Splash::new();
     st.draw(&mut f, &font);
     let (cx, cy, r) = (1280 / 2, 480, INTRO_SHIP_RADIUS * 5);
+    let face_color = st.tint.apply(crate::render3d::SHIP_FACE_COLOR);
+    let edge_color = st.tint.apply(SHIP_COLOR);
     let mut total = 0;
     let mut face = 0;
     let mut edge = 0;
@@ -192,8 +194,8 @@ fn splash_ship_faces_are_filled() {
         for x in cx - r..cx + r {
             total += 1;
             match f.pixels()[y as usize * 1280 + x as usize] {
-                crate::render3d::SHIP_FACE_COLOR => face += 1,
-                SHIP_COLOR => edge += 1,
+                p if p == face_color => face += 1,
+                p if p == edge_color => edge += 1,
                 _ => {}
             }
         }
@@ -218,11 +220,12 @@ fn splash_ship_is_large_and_fits_texts() {
     let s = 5;
     let title_bottom = 12 * s;
     let hint_top = 960 - 12 * s;
+    let edge = st.tint.apply(SHIP_COLOR);
     let mut top = 960;
     let mut bottom = 0;
     for y in 0..960 {
         for x in 0..1280 {
-            if f.pixels()[y * 1280 + x] == SHIP_COLOR {
+            if f.pixels()[y * 1280 + x] == edge {
                 top = top.min(y);
                 bottom = bottom.max(y);
             }
@@ -249,6 +252,30 @@ fn splash_ship_model_exists() {
     assert!(!s.vertices.is_empty(), "у модели нет вершин");
     assert!(!s.edges.is_empty(), "у модели нет рёбер");
     assert!(!s.faces.is_empty(), "у модели нет граней");
+}
+
+/// Каждая следующая модель заставки получает новый тон металла; пока
+/// корабль вращается, его тон не меняется.
+#[test]
+fn splash_tint_is_stable_while_rotating_and_changes_with_ship() {
+    let mut st = Splash::new();
+    let first = st.tint;
+    for _ in 0..12 {
+        st.tick();
+        assert_eq!(st.tint, first, "тон мигнул во время вращения");
+    }
+
+    let mut tints = vec![st.tint];
+    for _ in 0..INTRO_CYCLE.len() {
+        st.cycle_ship(1);
+        tints.push(st.tint);
+    }
+    tints.sort_unstable();
+    tints.dedup();
+    assert!(
+        tints.len() > 1,
+        "разные корабли заставки получили одинаковый тон"
+    );
 }
 
 /// Переключение кораблей идёт по циклу оригинала: восемь боевых
@@ -748,12 +775,12 @@ fn splash_rotation_matrix_stays_orthonormal() {
 /// Меряется так же, как силуэт оригинала в
 /// `dumptitle::dump_intro_silhouette`: ковариация точек силуэта, угол
 /// главной оси (определён с точностью до 180°).
-fn silhouette_axis(frame: &Frame) -> f64 {
+fn silhouette_axis(frame: &Frame, edge: u32) -> f64 {
     let (w, h) = (frame.width, frame.height);
     let (mut n, mut sx, mut sy) = (0.0f64, 0.0f64, 0.0f64);
     for y in 0..h {
         for x in 0..w {
-            if frame.pixels()[y * w + x] == SHIP_COLOR {
+            if frame.pixels()[y * w + x] == edge {
                 n += 1.0;
                 sx += x as f64;
                 sy += y as f64;
@@ -765,7 +792,7 @@ fn silhouette_axis(frame: &Frame) -> f64 {
     let (mut sxx, mut syy, mut sxy) = (0.0f64, 0.0f64, 0.0f64);
     for y in 0..h {
         for x in 0..w {
-            if frame.pixels()[y * w + x] == SHIP_COLOR {
+            if frame.pixels()[y * w + x] == edge {
                 let (dx, dy) = (x as f64 - cx, y as f64 - cy);
                 sxx += dx * dx;
                 syy += dy * dy;
@@ -778,12 +805,12 @@ fn silhouette_axis(frame: &Frame) -> f64 {
 }
 
 /// Пиксельные габариты корабля в кадре (ширина, высота).
-fn ship_bbox(frame: &Frame) -> (i32, i32) {
+fn ship_bbox(frame: &Frame, edge: u32) -> (i32, i32) {
     let (w, h) = (frame.width, frame.height);
     let (mut x0, mut x1, mut y0, mut y1) = (w as i32, -1, h as i32, -1);
     for y in 0..h {
         for x in 0..w {
-            if frame.pixels()[y * w + x] == SHIP_COLOR {
+            if frame.pixels()[y * w + x] == edge {
                 x0 = x0.min(x as i32);
                 x1 = x1.max(x as i32);
                 y0 = y0.min(y as i32);
@@ -809,20 +836,21 @@ fn splash_ship_size_does_not_breathe() {
     let font = vec![0u8; 0x300];
     let mut st = Splash::new();
     let mut f = Frame::new(1280, 960);
+    let edge = st.tint.apply(SHIP_COLOR);
     // Полный оборот (≈415 тиков) с шагом 3 тика.
     let (mut dmin, mut dmax) = (i32::MAX, 0);
     let (mut top, mut bottom) = (960, 0);
     for _ in 0..140 {
         f.fill_rect(0, 0, f.width, f.height, 0xFF00_0000);
         st.draw(&mut f, &font);
-        let (bw, bh) = ship_bbox(&f);
+        let (bw, bh) = ship_bbox(&f, edge);
         let d = bw.max(bh);
         dmin = dmin.min(d);
         dmax = dmax.max(d);
         // Вертикальные габариты — для проверки, что надписи не задеты.
         for y in 0..960usize {
             for x in 0..1280usize {
-                if f.pixels()[y * 1280 + x] == SHIP_COLOR {
+                if f.pixels()[y * 1280 + x] == edge {
                     top = top.min(y as i32);
                     bottom = bottom.max(y as i32);
                 }
@@ -867,7 +895,7 @@ fn splash_silhouette_turns_like_original() {
         }
         f.fill_rect(0, 0, f.width, f.height, 0xFF00_0000);
         st.draw(&mut f, &font);
-        let mut ang = silhouette_axis(&f);
+        let mut ang = silhouette_axis(&f, st.tint.apply(SHIP_COLOR));
         // Угол оси определён с точностью до 180°.
         while ang - expected > 90.0 {
             ang -= 180.0;
@@ -975,7 +1003,8 @@ fn convex_cube_keeps_visible_edges() {
         }
         let mut f = Frame::new(600, 600);
         st.draw_ship(&mut f, ship, 300, 300, 240);
-        let drawn: Vec<bool> = f.pixels().iter().map(|&p| p == SHIP_COLOR).collect();
+        let edge = st.tint.apply(SHIP_COLOR);
+        let drawn: Vec<bool> = f.pixels().iter().map(|&p| p == edge).collect();
         let (mut total, mut lost) = (0, 0);
         for (i, &p) in reference.pixels().iter().enumerate() {
             if p == SHIP_COLOR {
