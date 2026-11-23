@@ -27,6 +27,9 @@
 //! (`loc_71A2`): восемь боевых кораблей (Cobra → Python → ASP →
 //! Fer-de-Lance → Targon → Sidewinder → Krait → Viper), старт — Cobra,
 //! смена корабля сбрасывает ракурс на `SKO4Intro` — как `SetShip4Intro`.
+//! В режиме отладки (`--debug`) цикл расширен до всех моделей из
+//! [`shipdata::SHIPS`]; записи с одинаковой геометрией корпуса показываются
+//! один раз.
 //!
 //! Надписи — как в оригинале по вертикали: заголовок `---- E L I T E ----`
 //! на одну строку ниже верхней рамки и приглашение `Press Space, Commander`
@@ -58,6 +61,9 @@ mod tests;
 pub struct Splash {
     /// Индекс текущей модели в [`shipdata::SHIPS`] (переключается стрелками).
     index: usize,
+    /// Список моделей, между которыми переключают стрелки: цикл оригинала
+    /// или, в режиме отладки, все уникальные корпуса из [`shipdata::SHIPS`].
+    cycle: &'static [&'static str],
     /// Текущая ориентация корабля (в точности `SKO4Intro` при запуске и
     /// после каждой смены корабля — как в оригинале).
     rot: Rotation,
@@ -68,7 +74,20 @@ pub struct Splash {
 }
 
 impl Splash {
+    /// Обычная заставка: цикл из восьми кораблей оригинального интро.
     pub fn new() -> Self {
+        Self::with_debug(false)
+    }
+
+    /// Заставка с циклом по всем моделям из [`shipdata::SHIPS`] в отладочном
+    /// режиме. Повторяющиеся корпуса (обычный/пиратский Cobra и Python, два
+    /// астероида) в список не попадают.
+    pub fn with_debug(debug: bool) -> Self {
+        let cycle = if debug {
+            cycle::debug_cycle()
+        } else {
+            cycle::INTRO_CYCLE.as_slice()
+        };
         let ships = shipdata::SHIPS;
         let idx = ships.iter().position(|s| s.name == "d_Cobra1").unwrap_or(0);
         // Стартовый ракурс — ровно тот, что задан в оригинале таблицей
@@ -76,6 +95,7 @@ impl Splash {
         let rot = Rotation::intro();
         Splash {
             index: idx,
+            cycle,
             rot,
             tick: 0,
             ship: Some(&ships[idx]),

@@ -8,7 +8,7 @@ use crate::render3d::{
 use crate::shipdata::{self, Ship};
 
 use super::Splash;
-use super::cycle::INTRO_CYCLE;
+use super::cycle::{INTRO_CYCLE, debug_cycle};
 use super::motion::{STEP_ANGLE, STEP_AXIS, STEP_FRAMES};
 
 /// Совпадает ли геометрия двух объектов.
@@ -305,6 +305,72 @@ fn splash_cycle_follows_original_order() {
             );
         }
     }
+}
+
+/// В отладочном режиме заставка показывает все модели Кладова, но каждый
+/// корпус один раз: обычный и пиратский варианты Cobra/Python и два
+/// астероида имеют одинаковую геометрию и в витрине не повторяются.
+#[test]
+fn splash_debug_cycle_shows_every_unique_hull() {
+    let names = debug_cycle();
+    let unique: Vec<&str> = shipdata::SHIPS
+        .iter()
+        .enumerate()
+        .filter(|(i, ship)| {
+            !shipdata::SHIPS[..*i]
+                .iter()
+                .any(|prev| same_hull(prev, ship))
+        })
+        .map(|(_, ship)| ship.name)
+        .collect();
+    assert_eq!(
+        names,
+        unique.as_slice(),
+        "не все уникальные модели попали в цикл"
+    );
+    assert!(
+        names.len() > INTRO_CYCLE.len(),
+        "отладочный цикл не расширен"
+    );
+    for (i, &a) in names.iter().enumerate() {
+        assert!(shipdata::find(a).is_some(), "нет модели {a}");
+        for &b in &names[i + 1..] {
+            assert!(
+                !same_hull(shipdata::find(a).unwrap(), shipdata::find(b).unwrap()),
+                "{a} и {b} — один и тот же корпус"
+            );
+        }
+    }
+
+    let mut st = Splash::with_debug(true);
+    assert_eq!(st.ship.expect("нет корабля").name, "d_Cobra1");
+    let start = names.iter().position(|&n| n == "d_Cobra1").unwrap();
+    let expected: Vec<&str> = (0..names.len())
+        .map(|i| names[(start + i) % names.len()])
+        .collect();
+    let mut seen = Vec::new();
+    for _ in 0..names.len() {
+        seen.push(st.ship.expect("нет корабля").name);
+        st.tick();
+        st.cycle_ship(1);
+        let intro = Rotation::intro();
+        for i in 0..3 {
+            for j in 0..3 {
+                assert!(
+                    (st.rot.m[i][j] - intro.m[i][j]).abs() < 1e-6,
+                    "после смены корабля ракурс не сброшен"
+                );
+            }
+        }
+    }
+    assert_eq!(seen, expected, "порядок обхода отладочного цикла неверен");
+    assert_eq!(st.ship.expect("нет корабля").name, "d_Cobra1");
+    st.cycle_ship(-1);
+    assert_eq!(
+        st.ship.expect("нет корабля").name,
+        names[(start + names.len() - 1) % names.len()],
+        "назад с Cobra должен быть предыдущий корпус цикла"
+    );
 }
 
 /// Модель «Cobra» для проверок видимости.

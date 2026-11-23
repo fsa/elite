@@ -170,9 +170,16 @@ struct App<'a> {
     /// окно занимает вид из кабины и нативная приборная панель; эмулятор
     /// продолжает работать и задаёт мир, поэтому ввод идёт в игру.
     flight: flight::Flight,
-    /// Нативная заставка (титульный экран): пока игра на интро, эмуляция не
-    /// идёт, а окно занимает нативный рендер (`splash`).
+    /// Нативная заставка (титульный экран): пока игра на интро, окно занимает
+    /// нативный рендер (`splash`). Кнопка ` может временно показать родное
+    /// интро эмулятора.
     splash: splash::Splash,
+    /// После выхода с заставки по ` показан экран эмулятора. Повторный `
+    /// возвращает нативный титр, не прерывая интро Z80.
+    splash_emulator: bool,
+    /// ` нажата во время нативной анимации перехода: родной ролик должен
+    /// остаться на экране до конца вместо повторного открытия F1.
+    emulator_transition_lock: bool,
     /// Нативный кокпит (приборная панель) — рисуется в нижней части окна
     /// поверх ZX-кадра, растянут на всю ширину (16:10).
     cockpit: cockpit::Cockpit,
@@ -300,7 +307,9 @@ impl<'a> App<'a> {
             market: market::Market::new(),
             pending_market: false,
             flight: flight::Flight::new(),
-            splash: splash::Splash::new(),
+            splash: splash::Splash::with_debug(opts.debug),
+            splash_emulator: false,
+            emulator_transition_lock: false,
             cockpit: cockpit::Cockpit::new(),
             splash_values: cockpit::CockpitValues::for_splash(),
             menu_sel: 0,
@@ -403,7 +412,7 @@ impl<'a> App<'a> {
         let show_sysinfo = self.sysinfo.active && !intro;
         let show_market = self.market.native && !intro;
 
-        let screen = if intro {
+        let screen = if intro && !self.splash_emulator {
             Screen::Intro
         } else if self.hdmap.active {
             Screen::GalacticMap

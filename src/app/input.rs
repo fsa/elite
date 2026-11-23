@@ -683,6 +683,15 @@ impl App<'_> {
         if code == KeyCode::F10 {
             return;
         }
+        // Кнопка ` есть во всех режимах: она снимает нативный слой и отдаёт
+        // кадр эмулятору, не посылая в игру ни одной клавиши. Обрабатываем её
+        // раньше паузы, редактора и меню, иначе они поглотили бы нажатие.
+        // На заставке это переключатель: повторное нажатие возвращает титр.
+        if !repeat && emulator_handoff_key(code) {
+            self.toggle_emulator_handoff();
+            self.release_pressed(code);
+            return;
+        }
         // Пауза Кладова перехватывает все игровые клавиши: Z80 в это время
         // заморожен, поэтому сервисные настройки применяет нативный слой.
         // Системные команды выше (полный экран, частота эмуляции) и Ctrl+Q
@@ -729,9 +738,9 @@ impl App<'_> {
 
         // В режиме анимации (вылет, гиперпереход, стыковка) не работают ни
         // переключения экранов, ни органы управления. Переход сам открывает
-        // передний нативный вид, поэтому F1, Backquote и Esc здесь не нужны.
-        // Системные комбинации (полный экран, скорость эмуляции) обработаны
-        // выше и на игру не влияют.
+        // передний нативный вид; выйти в эмулятор можно только кнопкой `,
+        // обработанной выше. Системные комбинации (полный экран, скорость
+        // эмуляции) тоже обработаны выше и на игру не влияют.
         if !self.machine.intro_seen
             && !self.menu
             && (flight::z80_in_transition(&self.machine.mem) || self.flight.in_animation_mode())
@@ -785,40 +794,6 @@ impl App<'_> {
             if let Some((row, bit)) = matrix_pos(code) {
                 self.matrix[row][bit as usize] = false;
             }
-            return;
-        }
-        // Единственный выход в эмулятор на станции: `Backquote` снимает
-        // заморозку Z80, но не посылает в игру ни одной клавиши. Все остальные
-        // клавиши из `coriolis_keys.md` открывают нативные экраны.
-        if self.station_native
-            && !self.menu
-            && !repeat
-            && emulator_handoff_key(code)
-            && !(self.hdmap.active && self.hdmap.is_searching())
-        {
-            self.handoff_to_emulator();
-            return;
-        }
-        // В полёте `Backquote` включает показ экрана эмулятора вместо
-        // нативного вида кабины (симметрично выходу в эмулятор на станции).
-        if !self.station_native
-            && !self.menu
-            && !repeat
-            && emulator_handoff_key(code)
-            && !self.machine.intro_seen
-            && !flight::z80_is_docked(&self.machine.mem)
-            && !(self.hdmap.active && self.hdmap.is_searching())
-        {
-            self.flight_emulator = true;
-            self.pending_flight = None;
-            self.pending_launch = false;
-            if self.flight.active && !self.flight.in_animation_mode() {
-                self.flight.close();
-            } else if self.flight.active {
-                // В анимации скрываем нативный вид, сохраняя состояние перехода.
-                self.flight.active = false;
-            }
-            self.release_pressed(code);
             return;
         }
         // В режиме эмулятора буквенная клавиша сначала уходит в игру: нативный
@@ -1176,7 +1151,9 @@ impl App<'_> {
         }
         // На заставке своя нативная логика: запускает игру только SPACE,
         // стрелки влево/вправо переключают корабль (как в оригинальном
-        // интро), остальные клавиши (кроме меню) игнорируются.
+        // интро), остальные клавиши (кроме меню и ` из обработчика выше)
+        // игнорируются. SPACE работает и после выхода в эмулятор, чтобы
+        // старт игры всегда шёл через нативные хуки.
         if self.machine.intro_seen {
             if code == KeyCode::Space && !repeat {
                 // SPACE запускает игру обычным родным путём. Ветка старта
@@ -1196,11 +1173,16 @@ impl App<'_> {
                 self.pending_status = true;
             } else if code == KeyCode::ArrowLeft {
                 self.splash.cycle_ship(-1);
+                // Пока виден родной интро-кадр, стрелки не должны уходить в
+                // Z80: они переключают витрину, а не корабль в игре.
+                self.release_pressed(code);
             } else if code == KeyCode::ArrowRight {
                 self.splash.cycle_ship(1);
+                self.release_pressed(code);
             } else if code == KeyCode::Escape {
                 self.menu = true;
                 self.menu_sel = 0;
+                self.release_pressed(code);
             }
             return;
         }

@@ -462,9 +462,14 @@ impl App<'_> {
 
         // Хуки старта одноразовые: как только Z80 вошёл в игру, повторное
         // нажатие `Space` на вернувшейся заставке должно ставить их заново.
+        // Выход в эмулятор с титра тоже одноразовый: новая заставка начинается
+        // с нативного рендера.
         if !self.machine.intro_seen {
             self.start_requested = false;
+            self.splash_emulator = false;
         }
+        // Переход закончился — блокировка родного ролика больше не нужна.
+        self.sync_emulator_transition_lock();
 
         self.mouse_wheel_up = false;
         self.mouse_wheel_down = false;
@@ -594,7 +599,12 @@ impl App<'_> {
                 }
                 Screen::Emulator(_) => {
                     if self.state.menu {
-                        draw_pause_menu(&mut self.machine.hd, ZX_FONT, self.menu_sel, false);
+                        draw_pause_menu(
+                            &mut self.machine.hd,
+                            ZX_FONT,
+                            self.menu_sel,
+                            self.machine.intro_seen,
+                        );
                     }
                 }
             }

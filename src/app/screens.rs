@@ -148,16 +148,69 @@ impl App<'_> {
         self.request_native_station(StationNativePending::Docked);
     }
 
+    /// Снять наложения, которые удерживают Z80 или перехватывают ввод.
+    fn clear_handoff_overlays(&mut self) {
+        self.exit_pause();
+        self.menu = false;
+        self.save_editor_open = false;
+        self.save_editor_editing = false;
+        self.save_editor_input.clear();
+        self.save_editor_name_editing = false;
+        self.save_editor_name_input.clear();
+        self.save_editor_hex_editing = false;
+        self.save_editor_hex_input.clear();
+    }
+
+    /// Кнопка ` — единый выход в эмулятор из всех режимов. На заставке
+    /// нажатие переключает нативный титр и родное интро; повторное нажатие
+    /// возвращает титр, не перезапуская Z80.
+    pub(super) fn toggle_emulator_handoff(&mut self) {
+        if self.machine.intro_seen && self.splash_emulator {
+            self.clear_handoff_overlays();
+            self.splash_emulator = false;
+            self.station_emulator = false;
+            self.flight_emulator = false;
+            self.close_all_native();
+            return;
+        }
+        self.handoff_to_emulator();
+    }
+
     /// Нативный экран передаёт управление эмулятору: скрываем все нативные
     /// экраны и показываем кадр Z80 без дополнительных клавиш.
     pub(super) fn handoff_to_emulator(&mut self) {
+        // Пауза, меню и редактор тоже удерживают Z80: снимаем их до того, как
+        // отдать управление, иначе эмулятор останется замороженным.
+        self.clear_handoff_overlays();
         self.close_all_native();
         self.cancel_pending_station();
         self.station_native = false;
-        self.station_emulator = true;
-        self.menu = false;
+        // Если ` нажата посреди вылета/прыжка/стыковки, родной ролик не должен
+        // открыться снова на следующем кадре. Флаги Z80 читаем до ветвления:
+        // переход мог начаться ещё до смены `IndDanger` на станции.
+        let in_transition = flight::z80_in_transition(&self.machine.mem);
+        if self.machine.intro_seen {
+            // Титр и родное интро — два вида одного состояния заставки.
+            self.splash_emulator = true;
+            self.station_emulator = false;
+            self.flight_emulator = false;
+        } else if flight::z80_is_docked(&self.machine.mem) {
+            // На станции сохраняем прежний смысл флагов: `station_emulator`
+            // включает обработку оригинальных клавиш из режима эмулятора.
+            self.station_emulator = true;
+            self.flight_emulator = false;
+        } else {
+            // В космосе достаточно `flight_emulator`: он подавляет автооткрытие
+            // нативного кокпита и передаёт игре клавиши управления.
+            self.station_emulator = false;
+            self.flight_emulator = true;
+        }
+        if !self.machine.intro_seen {
+            self.emulator_transition_lock = in_transition;
+        }
         // `Backquote` отсутствует в матрице ZX, поэтому в игру не уходит ни
-        // одна клавиша: эмулятор просто снимается с паузы.
+        // одна клавиша: эмулятор просто продолжает с того места, где был
+        // остановлен.
     }
 
     /// Открыть нативную карту в галактическом масштабе (клавиша `F6` или `I`).
@@ -491,6 +544,13 @@ impl App<'_> {
         }
     }
 
+    /// Снять блокировку родного ролика, когда Z80 закончил переход.
+    pub(super) fn sync_emulator_transition_lock(&mut self) {
+        if !flight::z80_in_transition(&self.machine.mem) {
+            self.emulator_transition_lock = false;
+        }
+    }
+
     /// Открыть нативный вид F1 с началом любой анимации перехода.
     ///
     /// Отсчёт гиперпрыжка может идти под любым экраном: до нуля экран остаётся
@@ -499,7 +559,7 @@ impl App<'_> {
     /// Стыковка и вылет не имеют отсчёта, поэтому их анимация включается сразу
     /// по флагу `JumpDocking`, в том числе поверх экрана эмулятора.
     pub(super) fn switch_to_flight_on_transition(&mut self) {
-        if self.menu || self.flight.in_animation_mode() {
+        if self.menu || self.flight.in_animation_mode() || self.emulator_transition_lock {
             return;
         }
         let mem = &self.machine.mem;

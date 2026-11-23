@@ -1573,8 +1573,10 @@ use crate::world::{
         assert_eq!(app.flight.view_dir, flight::ViewDir::Forward);
     }
 
-    /// Во время гиперпрыжка клавиши не работают: вид Front View с нативной
-    /// анимацией открывается сам в момент перехода к тоннелю.
+    /// Во время гиперпрыжка игровые клавиши не работают: вид Front View с
+    /// нативной анимацией открывается сам в момент перехода к тоннелю.
+    /// Кнопка ` действует и здесь — она показывает экран эмулятора вместо
+    /// родного ролика.
     #[test]
     fn jump_transition_opens_front_view_without_keys() {
         let opts = test_options();
@@ -1604,15 +1606,22 @@ use crate::world::{
         app.key_event(KeyCode::F2, true, false);
         assert_eq!(app.flight.view_dir, flight::ViewDir::Forward);
         app.key_event(KeyCode::Backquote, true, false);
-        assert!(app.flight.active, "Backquote скрыл анимацию");
+        assert!(!app.flight.active, "Backquote не показал экран эмулятора");
+        assert!(app.emulator_transition_lock, "ролик может открыться повторно");
+        app.switch_to_flight_on_transition();
+        assert!(!app.flight.active, "ролик открылся после Backquote");
+        app.key_event(KeyCode::F1, true, false);
+        assert!(!app.flight.active, "F1 сработал во время анимации");
         app.key_event(KeyCode::Escape, true, false);
         assert!(!app.menu, "Esc открыл меню во время анимации");
 
         app.machine.mem[flight::Z80_JUMP_DOCKING] = 0;
         app.machine.mem[flight::Z80_FLG_JUMP_DOCKING] = 0;
+        app.sync_emulator_transition_lock();
+        assert!(!app.emulator_transition_lock, "блокировка не снялась");
         app.follow_flight_screen();
-        assert!(app.flight.active, "вид закрылся после прыжка");
-        assert!(!app.flight.in_transition(), "переход не закончился");
+        app.ensure_native_flight_in_space();
+        assert!(!app.flight.active, "экран эмулятора не сохранился после прыжка");
     }
 
     /// Возврат из Z80-экрана (инвентарь по `Enter`): `F1` должен сразу
@@ -2582,6 +2591,73 @@ use crate::world::{
         assert!(!app.station_native, "Backquote не снял нативный режим");
         assert!(app.station_emulator, "Backquote не включил эмулятор");
         assert_eq!(app.pending_key, None, "Backquote отправил клавишу в игру");
+    }
+
+    /// Кнопка ` есть и на заставке: она переключает нативный титр и родное
+    /// интро. Z80 продолжает играть заставку в обоих состояниях, а SPACE по-прежнему
+    /// запускает игру через нативные хуки.
+    #[test]
+    fn backquote_toggles_splash_and_emulator_intro() {
+        let opts = test_options();
+        let mut app = App::new(boot(), &opts);
+        app.machine.intro_seen = true;
+        app.sync_state();
+        assert_eq!(app.state.screen, Screen::Intro);
+
+        app.key_event(KeyCode::Backquote, true, false);
+        assert!(app.splash_emulator, "Backquote не показал интро эмулятора");
+        app.sync_state();
+        assert!(
+            matches!(app.state.screen, Screen::Emulator(_)),
+            "экран эмулятора не стал активным на заставке"
+        );
+
+        // Меню, открытое поверх родного интро, тоже снимается при возврате.
+        app.key_event(KeyCode::Escape, true, false);
+        assert!(app.menu, "подготовка: меню не открылось");
+        app.key_event(KeyCode::Backquote, true, false);
+        assert!(!app.splash_emulator, "повторный Backquote не вернул титр");
+        assert!(!app.menu, "Backquote не закрыл меню на заставке");
+        app.sync_state();
+        assert_eq!(app.state.screen, Screen::Intro);
+    }
+
+    /// ` снимает паузу Кладова, меню Esc и редактор сейва: все они держат Z80
+    /// замороженным, поэтому выход в эмулятор должен закрывать и их.
+    #[test]
+    fn backquote_leaves_pause_menu_and_save_editor() {
+        let opts = test_options();
+        let mut app = App::new(boot(), &opts);
+        app.machine.intro_seen = false;
+        app.machine.mem[flight::Z80_IND_DANGER] = 1;
+        app.machine.mem[flight::Z80_WHAT_ON_SCREEN] = 0;
+        app.sync_state();
+
+        app.enter_pause();
+        assert!(app.pause_active);
+        app.key_event(KeyCode::Backquote, true, false);
+        assert!(!app.pause_active, "Backquote не снял паузу");
+        assert!(app.station_emulator || app.flight_emulator);
+
+        app.menu = true;
+        app.key_event(KeyCode::Backquote, true, false);
+        assert!(!app.menu, "Backquote не закрыл меню");
+
+        app.save_editor_open = true;
+        app.save_editor_editing = true;
+        app.key_event(KeyCode::Backquote, true, false);
+        assert!(!app.save_editor_open, "Backquote не закрыл редактор");
+        assert!(!app.save_editor_editing, "редактор остался в режиме ввода");
+
+        app.docked.show();
+        assert!(app.docked.is_active());
+        app.key_event(KeyCode::Backquote, true, false);
+        assert!(!app.docked.is_active(), "Backquote не закрыл DOCKED");
+
+        app.open_hdmap();
+        assert!(app.hdmap.active, "подготовка: карта не открылась");
+        app.key_event(KeyCode::Backquote, true, false);
+        assert!(!app.hdmap.active, "Backquote не закрыл карту");
     }
 
     /// Открытие нативного экрана из эмулятора сначала посылает оригиналу `L`.
