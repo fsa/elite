@@ -97,8 +97,10 @@ use crate::world::{
         );
         // Заголовок двухцветный: верх белый, низ голубой.
         const LABEL: u32 = 0xFF00_D7D7;
-        let tx = r.x + border + cell;
-        let ty = r.y + border + cell;
+        let pad_x = 2 * cell;
+        let pad_y = cell + cell / 2;
+        let tx = r.x + border + pad_x;
+        let ty = r.y + border + pad_y;
         let tw = "ELITE - PAUSED".len() as i32 * cell;
         let has_color = |color: u32| {
             (ty..ty + cell).any(|yy| {
@@ -107,6 +109,13 @@ use crate::world::{
         };
         assert!(has_color(WHITE), "нет белой половины заголовка");
         assert!(has_color(LABEL), "нет голубой половины заголовка");
+        // Под заголовком — белая линия, отделяющая его от строк таблицы.
+        let sep_y = ty + cell + cell / 2;
+        assert_eq!(
+            at((r.x + border) as usize, sep_y as usize),
+            WHITE,
+            "нет линии под заголовком"
+        );
         // Внутри панели нарисован текст: заметное число белых пикселей.
         let white = hd.pixels().iter().filter(|&&p| p == WHITE).count();
         assert!(white > 5000, "menu text too sparse: white={white}");
