@@ -74,14 +74,14 @@ pub(super) static SHIP_D_COBRA2: Ship = Ship {
         Edge { lod: 0x7, v: [24, 23], faces: 0x99 },
         Edge { lod: 0x7, v: [26, 25], faces: 0x99 },
         Edge { lod: 0x7, v: [27, 25], faces: 0x99 },
-        Edge { lod: 0x15, v: [13, 12], faces: 0xdd }, // модификация: двигатель, грань 13
-        Edge { lod: 0x15, v: [15, 14], faces: 0xee }, // модификация: двигатель, грань 14
-        Edge { lod: 0x15, v: [17, 16], faces: 0xee },
-        Edge { lod: 0x15, v: [19, 18], faces: 0xdd },
-        Edge { lod: 0x11, v: [14, 17], faces: 0xee },
-        Edge { lod: 0x13, v: [15, 16], faces: 0xee },
-        Edge { lod: 0x13, v: [13, 18], faces: 0xdd },
-        Edge { lod: 0x13, v: [12, 19], faces: 0xdd },
+        Edge { lod: 0x15, v: [13, 12], faces: 0xd9 }, // модификация: двигатель, грани 9,13
+        Edge { lod: 0x15, v: [15, 14], faces: 0xe9 }, // модификация: двигатель, грани 9,14
+        Edge { lod: 0x15, v: [17, 16], faces: 0xe9 },
+        Edge { lod: 0x15, v: [19, 18], faces: 0xd9 },
+        Edge { lod: 0x11, v: [14, 17], faces: 0xe9 },
+        Edge { lod: 0x13, v: [15, 16], faces: 0xe9 },
+        Edge { lod: 0x13, v: [13, 18], faces: 0xd9 },
+        Edge { lod: 0x13, v: [12, 19], faces: 0xd9 },
         Edge { lod: 0x9, v: [23, 22], faces: 0x99 },
         Edge { lod: 0x9, v: [27, 26], faces: 0x99 },
     ],
