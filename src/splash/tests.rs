@@ -373,6 +373,107 @@ fn splash_debug_cycle_shows_every_unique_hull() {
     );
 }
 
+/// Кадр заставки с пустым или сплошным шрифтом. Разница таких кадров
+/// показывает, где именно был нарисован текст: корабль и фон одинаковы.
+fn text_frame(st: &Splash, solid_font: bool) -> Vec<u32> {
+    let font = if solid_font {
+        vec![0xFFu8; 0x300]
+    } else {
+        vec![0u8; 0x300]
+    };
+    let mut f = Frame::new(1280, 960);
+    st.draw(&mut f, &font);
+    f.pixels().to_vec()
+}
+
+/// Габарит пикселей, изменённых текстом в строке `y0..y1` кадра 1280x960.
+fn text_bbox(on: &[u32], off: &[u32], y0: i32, y1: i32) -> Option<(i32, i32, i32, i32)> {
+    let (mut x0, mut ty0, mut x1, mut ty1) = (i32::MAX, i32::MAX, i32::MIN, i32::MIN);
+    for y in y0..y1 {
+        for x in 0..1280 {
+            let i = y as usize * 1280 + x as usize;
+            if on[i] != off[i] {
+                x0 = x0.min(x);
+                x1 = x1.max(x);
+                ty0 = ty0.min(y);
+                ty1 = ty1.max(y);
+            }
+        }
+    }
+    (x0 <= x1).then_some((x0, ty0, x1, ty1))
+}
+
+/// Масштаб сетки ZX и строка названия корабля для кадра 1280x960:
+/// `s = 5`, приглашение начинается на `960 - 16*s`, название — строкой выше.
+const TEXT_SCALE: i32 = 5;
+const NAME_Y: i32 = 960 - 16 * TEXT_SCALE - 8 * TEXT_SCALE;
+
+/// Габарит названия корабля в отладочной заставке.
+fn name_bbox(st: &Splash) -> Option<(i32, i32, i32, i32)> {
+    text_bbox(
+        &text_frame(st, true),
+        &text_frame(st, false),
+        NAME_Y,
+        NAME_Y + 8 * TEXT_SCALE,
+    )
+}
+
+/// Проверить, что подпись нарисована по центру в своей строке.
+fn assert_name_at(st: &Splash, expected: &str) {
+    let bbox = name_bbox(st).expect("название корабля не нарисовано");
+    let x0 = 1280 / 2 - expected.len() as i32 * 4 * TEXT_SCALE;
+    assert_eq!(
+        bbox,
+        (
+            x0,
+            NAME_Y,
+            x0 + expected.len() as i32 * 8 * TEXT_SCALE - 1,
+            NAME_Y + 8 * TEXT_SCALE - 1,
+        ),
+        "название {expected:?} нарисовано не в своей строке"
+    );
+}
+
+/// В отладочном режиме название корабля стоит на строку выше нижней
+/// надписи; в обычном заставка по-прежнему содержит только две надписи.
+#[test]
+fn debug_splash_draws_ship_name_above_hint() {
+    let normal = Splash::new();
+    assert!(
+        name_bbox(&normal).is_none(),
+        "обычная заставка не должна показывать название корабля"
+    );
+
+    let debug = Splash::with_debug(true);
+    let name = debug.ship.expect("нет корабля").full_name;
+    assert_name_at(&debug, name);
+}
+
+/// Название меняется вместе с кораблём в отладочном цикле.
+#[test]
+fn debug_splash_name_follows_cycle() {
+    let mut st = Splash::with_debug(true);
+    let first = st.ship.expect("нет корабля").full_name;
+    st.cycle_ship(1);
+    let second = st.ship.expect("нет корабля").full_name;
+    assert_ne!(first, second, "цикл не сменил корабль");
+    assert_name_at(&st, second);
+}
+
+/// Все модели витрины должны приходить с готовой подписью: служебное
+/// внутреннее имя для неё не используется.
+#[test]
+fn every_ship_has_display_name() {
+    for ship in shipdata::SHIPS {
+        assert!(!ship.full_name.is_empty(), "нет подписи у {}", ship.name);
+        assert!(
+            ship.full_name.is_ascii(),
+            "подпись {} должна использовать шрифт ZX",
+            ship.full_name
+        );
+    }
+}
+
 /// Модель «Cobra» для проверок видимости.
 fn cobra() -> &'static Ship {
     shipdata::SHIPS
@@ -1048,6 +1149,7 @@ fn cube_ship() -> &'static Ship {
     ];
     static SHIP: Ship = Ship {
         name: "cube",
+        full_name: "Cube",
         addr: 0,
         category: 0,
         vertices: &VERTS,

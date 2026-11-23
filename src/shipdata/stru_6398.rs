@@ -1,11 +1,14 @@
 //! `stru_6398` (адрес 0x6398).
 //!
-//! Модель из таблицы `AdrDataShips` версии Кладова.
+//! Модель из таблицы `AdrDataShips` версии Кладова. Отдельная модель без
+//! канонического названия; подпись `Kladov Interceptor` для витрины задана
+//! локально, в ROM имени нет.
 
 use super::{Edge, Face, Ship, Stats, Vertex};
 
 pub(super) static SHIP_STRU_6398: Ship = Ship {
     name: "stru_6398",
+    full_name: "Kladov Interceptor",
     addr: 0x6398,
     category: 2,
     stats: Stats {

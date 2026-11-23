@@ -6,6 +6,7 @@ use super::{Edge, Face, Ship, Stats, Vertex};
 
 pub(super) static SHIP_D_VIPER: Ship = Ship {
     name: "d_Viper",
+    full_name: "Viper",
     addr: 0x6284,
     category: 2,
     stats: Stats {

@@ -10,6 +10,7 @@ use super::{Edge, Face, FaceStyle, Ship, Stats, Vertex};
 
 pub(super) static SHIP_D_CORIOLIS: Ship = Ship {
     name: "d_Coriolis",
+    full_name: "Coriolis Station",
     addr: 0x63c6,
     category: 0,
     stats: Stats {

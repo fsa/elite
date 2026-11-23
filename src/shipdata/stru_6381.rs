@@ -1,11 +1,14 @@
 //! `stru_6381` (адрес 0x6381).
 //!
-//! Модель из таблицы `AdrDataShips` версии Кладова.
+//! Модель из таблицы `AdrDataShips` версии Кладова. В дизассемблере
+//! обозначена как `targon6` — усиленный таргон (Thargoid). Подпись
+//! `Thargoid Heavy` для витрины задана локально, в ROM имени нет.
 
 use super::{Edge, Face, Ship, Stats, Vertex};
 
 pub(super) static SHIP_STRU_6381: Ship = Ship {
     name: "stru_6381",
+    full_name: "Thargoid Heavy",
     addr: 0x6381,
     category: 3,
     stats: Stats {

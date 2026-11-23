@@ -1,11 +1,14 @@
 //! `stru_63AF` (адрес 0x63af).
 //!
-//! Модель из таблицы `AdrDataShips` версии Кладова.
+//! Модель из таблицы `AdrDataShips` версии Кладова. Отдельная модель без
+//! канонического названия; подпись `Kladov Scout` для витрины задана
+//! локально, в ROM имени нет.
 
 use super::{Edge, Face, Ship, Stats, Vertex};
 
 pub(super) static SHIP_STRU_63AF: Ship = Ship {
     name: "stru_63AF",
+    full_name: "Kladov Scout",
     addr: 0x63af,
     category: 4,
     stats: Stats {

@@ -105,6 +105,7 @@ fn nearer_face_color_wins_over_farther_one() {
     ];
     static SHIP: Ship = Ship {
         name: "two faces",
+        full_name: "Two Faces",
         addr: 0,
         category: 0,
         stats: unsafe { std::mem::zeroed() },

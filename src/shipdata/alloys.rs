@@ -11,6 +11,7 @@ use super::{Edge, Face, Ship, Stats, Vertex};
 
 pub(super) static SHIP_D_ALLOYS: Ship = Ship {
     name: "d_Alloys",
+    full_name: "Alloy Plate",
     addr: 0x6211,
     category: 1,
     stats: Stats {
