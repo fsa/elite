@@ -79,11 +79,34 @@ use crate::world::{
             WHITE,
             "panel border not drawn"
         );
+        // Рамка — толщиной с внешнюю рамку экрана, а не с масштаб шрифта.
+        let border = cockpit::LINE.max(1);
+        let text = (960f32 / 300.0).floor().max(1.0) as usize;
+        let cell = 8 * text as i32;
+        let y = r.y + border + cell / 2;
+        assert_eq!(at((r.x + border - 1) as usize, y as usize), WHITE);
+        assert_eq!(
+            at((r.x + border) as usize, y as usize),
+            BG,
+            "рамка слишком толстая"
+        );
         assert_eq!(
             at(r.x as usize + 15, r.y as usize + 15),
             BG,
             "panel bg not opaque"
         );
+        // Заголовок двухцветный: верх белый, низ голубой.
+        const LABEL: u32 = 0xFF00_D7D7;
+        let tx = r.x + border + cell;
+        let ty = r.y + border + cell;
+        let tw = "ELITE - PAUSED".len() as i32 * cell;
+        let has_color = |color: u32| {
+            (ty..ty + cell).any(|yy| {
+                (tx..tx + tw).any(|xx| at(xx as usize, yy as usize) == color)
+            })
+        };
+        assert!(has_color(WHITE), "нет белой половины заголовка");
+        assert!(has_color(LABEL), "нет голубой половины заголовка");
         // Внутри панели нарисован текст: заметное число белых пикселей.
         let white = hd.pixels().iter().filter(|&&p| p == WHITE).count();
         assert!(white > 5000, "menu text too sparse: white={white}");

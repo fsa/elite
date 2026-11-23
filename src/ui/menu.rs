@@ -1,18 +1,18 @@
 //! Наложение меню паузы в HD-слой.
 //!
-//! Оформление повторяет другие нативные экраны: чёрный фон, белая рамка,
-//! голубой заголовок и подсветка выбранной строки, как на экране рынка.
-//! На заставке пункт сохранения остаётся на месте, но рисуется серым и не
-//! выделяется: игрового процесса ещё нет, поэтому он недоступен.
+//! Оформление повторяет другие нативные экраны: чёрный фон, тонкая белая
+//! рамка, двухцветный заголовок, голубые номера пунктов и подсветка выбранной
+//! строки, как на экране рынка. На заставке пункт сохранения остаётся на
+//! месте, но рисуется серым и не выделяется: игрового процесса ещё нет,
+//! поэтому он недоступен.
 
 use crate::display;
-use crate::ui::present::SRC_W;
 
 /// Фон — чёрный, как на остальных нативных экранах.
 const BG: u32 = 0xFF00_0000;
-/// Белая рамка и обычный текст.
+/// Белая рамка, подсветка и обычный текст.
 const FRAME: u32 = crate::cockpit::FRAME_COLOR;
-/// Голубой цвет заголовка и номеров пунктов.
+/// Голубой цвет нижней половины заголовка и номеров пунктов.
 const LABEL: u32 = 0xFF00_D7D7;
 /// Непрозрачный серый цвет недоступного пункта.
 const DIM: u32 = 0xFF80_8080;
@@ -33,10 +33,11 @@ pub(crate) struct MenuRect {
     pub(crate) h: usize,
 }
 
-/// Геометрия панели в знакоместах ZX, увеличенная до целого масштаба слоя.
+/// Геометрия панели. Масштаб текста и толщина рамки берутся как на других
+/// нативных страницах: текст зависит от высоты окна, рамка — от кокпита.
 struct Layout {
     rect: MenuRect,
-    scale: usize,
+    text: usize,
     border: i32,
     cell: i32,
     line: i32,
@@ -46,25 +47,23 @@ struct Layout {
 }
 
 fn layout(width: usize, height: usize) -> Layout {
-    let scale = (width / SRC_W).max(1);
-    let s = scale as i32;
-    let cell = 8 * s;
+    let text = (height as f32 / 300.0).floor().max(1.0) as usize;
+    let cell = 8 * text as i32;
     let line = cell;
     let row_h = line + line / 2;
-    // Толщина рамки и отступы согласованы с нативными экранами: рамка общая,
-    // текст отступает от неё на одно знакоместо.
-    let border = crate::cockpit::LINE.max(1) * s;
-    let pad_x = cell;
-    let pad_y = 2 * s;
-    let text_w = TITLE.len() as i32 * cell;
-    let w = (text_w + 2 * (pad_x + border)).max(0) as usize;
-    let h = (2 * border + 2 * pad_y + line + line / 2 + ITEMS.len() as i32 * row_h).max(0) as usize;
+    // Толщина внешней рамки экрана в пикселях, без умножения на масштаб шрифта.
+    let border = crate::cockpit::LINE.max(1);
+    // Отступ содержимого от рамки — не меньше одного знакоместа.
+    let pad = cell.max(border + 1);
+    let title_w = TITLE.len() as i32 * cell;
+    let w = (title_w + 2 * (pad + border)).max(0) as usize;
+    let h = (2 * border + 2 * pad + line + line / 2 + ITEMS.len() as i32 * row_h).max(0) as usize;
     let x = (width as i32 - w as i32) / 2;
     let y = (height as i32 - h as i32) / 2;
-    let top = y + border + pad_y;
+    let top = y + border + pad;
     Layout {
         rect: MenuRect { x, y, w, h },
-        scale,
+        text,
         border,
         cell,
         line,
@@ -100,7 +99,7 @@ pub(crate) fn draw_pause_menu(
     frame.fill_rect(r.x + r.w as i32 - b, r.y, bw, r.h, FRAME);
 
     let tx = r.x + b + l.cell;
-    frame.draw_text(font, tx, l.title_y, TITLE, LABEL, l.scale);
+    draw_two_tone_text(frame, font, tx, l.title_y, TITLE, FRAME, LABEL, l.text);
 
     for (i, text) in ITEMS.iter().enumerate() {
         let ry = l.first_row_y + i as i32 * l.row_h;
@@ -125,7 +124,32 @@ pub(crate) fn draw_pause_menu(
             LABEL
         };
         let label_color = if dimmed { DIM } else { FRAME };
-        frame.draw_text(font, tx, ry, number, number_color, l.scale);
-        frame.draw_text(font, tx + 2 * l.cell, ry, label, label_color, l.scale);
+        frame.draw_text(font, tx, ry, number, number_color, l.text);
+        frame.draw_text(font, tx + 2 * l.cell, ry, label, label_color, l.text);
     }
+}
+
+/// Нарисовать строку двумя цветами: верх глифов белый, низ — голубой, как
+/// в заголовках нативных страниц.
+fn draw_two_tone_text(
+    frame: &mut display::Frame,
+    font: &[u8],
+    x: i32,
+    y: i32,
+    text: &str,
+    top: u32,
+    bottom: u32,
+    scale: usize,
+) {
+    let w = (text.chars().count() as i32 * 8 * scale as i32).max(0) as usize;
+    let h = 8 * scale as i32;
+    let mid = h / 2;
+
+    frame.set_clip(x, y + mid, w, (h - mid).max(0) as usize);
+    frame.draw_text(font, x, y, text, bottom, scale);
+    frame.clear_clip();
+
+    frame.set_clip(x, y, w, mid.max(0) as usize);
+    frame.draw_text(font, x, y, text, top, scale);
+    frame.clear_clip();
 }
