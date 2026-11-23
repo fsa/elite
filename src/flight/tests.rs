@@ -1319,6 +1319,49 @@ fn only_ships_and_debris_get_tint() {
     );
 }
 
+#[test]
+fn cargo_from_destroyed_ship_keeps_its_tint() {
+    let mut f = open();
+    let mut mem = vec![0u8; Z80_MEM_MIN];
+    put_obj(&mut mem, Z80_OBJ_SLOT0, "d_Viper");
+    f.sync_from_z80(&mem);
+    let ship_tint = f
+        .bodies
+        .iter()
+        .find(|b| b.source == BODY_SRC_SLOT0)
+        .and_then(|b| b.tint)
+        .expect("у корабля должен быть оттенок");
+
+    // Контейнер без известного источника остаётся обычным.
+    let mut plain = open();
+    let mut plain_mem = vec![0u8; Z80_MEM_MIN];
+    put_obj(&mut plain_mem, Z80_OBJ_SLOT0, "d_Cargo");
+    plain.sync_from_z80(&plain_mem);
+    assert_eq!(
+        plain
+            .bodies
+            .iter()
+            .find(|b| b.model.is_some_and(|m| m.name == "d_Cargo"))
+            .and_then(|b| b.tint),
+        None,
+        "контейнер без известного источника не должен краситься"
+    );
+
+    // Груз, выпавший из уничтоженного корабля, наследует его цвет.
+    mem[Z80_OBJ_SLOT0 + Z80_SLOT_OENERG] = Z80_OENERG_DESTROYED;
+    f.sync_from_z80(&mem);
+    mem[Z80_OBJ_SLOT0 + Z80_SLOT_OENERG] = 0;
+    put_obj(&mut mem, Z80_OBJ_SLOT0 + Z80_SLOT_SIZE, "d_Cargo");
+    f.sync_from_z80(&mem);
+    let cargo: Vec<_> = f
+        .bodies
+        .iter()
+        .filter(|b| b.model.is_some_and(|m| m.name == "d_Cargo"))
+        .collect();
+    assert_eq!(cargo.len(), 1, "выпавший контейнер не найден");
+    assert_eq!(cargo[0].tint, Some(ship_tint));
+}
+
 /// Загрузить образ Кладова и выйти в космос, как это делает игра.
 fn launch_kladov() -> crate::machine::Spectrum {
     use crate::machine::Spectrum;

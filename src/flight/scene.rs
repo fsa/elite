@@ -51,7 +51,8 @@ pub(super) struct ShipTints {
 #[derive(Clone, Copy)]
 struct TintSlot {
     model: u16,
-    tint: ShipTint,
+    /// `None` у контейнера без известного источника: он остаётся обычным.
+    tint: Option<ShipTint>,
 }
 
 #[derive(Clone, Copy)]
@@ -91,33 +92,42 @@ impl ShipTints {
         }
     }
 
-    /// Запомнить оттенок уничтоженного корабля, чтобы красить его обломки.
+    /// Запомнить оттенок уничтоженного корабля, чтобы красить его обломки
+    /// и выпавший груз.
     fn destroyed(&mut self, source: u8) {
         if let Some(slot) = self.slots[source as usize].take() {
-            self.pending_debris = Some(PendingDebris {
-                tint: slot.tint,
-                frames: DEBRIS_TINT_FRAMES,
-            });
+            if let Some(tint) = slot.tint {
+                self.pending_debris = Some(PendingDebris {
+                    tint,
+                    frames: DEBRIS_TINT_FRAMES,
+                });
+            }
         } else if let Some(pending) = &mut self.pending_debris {
             pending.frames = DEBRIS_TINT_FRAMES;
         }
     }
 
     /// Вернуть оттенок объекта в слоте, назначив новый при необходимости.
-    fn assign(&mut self, source: u8, model: &Ship) -> ShipTint {
+    fn assign(&mut self, source: u8, model: &Ship) -> Option<ShipTint> {
         let idx = source as usize;
         self.seen |= 1 << idx;
+        // У контейнера флаг `tintable` выключен: на витрине он обычный.
+        // В полёте он всё же может получить цвет корабля, из которого выпал.
+        if !model.tintable && model.name != "d_Cargo" {
+            return None;
+        }
         let fresh = self.slots[idx].map_or(true, |prev| prev.model != model.addr);
         if fresh {
-            // Обломки (`ShipSet2Alloys`) сохраняют цвет уничтоженного корабля:
-            // в оригинале это те же куски его корпуса, а не новые объекты.
-            let tint = if model.name == "d_Alloys" {
-                self.pending_debris.map_or_else(
+            // Обломки (`ShipSet2Alloys`) и выпавший груз сохраняют цвет
+            // уничтоженного корабля: это его куски и его груз, а не новые
+            // объекты. Если источник неизвестен, груз остаётся обычным.
+            let tint = match model.name {
+                "d_Alloys" => Some(self.pending_debris.map_or_else(
                     || ShipTint::from_seed(self.rng.next_u32()),
                     |pending| pending.tint,
-                )
-            } else {
-                ShipTint::from_seed(self.rng.next_u32())
+                )),
+                "d_Cargo" => self.pending_debris.map(|pending| pending.tint),
+                _ => Some(ShipTint::from_seed(self.rng.next_u32())),
             };
             self.slots[idx] = Some(TintSlot {
                 model: model.addr,
@@ -165,7 +175,7 @@ pub(super) struct Body {
     pub(super) radius: f32,
     /// Цвет диска (планета или солнце); у кораблей не используется.
     pub(super) color: u32,
-    /// Оттенок корпуса и рёбер только у кораблей и их обломков.
+    /// Оттенок корпуса и рёбер у кораблей, их обломков и выпавшего груза.
     pub(super) tint: Option<ShipTint>,
 }
 
@@ -290,8 +300,9 @@ pub(super) fn slot_pose(mem: &[u8], base: usize) -> Option<([f32; 3], f32)> {
 /// рисуется целым кораблём — вместо него показывается облако частиц.
 /// Ориентация хранится двумя осями: ось Z модели — по `+0x0A/0C/0E`,
 /// ось Y — по `+0x10/12/14` (знаковые байты), ось X достраивается как
-/// `Y × Z`. Оттенок получают только модели с признаком `tintable`;
-/// станция, ракеты и прочие объекты остаются исходных цветов.
+/// `Y × Z`. Оттенок получают модели с признаком `tintable`, а также груз,
+/// выпавший из уничтоженного корабля. Станция, ракеты и объекты с
+/// неизвестным источником остаются исходных цветов.
 fn push_z80_slot(
     bodies: &mut Vec<Body>,
     mem: &[u8],
@@ -310,7 +321,11 @@ fn push_z80_slot(
     let Some((model, pos)) = slot_object(mem, base) else {
         return;
     };
-    let tint = (tintable && model.tintable).then(|| tints.assign(source, model));
+    let tint = if tintable {
+        tints.assign(source, model)
+    } else {
+        None
+    };
     let z_axis = [
         memory::read_signed8(mem[base + 0x0A]),
         memory::read_signed8(mem[base + 0x0C]),
