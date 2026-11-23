@@ -181,7 +181,18 @@ pub(super) fn fill_faces(
         return;
     }
     let mut order: Vec<&FaceShape> = shapes.iter().collect();
-    order.sort_by(|a, b| a.invz.total_cmp(&b.invz));
+    order.sort_by(|a, b| {
+        a.invz.total_cmp(&b.invz).then_with(|| {
+            fn prio(s: FaceStyle) -> u8 {
+                match s {
+                    FaceStyle::Hull => 0,
+                    FaceStyle::Color(_) | FaceStyle::Flame => 1,
+                    FaceStyle::EngineGlow => 2,
+                }
+            }
+            prio(a.style).cmp(&prio(b.style))
+        })
+    });
     for shape in order {
         let color = match shape.style {
             FaceStyle::Hull => SHIP_FACE_COLOR,
