@@ -21,6 +21,28 @@ pub(super) struct FaceShape {
     pub(super) invz: f32,
 }
 
+/// Убрать из контура рёбра, ведущие в «усики» со степенью вершины 1.
+///
+/// В данных моделей часть граней имеет декоративные рёбра (детали на
+/// поверхности), которые не образуют замкнутый контур. Для каркаса это
+/// нормально, а сканлайнная заливка по правилу «чёт-нечёт» из-за таких
+/// рёбер даёт «протёки». Убираем только висячие ветви, не трогая замкнутые
+/// петли и вырезы двигателей.
+fn prune_spurs(edges: &mut Vec<(usize, usize)>) {
+    loop {
+        let mut deg: std::collections::HashMap<usize, usize> = std::collections::HashMap::new();
+        for &(a, b) in edges.iter() {
+            *deg.entry(a).or_insert(0) += 1;
+            *deg.entry(b).or_insert(0) += 1;
+        }
+        let before = edges.len();
+        edges.retain(|&(a, b)| deg.get(&a).copied().unwrap_or(0) >= 2 && deg.get(&b).copied().unwrap_or(0) >= 2);
+        if edges.len() == before {
+            break;
+        }
+    }
+}
+
 /// Собрать контуры всех видимых граней.
 pub(super) fn face_shapes(ship: &Ship, scr: &[(f32, f32, f32)], vis: &[bool]) -> Vec<FaceShape> {
     let mut face_edges: Vec<Vec<(usize, usize)>> = vec![Vec::new(); ship.faces.len()];
@@ -50,7 +72,8 @@ pub(super) fn face_shapes(ship: &Ship, scr: &[(f32, f32, f32)], vis: &[bool]) ->
         if !vis.get(fi).copied().unwrap_or(false) {
             continue;
         }
-        let edges = &face_edges[fi];
+        let mut edges = face_edges[fi].clone();
+        prune_spurs(&mut edges);
         if edges.len() < 3 {
             continue;
         }
@@ -69,7 +92,7 @@ pub(super) fn face_shapes(ship: &Ship, scr: &[(f32, f32, f32)], vis: &[bool]) ->
             None => f32::MAX,
         };
         let (mut x0, mut y0, mut x1, mut y1) = (f32::MAX, f32::MAX, f32::MIN, f32::MIN);
-        for &(i, j) in edges {
+        for &(i, j) in &edges {
             for k in [i, j] {
                 x0 = x0.min(scr[k].0);
                 x1 = x1.max(scr[k].0);
@@ -79,7 +102,7 @@ pub(super) fn face_shapes(ship: &Ship, scr: &[(f32, f32, f32)], vis: &[bool]) ->
         }
         let invz = pts.iter().map(|&(_, _, i)| i).sum::<f32>() / pts.len() as f32;
         out.push(FaceShape {
-            edges: edges.clone(),
+            edges,
             x0,
             x1,
             y0,
