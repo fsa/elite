@@ -161,7 +161,10 @@ impl Combat {
         let mut targets: Vec<(f32, usize)> = bodies
             .iter()
             .enumerate()
-            .filter(|(_, b)| b.kind == BodyKind::Ship && b.model.is_some())
+            .filter(|(_, b)| {
+                b.kind == BodyKind::Ship
+                    && b.model.is_some_and(|m| m.stats.fire_chance != 0)
+            })
             .filter_map(|(i, b)| {
                 let depth = cam.apply(b.pos)[2];
                 (depth > NEAR).then_some((depth, i))

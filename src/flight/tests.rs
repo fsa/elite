@@ -467,6 +467,25 @@ fn enemy_attack_draws_visible_beam() {
 }
 
 #[test]
+fn cargo_container_does_not_spawn_enemy_beam() {
+    let mut f = open();
+    let mut mem = z80_mem_with_flight();
+    // Заменяем Viper (может стрелять) на грузовой контейнер (fire_chance == 0).
+    let sh = Z80_OBJ_SLOT0;
+    mem[sh + Z80_SLOT_OADRDATA] = 0x28;
+    mem[sh + Z80_SLOT_OADRDATA + 1] = 0x62; // d_Cargo
+    f.sync_from_z80(&mem);
+
+    mem[Z80_SHIELD_FRONT] = 0x49;
+    f.sync_from_z80(&mem);
+    assert!(
+        f.combat.enemy_shots.is_empty(),
+        "контейнер с товаром не должен стрелять: {:?}",
+        f.combat.enemy_shots.len()
+    );
+}
+
+#[test]
 fn z80_shows_enemy_beam_when_shield_drops() {
     let mut f = open();
     let mut mem = z80_mem_with_flight();
