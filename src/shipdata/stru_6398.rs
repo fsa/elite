@@ -89,8 +89,6 @@ pub(super) static SHIP_STRU_6398: Ship = Ship {
         Edge { lod: 0x1f, v: [2, 4], faces: 0x31 }, // грани 1, 3
         Edge { lod: 0x1f, v: [5, 7], faces: 0x42 }, // грани 2, 4
         Edge { lod: 0x1f, v: [6, 8], faces: 0x53 }, // грани 3, 5
-        Edge { lod: 0x1f, v: [9, 11], faces: 0xf4 },
-        Edge { lod: 0x1f, v: [10, 12], faces: 0xf5 },
     ],
     faces: &[
         Face { nx: 24, ny: 0, nz: 18, flags: 0x1f },

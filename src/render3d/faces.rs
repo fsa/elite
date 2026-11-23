@@ -200,6 +200,7 @@ pub(super) fn fill_faces(
             FaceStyle::Flame => FLAME_COLOR,
             FaceStyle::EngineGlow => engine_glow_color(glow_phase),
         };
+        let is_glow = matches!(shape.style, FaceStyle::EngineGlow);
         let y_lo = ((shape.y0 - 0.5).ceil() as i32).max(0);
         let y_hi = ((shape.y1 - 0.5).ceil() as i32 - 1).min(h - 1);
         if y_lo > y_hi {
@@ -221,7 +222,16 @@ pub(super) fn fill_faces(
                 let x_lo = ((pair[0] - 0.5).ceil() as i32).max(0);
                 let x_hi = ((pair[1] - 0.5).ceil() as i32 - 1).min(w - 1);
                 if x_lo <= x_hi {
-                    frame.hline(x_lo, y, (x_hi - x_lo + 1) as usize, color);
+                    if is_glow {
+                        for x in x_lo..=x_hi {
+                            let idx = y as usize * frame.width + x as usize;
+                            if frame.pixels()[idx] != SHIP_FACE_COLOR {
+                                frame.plot(x, y, color);
+                            }
+                        }
+                    } else {
+                        frame.hline(x_lo, y, (x_hi - x_lo + 1) as usize, color);
+                    }
                 }
             }
         }
