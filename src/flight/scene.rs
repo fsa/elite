@@ -4,7 +4,7 @@
 //! модуль только превращает слоты `SlotObj`, координаты солнца и планеты в
 //! список [`Body`], готовый для рендера.
 
-use crate::render3d::Rotation;
+use crate::render3d::{Rotation, ShipTint};
 use crate::shipdata::{self, Ship};
 
 use super::memory::{
@@ -12,6 +12,7 @@ use super::memory::{
     Z80_OENERG_DESTROYED, Z80_PLANET_CRD, Z80_SLOT_OADRDATA, Z80_SLOT_OENERG, Z80_SLOT_SIZE,
     Z80_SUN_CRD,
 };
+use super::rng::Rng;
 
 pub(super) const BODY_SRC_CORIOLIS: u8 = 0;
 pub(super) const BODY_SRC_SLOT0: u8 = 1;
@@ -30,6 +31,113 @@ pub(super) const SUN_RADIUS: f32 = 70_000.0;
 /// рисуется сплошной заливкой, поэтому при том же радиусе заливала бы почти
 /// весь вид. Такой диск читается как планета, а не как стена.
 pub(super) const PLANET_RADIUS: f32 = 42_000.0;
+
+/// Привязка оттенков к слотам Z80.
+///
+/// Постоянного идентификатора у объекта в игре нет: пока он существует, его
+/// «личность» — номер слота и адрес модели. Если слот освобождается или в нём
+/// появляется другая модель, это считается новым объектом и он получает
+/// следующий псевдослучайный тон. Пока объект остаётся в слоте, тон не меняется.
+pub(super) struct ShipTints {
+    slots: [Option<TintSlot>; 8],
+    /// Битом отмечены слоты, которые были заняты при текущей сборке сцены.
+    seen: u8,
+    /// Оттенок только что уничтоженного корабля для его обломков.
+    pending_debris: Option<PendingDebris>,
+    /// Отдельный генератор: цвета не должны зависеть от звёзд и выстрелов.
+    rng: Rng,
+}
+
+#[derive(Clone, Copy)]
+struct TintSlot {
+    model: u16,
+    tint: ShipTint,
+}
+
+#[derive(Clone, Copy)]
+struct PendingDebris {
+    tint: ShipTint,
+    /// Сколько сборок сцены ещё ждём появления обломков.
+    frames: u32,
+}
+
+/// Обломки появляются на следующем игровом такте (~0,18 с), но кадров
+/// рендера между ними бывает около десятка. Запас в секунду покрывает и
+/// паузу, и замедление эмуляции.
+const DEBRIS_TINT_FRAMES: u32 = 60;
+
+impl ShipTints {
+    pub(super) fn new() -> Self {
+        Self {
+            slots: [None; 8],
+            seen: 0,
+            pending_debris: None,
+            rng: Rng::new(0x5EED_1234),
+        }
+    }
+
+    pub(super) fn reset(&mut self) {
+        *self = Self::new();
+    }
+
+    /// Начать очередной обход слотов.
+    fn begin(&mut self) {
+        self.seen = 0;
+        if let Some(pending) = &mut self.pending_debris {
+            pending.frames = pending.frames.saturating_sub(1);
+            if pending.frames == 0 {
+                self.pending_debris = None;
+            }
+        }
+    }
+
+    /// Запомнить оттенок уничтоженного корабля, чтобы красить его обломки.
+    fn destroyed(&mut self, source: u8) {
+        if let Some(slot) = self.slots[source as usize].take() {
+            self.pending_debris = Some(PendingDebris {
+                tint: slot.tint,
+                frames: DEBRIS_TINT_FRAMES,
+            });
+        } else if let Some(pending) = &mut self.pending_debris {
+            pending.frames = DEBRIS_TINT_FRAMES;
+        }
+    }
+
+    /// Вернуть оттенок объекта в слоте, назначив новый при необходимости.
+    fn assign(&mut self, source: u8, model: &Ship) -> ShipTint {
+        let idx = source as usize;
+        self.seen |= 1 << idx;
+        let fresh = self.slots[idx].map_or(true, |prev| prev.model != model.addr);
+        if fresh {
+            // Обломки (`ShipSet2Alloys`) сохраняют цвет уничтоженного корабля:
+            // в оригинале это те же куски его корпуса, а не новые объекты.
+            let tint = if model.name == "d_Alloys" {
+                self.pending_debris.map_or_else(
+                    || ShipTint::from_seed(self.rng.next_u32()),
+                    |pending| pending.tint,
+                )
+            } else {
+                ShipTint::from_seed(self.rng.next_u32())
+            };
+            self.slots[idx] = Some(TintSlot {
+                model: model.addr,
+                tint,
+            });
+            tint
+        } else {
+            self.slots[idx].expect("слот уже проверен").tint
+        }
+    }
+
+    /// Освободить оттенки слотов, в которых объекта больше нет.
+    fn finish(&mut self) {
+        for (idx, slot) in self.slots.iter_mut().enumerate() {
+            if self.seen & (1 << idx) == 0 {
+                *slot = None;
+            }
+        }
+    }
+}
 
 /// Тип объекта в сцене.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -55,15 +163,23 @@ pub(super) struct Body {
     pub(super) rot: Rotation,
     /// Радиус для проекции.
     pub(super) radius: f32,
-    /// Цвет диска (планета или солнце); корабли рисуются общим цветом.
+    /// Цвет диска (планета или солнце); у кораблей не используется.
     pub(super) color: u32,
+    /// Оттенок корпуса и рёбер объектов с геометрией.
+    pub(super) tint: Option<ShipTint>,
 }
 
 /// Собрать сцену из текущего состояния памяти игры.
 ///
 /// `system_color` — цвет системы на карте галактики: из него получается
 /// лёгкий оттенок почти белой звезды. Ноль означает, что цвет неизвестен.
-pub(super) fn build(mem: &[u8], planet_color: u32, system_color: u32) -> Vec<Body> {
+pub(super) fn build(
+    mem: &[u8],
+    planet_color: u32,
+    system_color: u32,
+    tints: &mut ShipTints,
+) -> Vec<Body> {
+    tints.begin();
     let sun_color = if system_color == 0 {
         SUN_COLOR
     } else {
@@ -78,6 +194,7 @@ pub(super) fn build(mem: &[u8], planet_color: u32, system_color: u32) -> Vec<Bod
         Z80_OBJ_CORIOLIS,
         BODY_SRC_CORIOLIS,
         BodyKind::Station,
+        tints,
     );
     for i in 0..6 {
         push_z80_slot(
@@ -86,6 +203,7 @@ pub(super) fn build(mem: &[u8], planet_color: u32, system_color: u32) -> Vec<Bod
             Z80_OBJ_SLOT0 + i * Z80_SLOT_SIZE,
             BODY_SRC_SLOT0 + i as u8,
             BodyKind::Ship,
+            tints,
         );
     }
     push_z80_slot(
@@ -94,6 +212,7 @@ pub(super) fn build(mem: &[u8], planet_color: u32, system_color: u32) -> Vec<Bod
         Z80_OBJ_MISSILE,
         BODY_SRC_MISSILE,
         BodyKind::Ship,
+        tints,
     );
 
     // Солнце и планета: те же координаты вида, что использует оригинал.
@@ -122,6 +241,7 @@ pub(super) fn build(mem: &[u8], planet_color: u32, system_color: u32) -> Vec<Bod
         );
     }
 
+    tints.finish();
     bodies
 }
 
@@ -168,13 +288,22 @@ pub(super) fn slot_pose(mem: &[u8], base: usize) -> Option<([f32; 3], f32)> {
 /// Ориентация хранится двумя осями: ось Z модели — по `+0x0A/0C/0E`,
 /// ось Y — по `+0x10/12/14` (знаковые байты), ось X достраивается как
 /// `Y × Z`.
-fn push_z80_slot(bodies: &mut Vec<Body>, mem: &[u8], base: usize, source: u8, kind: BodyKind) {
+fn push_z80_slot(
+    bodies: &mut Vec<Body>,
+    mem: &[u8],
+    base: usize,
+    source: u8,
+    kind: BodyKind,
+    tints: &mut ShipTints,
+) {
     if mem.get(base + Z80_SLOT_OENERG) == Some(&Z80_OENERG_DESTROYED) {
+        tints.destroyed(source);
         return;
     }
     let Some((model, pos)) = slot_object(mem, base) else {
         return;
     };
+    let tint = tints.assign(source, model);
     let z_axis = [
         memory::read_signed8(mem[base + 0x0A]),
         memory::read_signed8(mem[base + 0x0C]),
@@ -204,6 +333,7 @@ fn push_z80_slot(bodies: &mut Vec<Body>, mem: &[u8], base: usize, source: u8, ki
             BodyKind::Station => 0xFFA0_FFFF,
             _ => CYAN,
         },
+        tint: Some(tint),
     });
 }
 
@@ -232,6 +362,7 @@ fn push_z80_celestial(
         rot: Rotation::identity(),
         radius,
         color,
+        tint: None,
     });
 }
 

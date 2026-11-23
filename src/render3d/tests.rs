@@ -3,7 +3,8 @@
 use crate::display::Frame;
 use crate::shipdata::{self, Edge, Face, FaceStyle, Ship, Vertex};
 
-use super::{Rotation, Screen, SHIP_COLOR, SHIP_FACE_COLOR, draw_ship};
+use super::faces::face_color;
+use super::{FLAME_COLOR, Rotation, SHIP_COLOR, SHIP_FACE_COLOR, Screen, ShipTint, draw_ship};
 
 /// Вход в станцию — чёрная поверхность, а не дыра, сквозь которую виден фон.
 ///
@@ -130,5 +131,59 @@ fn nearer_face_color_wins_over_farther_one() {
         f.pixels()[100 * 200 + 100],
         NEAR,
         "ближняя грань должна перекрывать дальную"
+    );
+}
+
+#[test]
+fn tint_keeps_metal_light_and_changes_all_hull_faces() {
+    let tint = ShipTint::from_seed(5);
+    let hull = tint.apply(SHIP_FACE_COLOR);
+    assert_eq!(hull >> 24, 0xFF, "альфа не должна меняться");
+    for shift in [16, 8, 0] {
+        let base = (SHIP_FACE_COLOR >> shift) & 0xFF;
+        let tinted = (hull >> shift) & 0xFF;
+        assert!(
+            tinted + 24 >= base && base + 24 >= tinted,
+            "оттенок слишком сильно меняет яркость металла: {base} → {tinted}"
+        );
+    }
+    assert_ne!(hull, SHIP_FACE_COLOR, "корпус должен получить оттенок");
+    assert_ne!(
+        tint.apply(SHIP_COLOR),
+        SHIP_COLOR,
+        "рёбра тоже должны получить оттенок"
+    );
+    assert_eq!(
+        tint.apply(0xFF00_0000),
+        0xFF00_0000,
+        "чёрный вход в станцию должен остаться чёрным"
+    );
+    assert_ne!(
+        ShipTint::from_seed(0).apply(SHIP_FACE_COLOR),
+        ShipTint::from_seed(4).apply(SHIP_FACE_COLOR),
+        "разные номера тона должны давать разные оттенки"
+    );
+}
+
+#[test]
+fn tint_does_not_touch_engines() {
+    let tint = ShipTint::from_seed(3);
+    assert_eq!(
+        face_color(FaceStyle::Hull, Some(tint), 0.0),
+        tint.apply(SHIP_FACE_COLOR)
+    );
+    assert_eq!(
+        face_color(FaceStyle::Color(0xFF12_3456), Some(tint), 0.0),
+        tint.apply(0xFF12_3456)
+    );
+    assert_eq!(
+        face_color(FaceStyle::Flame, Some(tint), 0.0),
+        FLAME_COLOR,
+        "пламя двигателя не красится"
+    );
+    assert_eq!(
+        face_color(FaceStyle::EngineGlow, Some(tint), 0.7),
+        face_color(FaceStyle::EngineGlow, None, 0.7),
+        "сияние двигателя не красится"
     );
 }

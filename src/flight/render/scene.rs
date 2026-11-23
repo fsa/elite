@@ -130,7 +130,15 @@ fn draw_bodies_view(f: &Flight, frame: &mut Frame, screen: &Screen, view_rot: &R
                     continue;
                 };
                 let vrot = cam.mul(&b.rot);
-                render3d::draw_ship(frame, model, &vrot, vpos, screen, render3d::SHIP_COLOR);
+                render3d::draw_ship_tinted(
+                    frame,
+                    model,
+                    &vrot,
+                    vpos,
+                    screen,
+                    render3d::SHIP_COLOR,
+                    b.tint,
+                );
             }
         }
     }

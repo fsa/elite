@@ -17,8 +17,9 @@
 //! перехваченная из игры строка `HYPERSPACE -- <планета>`.
 //!
 //! Объекты (корабли, станция, планета, солнце) рисуются общим рендером
-//! [`crate::render3d`], что и корабль на заставке: непрозрачные тёмные грани
-//! и белые рёбра.
+//! [`crate::render3d`], что и корабль на заставке: непрозрачные
+//! светло-металлические грани и белые рёбра. В полёте на них дополнительно
+//! накладывается небольшой оттенок, привязанный к объекту.
 //!
 //! Подсистемы модуля:
 //!
@@ -45,7 +46,7 @@ use self::memory::{
 };
 use self::messages::Messages;
 use self::palette::{planet_green, PLANET_COLOR};
-use self::scene::Body;
+use self::scene::{Body, ShipTints};
 use self::stars::{
     StarField, SPEED_MAX, STAR_ANGLE_DU_PER_UNIT, STAR_ANGLE_LR_PER_UNIT, STAR_COUNT,
 };
@@ -125,6 +126,8 @@ pub struct Flight {
     /// вместо подписи направления.
     game_over: bool,
     bodies: Vec<Body>,
+    /// Оттенки кораблей, привязанные к слотам Z80.
+    ship_tints: ShipTints,
     /// Положение/ориентация тел на предыдущем игровом такте Z80.
     /// Используется для интерполяции между тактами (~5.5 Гц), чтобы корабли
     /// не «прыгали» при отрисовке 50 Гц.
@@ -166,6 +169,7 @@ impl Flight {
             lasers: [0; 4],
             game_over: false,
             bodies: Vec::new(),
+            ship_tints: ShipTints::new(),
             prev_bodies: Vec::new(),
             tick_accum: 0.0,
             tick_interval: 1.0 / 5.5,
@@ -194,6 +198,7 @@ impl Flight {
         self.lasers = [0; 4];
         self.game_over = false;
         self.bodies.clear();
+        self.ship_tints.reset();
         self.prev_bodies.clear();
         self.tick_accum = 0.0;
         self.tick_interval = 1.0 / 5.5;
@@ -481,7 +486,12 @@ impl Flight {
 
         // Сцена собирается из слотов Z80; попадание ловим по урону щитов уже
         // после того, как известны цели ответного луча.
-        self.bodies = scene::build(mem, self.planet_color, self.system_color);
+        self.bodies = scene::build(
+            mem,
+            self.planet_color,
+            self.system_color,
+            &mut self.ship_tints,
+        );
         if !ticked && self.prev_bodies.is_empty() {
             self.prev_bodies = self.bodies.clone();
         }
@@ -557,8 +567,12 @@ impl Flight {
                 let Some(prev) = self.prev_bodies.iter().find(|p| p.source == body.source) else {
                     return body.clone();
                 };
-                // Другой тип/модель в том же слоте — это уже новый объект.
-                if prev.kind != body.kind || prev.model.map(|m| m.addr) != body.model.map(|m| m.addr) {
+                // Другой тип, модель или оттенок в том же слоте — это уже
+                // новый объект, интерполировать его положение не нужно.
+                if prev.kind != body.kind
+                    || prev.model.map(|m| m.addr) != body.model.map(|m| m.addr)
+                    || prev.tint != body.tint
+                {
                     return body.clone();
                 }
                 let mut out = body.clone();

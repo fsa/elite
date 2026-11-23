@@ -7,14 +7,15 @@ use super::explosions::EXPLOSION_TIME;
 use super::memory::{
     read_signed24, read_signed8, Z80_DAMAGE_FRONT_SHIELD, Z80_IN_FREE_SPACE, Z80_LASER_MOUNTS,
     Z80_OBJ_CORIOLIS, Z80_OBJ_SLOT0, Z80_OENERG_DESTROYED, Z80_PLANET_CRD, Z80_SHIELD_FRONT,
-    Z80_SHIELD_REAR, Z80_SLOT_OADRDATA, Z80_SLOT_OENERG, Z80_SUN_CRD, Z80_TEMP_LASER,
+    Z80_SHIELD_REAR, Z80_SLOT_OADRDATA, Z80_SLOT_OENERG, Z80_SLOT_SIZE, Z80_SUN_CRD,
+    Z80_TEMP_LASER,
 };
 use super::messages::{countdown_number, view_label, BOTTOM_MSG_TTL};
 use super::palette::{
     planet_rim, sun_tint, CYAN, ENEMY_BEAM, RED, STAR_RIM_COLOR, VIEW_LABEL_COLOR,
 };
 use super::render::scene::{draw_star, draw_stars_view};
-use super::scene::{BodyKind, PLANET_RADIUS, SUN_RADIUS};
+use super::scene::{BodyKind, BODY_SRC_SLOT0, PLANET_RADIUS, SUN_RADIUS};
 use super::stars::{star_count_for, Star, SPEED_MAX, STAR_COUNT, STAR_COUNT_MAX, STAR_FIELD_RADIUS};
 use super::transition::Transition;
 use super::view;
@@ -28,6 +29,14 @@ fn open() -> Flight {
     let mut f = Flight::new();
     f.open(0xFF40_80C0);
     f
+}
+
+/// Записать в слот Z80 объект с заданной моделью.
+fn put_obj(mem: &mut [u8], base: usize, name: &str) {
+    let ship = crate::shipdata::find(name).expect("модель не найдена");
+    mem[base + Z80_SLOT_OENERG] = 0x40;
+    mem[base + Z80_SLOT_OADRDATA..base + Z80_SLOT_OADRDATA + 2]
+        .copy_from_slice(&ship.addr.to_le_bytes());
 }
 
 fn star(pos: [f32; 3]) -> Star {
@@ -1197,6 +1206,87 @@ fn z80_skips_empty_slots_and_unknown_models() {
         !f.bodies.iter().any(|b| b.kind == BodyKind::Ship),
         "слот без модели попал в сцену"
     );
+}
+
+#[test]
+fn ship_tint_stays_with_slot_and_changes_for_new_object() {
+    let mut f = open();
+    let mut mem = vec![0u8; Z80_MEM_MIN];
+    put_obj(&mut mem, Z80_OBJ_SLOT0, "d_Viper");
+    put_obj(&mut mem, Z80_OBJ_SLOT0 + Z80_SLOT_SIZE, "d_Cobra1");
+    f.sync_from_z80(&mem);
+
+    let tint = |f: &Flight, source: u8| {
+        f.bodies
+            .iter()
+            .find(|b| b.source == source)
+            .and_then(|b| b.tint)
+            .expect("корабль без оттенка")
+    };
+    let first = tint(&f, BODY_SRC_SLOT0);
+    let second = tint(&f, BODY_SRC_SLOT0 + 1);
+    assert_ne!(first, second, "корабли в разных слотах должны различаться");
+
+    f.sync_from_z80(&mem);
+    assert_eq!(tint(&f, BODY_SRC_SLOT0), first, "оттенок не должен мигать");
+
+    // После освобождения слота в нём появляется уже другой объект.
+    mem[Z80_OBJ_SLOT0 + Z80_SLOT_OENERG] = 0;
+    f.sync_from_z80(&mem);
+    put_obj(&mut mem, Z80_OBJ_SLOT0, "d_Viper");
+    f.sync_from_z80(&mem);
+    let mut tints = vec![tint(&f, BODY_SRC_SLOT0)];
+    for _ in 0..12 {
+        mem[Z80_OBJ_SLOT0 + Z80_SLOT_OENERG] = 0;
+        f.sync_from_z80(&mem);
+        put_obj(&mut mem, Z80_OBJ_SLOT0, "d_Viper");
+        f.sync_from_z80(&mem);
+        tints.push(tint(&f, BODY_SRC_SLOT0));
+    }
+    tints.sort_unstable();
+    tints.dedup();
+    assert!(tints.len() > 1, "новые объекты должны получать новые тона");
+}
+
+#[test]
+fn debris_inherits_destroyed_ship_tint() {
+    let mut f = open();
+    let mut mem = vec![0u8; Z80_MEM_MIN];
+    put_obj(&mut mem, Z80_OBJ_SLOT0, "d_Viper");
+    f.sync_from_z80(&mem);
+    let ship_tint = f
+        .bodies
+        .iter()
+        .find(|b| b.source == BODY_SRC_SLOT0)
+        .and_then(|b| b.tint)
+        .expect("у корабля должен быть оттенок");
+
+    // Оригинал помечает уничтоженный слот `oEnerg = 0xFF`, затем `ShipSet2Alloys`
+    // создаёт два обломка в свободных слотах.
+    mem[Z80_OBJ_SLOT0 + Z80_SLOT_OENERG] = Z80_OENERG_DESTROYED;
+    f.sync_from_z80(&mem);
+    mem[Z80_OBJ_SLOT0 + Z80_SLOT_OENERG] = 0;
+    put_obj(&mut mem, Z80_OBJ_SLOT0 + Z80_SLOT_SIZE, "d_Alloys");
+    put_obj(
+        &mut mem,
+        Z80_OBJ_SLOT0 + 2 * Z80_SLOT_SIZE,
+        "d_Alloys",
+    );
+    f.sync_from_z80(&mem);
+
+    let debris: Vec<_> = f
+        .bodies
+        .iter()
+        .filter(|b| b.model.is_some_and(|m| m.name == "d_Alloys"))
+        .collect();
+    assert_eq!(debris.len(), 2, "должно появиться два обломка");
+    for part in debris {
+        assert_eq!(
+            part.tint,
+            Some(ship_tint),
+            "обломки должны быть того же цвета, что и корабль"
+        );
+    }
 }
 
 /// Загрузить образ Кладова и выйти в космос, как это делает игра.

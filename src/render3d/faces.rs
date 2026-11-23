@@ -162,18 +162,34 @@ pub(super) fn face_shapes(ship: &Ship, scr: &[(f32, f32, f32)], vis: &[bool]) ->
     out
 }
 
+/// Цвет заливки грани с учётом оттенка корабля.
+///
+/// Оттенок накладывается на корпус и на все выделенные поверхности, но не на
+/// двигатели: их цвет задан эффектом и должен оставаться прежним.
+pub(super) fn face_color(style: FaceStyle, tint: Option<ShipTint>, glow_phase: f32) -> u32 {
+    let tinted = |color| tint.map_or(color, |t| t.apply(color));
+    match style {
+        FaceStyle::Hull => tinted(SHIP_FACE_COLOR),
+        FaceStyle::Color(color) => tinted(color),
+        FaceStyle::Flame => FLAME_COLOR,
+        FaceStyle::EngineGlow => engine_glow_color(glow_phase),
+    }
+}
+
 /// Залить видимые грани непрозрачным цветом.
 ///
 /// Каждый контур заполняется построчно по правилу «чёт-нечёт»: это корректно
 /// и для нескольких петель (вырезы двигателей), и для невыпуклых граней.
 /// Грани идут от дальней к ближней: у выделенных поверхностей свой цвет, и
 /// они должны перекрывать корпус, оказавшийся позади них на экране.
-/// `glow_phase` — фаза [0, 2π) для пульсации [`FaceStyle::EngineGlow`].
+/// `glow_phase` — фаза [0, 2π) для пульсации [`FaceStyle::EngineGlow`],
+/// `tint` — оттенок корабля или `None` для нейтрального металла.
 pub(super) fn fill_faces(
     frame: &mut Frame,
     shapes: &[FaceShape],
     scr: &[(f32, f32, f32)],
     glow_phase: f32,
+    tint: Option<ShipTint>,
 ) {
     let w = frame.width as i32;
     let h = frame.height as i32;
@@ -194,12 +210,7 @@ pub(super) fn fill_faces(
         })
     });
     for shape in order {
-        let color = match shape.style {
-            FaceStyle::Hull => SHIP_FACE_COLOR,
-            FaceStyle::Color(color) => color,
-            FaceStyle::Flame => FLAME_COLOR,
-            FaceStyle::EngineGlow => engine_glow_color(glow_phase),
-        };
+        let color = face_color(shape.style, tint, glow_phase);
         let y_lo = ((shape.y0 - 0.5).ceil() as i32).max(0);
         let y_hi = ((shape.y1 - 0.5).ceil() as i32 - 1).min(h - 1);
         if y_lo > y_hi {
