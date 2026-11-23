@@ -75,14 +75,14 @@ pub(super) static SHIP_STRU_6398: Ship = Ship {
         Edge { lod: 0xe, v: [26, 25], faces: 0x88 },
         Edge { lod: 0xe, v: [28, 27], faces: 0x88 },
         // Модификация модели: задние треугольники двигателей — отдельные грани
-        // 9/10 со стилем EngineGlow. Рёбра не входят в грань 6, чтобы свечение
-        // рисовалось поверх задней грани без дыр в even-odd контуре.
-        Edge { lod: 0xe, v: [21, 19], faces: 0xf9 },
-        Edge { lod: 0xe, v: [23, 19], faces: 0xf9 },
-        Edge { lod: 0xe, v: [22, 20], faces: 0xfa },
-        Edge { lod: 0xe, v: [24, 20], faces: 0xfa },
-        Edge { lod: 0xd, v: [24, 22], faces: 0xfa },
-        Edge { lod: 0xd, v: [23, 21], faces: 0xf9 },
+        // 9/10 со стилем EngineGlow. Рёбра также входят в грань 6, чтобы задняя
+        // грань имела корректный контур/окклюзию; свечение рисуется поверх неё.
+        Edge { lod: 0xe, v: [21, 19], faces: 0x96 },
+        Edge { lod: 0xe, v: [23, 19], faces: 0x96 },
+        Edge { lod: 0xe, v: [22, 20], faces: 0xa6 },
+        Edge { lod: 0xe, v: [24, 20], faces: 0xa6 },
+        Edge { lod: 0xd, v: [24, 22], faces: 0xa6 },
+        Edge { lod: 0xd, v: [23, 21], faces: 0x96 },
         // Модификация модели: закрывающие рёбра для узких боковых граней 0-5,
         // которые в ROM имеют открытый контур (2 ребра из 3).
         Edge { lod: 0x1f, v: [1, 3], faces: 0x20 }, // грани 0, 2
