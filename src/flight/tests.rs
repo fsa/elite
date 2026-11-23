@@ -6,16 +6,16 @@ use crate::render3d::{Rotation, Screen};
 use super::explosions::EXPLOSION_TIME;
 use super::memory::{
     read_signed24, read_signed8, Z80_DAMAGE_FRONT_SHIELD, Z80_IN_FREE_SPACE, Z80_LASER_MOUNTS,
-    Z80_OBJ_CORIOLIS, Z80_OBJ_SLOT0, Z80_OENERG_DESTROYED, Z80_PLANET_CRD, Z80_SHIELD_FRONT,
-    Z80_SHIELD_REAR, Z80_SLOT_OADRDATA, Z80_SLOT_OENERG, Z80_SLOT_SIZE, Z80_SUN_CRD,
-    Z80_TEMP_LASER,
+    Z80_OBJ_CORIOLIS, Z80_OBJ_MISSILE, Z80_OBJ_SLOT0, Z80_OENERG_DESTROYED, Z80_PLANET_CRD,
+    Z80_SHIELD_FRONT, Z80_SHIELD_REAR, Z80_SLOT_OADRDATA, Z80_SLOT_OENERG, Z80_SLOT_SIZE,
+    Z80_SUN_CRD, Z80_TEMP_LASER,
 };
 use super::messages::{countdown_number, view_label, BOTTOM_MSG_TTL};
 use super::palette::{
     planet_rim, sun_tint, CYAN, ENEMY_BEAM, RED, STAR_RIM_COLOR, VIEW_LABEL_COLOR,
 };
 use super::render::scene::{draw_star, draw_stars_view};
-use super::scene::{BodyKind, BODY_SRC_SLOT0, PLANET_RADIUS, SUN_RADIUS};
+use super::scene::{BodyKind, BODY_SRC_MISSILE, BODY_SRC_SLOT0, PLANET_RADIUS, SUN_RADIUS};
 use super::stars::{star_count_for, Star, SPEED_MAX, STAR_COUNT, STAR_COUNT_MAX, STAR_FIELD_RADIUS};
 use super::transition::Transition;
 use super::view;
@@ -1287,6 +1287,36 @@ fn debris_inherits_destroyed_ship_tint() {
             "обломки должны быть того же цвета, что и корабль"
         );
     }
+}
+
+#[test]
+fn only_ships_and_debris_get_tint() {
+    let mut f = open();
+    let mut mem = z80_mem_with_flight();
+    put_obj(&mut mem, Z80_OBJ_MISSILE, "d_Missile");
+    f.sync_from_z80(&mem);
+
+    let tint_of = |source: u8| {
+        f.bodies
+            .iter()
+            .find(|b| b.source == source)
+            .unwrap_or_else(|| panic!("объект {source} не попал в сцену"))
+            .tint
+    };
+    assert!(
+        tint_of(BODY_SRC_SLOT0).is_some(),
+        "корабль должен получить оттенок"
+    );
+    assert_eq!(
+        tint_of(super::scene::BODY_SRC_CORIOLIS),
+        None,
+        "станция должна остаться исходного цвета"
+    );
+    assert_eq!(
+        tint_of(BODY_SRC_MISSILE),
+        None,
+        "ракета должна остаться исходного цвета"
+    );
 }
 
 /// Загрузить образ Кладова и выйти в космос, как это делает игра.

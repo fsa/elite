@@ -135,37 +135,42 @@ fn nearer_face_color_wins_over_farther_one() {
 }
 
 #[test]
-fn tint_keeps_metal_moderate_and_changes_all_hull_faces() {
-    let channels = [
-        (SHIP_FACE_COLOR >> 16) & 0xFF,
-        (SHIP_FACE_COLOR >> 8) & 0xFF,
-        SHIP_FACE_COLOR & 0xFF,
-    ];
-    assert!(
-        channels.iter().all(|&c| c <= 160),
-        "базовый корпус слишком яркий: {channels:?}"
-    );
-    assert!(
-        channels.iter().all(|&c| c >= 100),
-        "базовый корпус слишком тёмный: {channels:?}"
+fn tint_keeps_original_brightness_and_changes_all_hull_faces() {
+    assert_eq!(
+        SHIP_FACE_COLOR, 0xFF20_2832,
+        "базовая заливка должна остаться как в оригинале"
     );
 
     let tint = ShipTint::from_seed(5);
     let hull = tint.apply(SHIP_FACE_COLOR);
     assert_eq!(hull >> 24, 0xFF, "альфа не должна меняться");
-    for shift in [16, 8, 0] {
-        let base = (SHIP_FACE_COLOR >> shift) & 0xFF;
-        let tinted = (hull >> shift) & 0xFF;
-        assert!(
-            tinted + 24 >= base && base + 24 >= tinted,
-            "оттенок слишком сильно меняет яркость металла: {base} → {tinted}"
-        );
-    }
+    let sum = |c: u32| ((c >> 16) & 0xFF) + ((c >> 8) & 0xFF) + (c & 0xFF);
+    assert!(
+        sum(hull) <= sum(SHIP_FACE_COLOR) + 1,
+        "оттенок не должен делать корпус ярче: {} → {}",
+        sum(SHIP_FACE_COLOR),
+        sum(hull)
+    );
+    let max_delta = [16, 8, 0]
+        .iter()
+        .map(|&shift| {
+            ((SHIP_FACE_COLOR >> shift) & 0xFF).abs_diff((hull >> shift) & 0xFF)
+        })
+        .max()
+        .expect("три канала есть всегда");
+    assert!(
+        max_delta >= 10,
+        "оттенок должен быть заметен на тёмном металле: {hull:08X}"
+    );
     assert_ne!(hull, SHIP_FACE_COLOR, "корпус должен получить оттенок");
-    assert_ne!(
-        tint.apply(SHIP_COLOR),
-        SHIP_COLOR,
-        "рёбра тоже должны получить оттенок"
+
+    let edges = tint.apply(SHIP_COLOR);
+    assert_ne!(edges, SHIP_COLOR, "рёбра тоже должны получить оттенок");
+    assert!(
+        [16, 8, 0]
+            .iter()
+            .all(|&shift| ((edges >> shift) & 0xFF) >= 200),
+        "рёбра должны остаться почти белыми: {edges:08X}"
     );
     assert_eq!(
         tint.apply(0xFF00_0000),

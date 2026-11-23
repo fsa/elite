@@ -165,7 +165,7 @@ pub(super) struct Body {
     pub(super) radius: f32,
     /// Цвет диска (планета или солнце); у кораблей не используется.
     pub(super) color: u32,
-    /// Оттенок корпуса и рёбер объектов с геометрией.
+    /// Оттенок корпуса и рёбер только у кораблей и их обломков.
     pub(super) tint: Option<ShipTint>,
 }
 
@@ -195,6 +195,7 @@ pub(super) fn build(
         BODY_SRC_CORIOLIS,
         BodyKind::Station,
         tints,
+        false,
     );
     for i in 0..6 {
         push_z80_slot(
@@ -204,6 +205,7 @@ pub(super) fn build(
             BODY_SRC_SLOT0 + i as u8,
             BodyKind::Ship,
             tints,
+            true,
         );
     }
     push_z80_slot(
@@ -213,6 +215,7 @@ pub(super) fn build(
         BODY_SRC_MISSILE,
         BodyKind::Ship,
         tints,
+        false,
     );
 
     // Солнце и планета: те же координаты вида, что использует оригинал.
@@ -287,7 +290,8 @@ pub(super) fn slot_pose(mem: &[u8], base: usize) -> Option<([f32; 3], f32)> {
 /// рисуется целым кораблём — вместо него показывается облако частиц.
 /// Ориентация хранится двумя осями: ось Z модели — по `+0x0A/0C/0E`,
 /// ось Y — по `+0x10/12/14` (знаковые байты), ось X достраивается как
-/// `Y × Z`.
+/// `Y × Z`. Оттенок получают только боевые корабли и их обломки;
+/// станция и ракета остаются исходных цветов.
 fn push_z80_slot(
     bodies: &mut Vec<Body>,
     mem: &[u8],
@@ -295,15 +299,18 @@ fn push_z80_slot(
     source: u8,
     kind: BodyKind,
     tints: &mut ShipTints,
+    tintable: bool,
 ) {
     if mem.get(base + Z80_SLOT_OENERG) == Some(&Z80_OENERG_DESTROYED) {
-        tints.destroyed(source);
+        if tintable {
+            tints.destroyed(source);
+        }
         return;
     }
     let Some((model, pos)) = slot_object(mem, base) else {
         return;
     };
-    let tint = tints.assign(source, model);
+    let tint = tintable.then(|| tints.assign(source, model));
     let z_axis = [
         memory::read_signed8(mem[base + 0x0A]),
         memory::read_signed8(mem[base + 0x0C]),
@@ -333,7 +340,7 @@ fn push_z80_slot(
             BodyKind::Station => 0xFFA0_FFFF,
             _ => CYAN,
         },
-        tint: Some(tint),
+        tint,
     });
 }
 
