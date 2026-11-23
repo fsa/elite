@@ -131,6 +131,9 @@ pub struct Ship {
     /// 4-й байт записи таблицы (категория).
     #[allow(dead_code)]
     pub category: u8,
+    /// Может ли цвет модели меняться: корабли и обломки из сплава.
+    /// У остальных объектов цвет фиксирован и алгоритмом не трогается.
+    pub tintable: bool,
     pub stats: Stats,
     pub vertices: &'static [Vertex],
     pub edges: &'static [Edge],

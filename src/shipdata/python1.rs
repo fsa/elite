@@ -9,6 +9,7 @@ pub(super) static SHIP_D_PYTHON1: Ship = Ship {
     full_name: "Python",
     addr: 0x62b2,
     category: 2,
+    tintable: true,
     stats: Stats {
         cargo: 5, collision: 80, fire_chance: 130,
         max_speed: 20, energy: 250, cash: 0,

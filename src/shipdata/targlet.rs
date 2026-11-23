@@ -9,6 +9,7 @@ pub(super) static SHIP_DTARGLETH: Ship = Ship {
     full_name: "Thargon",
     addr: 0x636a,
     category: 4,
+    tintable: true,
     stats: Stats {
         cargo: 240, collision: 40, fire_chance: 120,
         max_speed: 30, energy: 20, cash: 50,

@@ -11,6 +11,7 @@ pub(super) static SHIP_STRU_6381: Ship = Ship {
     full_name: "Thargoid Heavy",
     addr: 0x6381,
     category: 3,
+    tintable: true,
     stats: Stats {
         cargo: 0, collision: 99, fire_chance: 255,
         max_speed: 47, energy: 240, cash: 600,

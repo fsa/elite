@@ -37,8 +37,8 @@ fn splash_draws_title_ship_and_hints() {
         f.pixels().iter().any(|&p| p == 0xFFD7_D7D7),
         "заголовок не нарисован"
     );
-    let edge = st.tint.apply(SHIP_COLOR);
-    let face = st.tint.apply(crate::render3d::SHIP_FACE_COLOR);
+    let edge = st.tint.expect("модель заставки должна краситься").apply(SHIP_COLOR);
+    let face = st.tint.expect("модель заставки должна краситься").apply(crate::render3d::SHIP_FACE_COLOR);
     assert!(
         f.pixels().iter().any(|&p| p == edge),
         "рёбра корабля не нарисованы"
@@ -185,8 +185,8 @@ fn splash_ship_faces_are_filled() {
     let st = Splash::new();
     st.draw(&mut f, &font);
     let (cx, cy, r) = (1280 / 2, 480, INTRO_SHIP_RADIUS * 5);
-    let face_color = st.tint.apply(crate::render3d::SHIP_FACE_COLOR);
-    let edge_color = st.tint.apply(SHIP_COLOR);
+    let face_color = st.tint.expect("модель заставки должна краситься").apply(crate::render3d::SHIP_FACE_COLOR);
+    let edge_color = st.tint.expect("модель заставки должна краситься").apply(SHIP_COLOR);
     let mut total = 0;
     let mut face = 0;
     let mut edge = 0;
@@ -220,7 +220,7 @@ fn splash_ship_is_large_and_fits_texts() {
     let s = 5;
     let title_bottom = 12 * s;
     let hint_top = 960 - 12 * s;
-    let edge = st.tint.apply(SHIP_COLOR);
+    let edge = st.tint.expect("модель заставки должна краситься").apply(SHIP_COLOR);
     let mut top = 960;
     let mut bottom = 0;
     for y in 0..960 {
@@ -276,6 +276,57 @@ fn splash_tint_is_stable_while_rotating_and_changes_with_ship() {
         tints.len() > 1,
         "разные корабли заставки получили одинаковый тон"
     );
+}
+
+/// В отладочной витрине тон получают только корабли и обломки из сплава.
+/// У остальных моделей цвет фиксирован: признак `tintable` у них выключен.
+#[test]
+fn splash_debug_tints_only_ships_and_alloys() {
+    let mut st = Splash::with_debug(true);
+    let mut tints = Vec::new();
+    for _ in 0..debug_cycle().len() {
+        let name = st.ship.expect("нет модели").name;
+        assert!(
+            !tints.iter().any(|(n, _)| *n == name),
+            "модель {name} показана дважды"
+        );
+        tints.push((name, st.tint));
+        st.cycle_ship(1);
+    }
+    let tint_of = |name: &str| tints.iter().find(|(n, _)| *n == name).map(|(_, t)| *t);
+
+    // Два астероида имеют одинаковую геометрию, поэтому в витрине виден
+    // только один из них.
+    for name in [
+        "d_Coriolis",
+        "d_Missile",
+        "d_EscapePod",
+        "d_Cargo",
+        "d_Minerals",
+        "d_Asteroid1",
+        "d_Asteroid2",
+    ] {
+        if let Some(tint) = tint_of(name) {
+            assert_eq!(tint, None, "{name} не должен краситься");
+        }
+    }
+    for name in ["d_Coriolis", "d_Missile", "d_EscapePod"] {
+        assert!(tint_of(name).is_some(), "{name} отсутствует в витрине");
+    }
+    assert!(
+        tint_of("d_Asteroid1").is_some() || tint_of("d_Asteroid2").is_some(),
+        "астероид отсутствует в витрине"
+    );
+    assert!(
+        tint_of("d_Alloys").is_some_and(|t| t.is_some()),
+        "обломки должны получить случайный тон"
+    );
+    for name in INTRO_CYCLE {
+        assert!(
+            tint_of(name).is_some_and(|t| t.is_some()),
+            "{name} должен получить тон"
+        );
+    }
 }
 
 /// Переключение кораблей идёт по циклу оригинала: восемь боевых
@@ -836,7 +887,7 @@ fn splash_ship_size_does_not_breathe() {
     let font = vec![0u8; 0x300];
     let mut st = Splash::new();
     let mut f = Frame::new(1280, 960);
-    let edge = st.tint.apply(SHIP_COLOR);
+    let edge = st.tint.expect("модель заставки должна краситься").apply(SHIP_COLOR);
     // Полный оборот (≈415 тиков) с шагом 3 тика.
     let (mut dmin, mut dmax) = (i32::MAX, 0);
     let (mut top, mut bottom) = (960, 0);
@@ -895,7 +946,7 @@ fn splash_silhouette_turns_like_original() {
         }
         f.fill_rect(0, 0, f.width, f.height, 0xFF00_0000);
         st.draw(&mut f, &font);
-        let mut ang = silhouette_axis(&f, st.tint.apply(SHIP_COLOR));
+        let mut ang = silhouette_axis(&f, st.tint.expect("модель заставки должна краситься").apply(SHIP_COLOR));
         // Угол оси определён с точностью до 180°.
         while ang - expected > 90.0 {
             ang -= 180.0;
@@ -1003,7 +1054,7 @@ fn convex_cube_keeps_visible_edges() {
         }
         let mut f = Frame::new(600, 600);
         st.draw_ship(&mut f, ship, 300, 300, 240);
-        let edge = st.tint.apply(SHIP_COLOR);
+        let edge = st.tint.expect("модель заставки должна краситься").apply(SHIP_COLOR);
         let drawn: Vec<bool> = f.pixels().iter().map(|&p| p == edge).collect();
         let (mut total, mut lost) = (0, 0);
         for (i, &p) in reference.pixels().iter().enumerate() {
@@ -1188,6 +1239,7 @@ fn cube_ship() -> &'static Ship {
         full_name: "Cube",
         addr: 0,
         category: 0,
+        tintable: true,
         vertices: &VERTS,
         edges: &EDGES,
         faces: &FACES,

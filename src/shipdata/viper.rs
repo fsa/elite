@@ -9,6 +9,7 @@ pub(super) static SHIP_D_VIPER: Ship = Ship {
     full_name: "Viper",
     addr: 0x6284,
     category: 2,
+    tintable: true,
     stats: Stats {
         cargo: 0, collision: 75, fire_chance: 120,
         max_speed: 32, energy: 140, cash: 0,

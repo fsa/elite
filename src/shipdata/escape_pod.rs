@@ -9,6 +9,7 @@ pub(super) static SHIP_D_ESCAPEPOD: Ship = Ship {
     full_name: "Escape Pod",
     addr: 0x61fa,
     category: 1,
+    tintable: false,
     stats: Stats {
         cargo: 32, collision: 16, fire_chance: 0,
         max_speed: 8, energy: 17, cash: 0,

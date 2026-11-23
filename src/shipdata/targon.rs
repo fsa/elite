@@ -9,6 +9,7 @@ pub(super) static SHIP_D_TARGON: Ship = Ship {
     full_name: "Thargoid",
     addr: 0x6325,
     category: 3,
+    tintable: true,
     stats: Stats {
         cargo: 0, collision: 99, fire_chance: 255,
         max_speed: 39, energy: 240, cash: 500,

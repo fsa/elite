@@ -109,6 +109,7 @@ fn nearer_face_color_wins_over_farther_one() {
         full_name: "Two Faces",
         addr: 0,
         category: 0,
+        tintable: true,
         stats: unsafe { std::mem::zeroed() },
         vertices: &VERTS,
         edges: &EDGES,
@@ -137,8 +138,8 @@ fn nearer_face_color_wins_over_farther_one() {
 #[test]
 fn tint_keeps_original_brightness_and_changes_all_hull_faces() {
     assert_eq!(
-        SHIP_FACE_COLOR, 0xFF20_2832,
-        "базовая заливка должна остаться как в оригинале"
+        SHIP_FACE_COLOR, 0xFF14_1820,
+        "базовая заливка должна остаться тёмной"
     );
 
     let tint = ShipTint::from_seed(5);

@@ -9,6 +9,7 @@ pub(super) static SHIP_D_ASTEROID1: Ship = Ship {
     full_name: "Rock Hermit",
     addr: 0x626d,
     category: 2,
+    tintable: false,
     stats: Stats {
         cargo: 7, collision: 80, fire_chance: 80,
         max_speed: 30, energy: 180, cash: 0,

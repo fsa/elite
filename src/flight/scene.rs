@@ -290,8 +290,8 @@ pub(super) fn slot_pose(mem: &[u8], base: usize) -> Option<([f32; 3], f32)> {
 /// рисуется целым кораблём — вместо него показывается облако частиц.
 /// Ориентация хранится двумя осями: ось Z модели — по `+0x0A/0C/0E`,
 /// ось Y — по `+0x10/12/14` (знаковые байты), ось X достраивается как
-/// `Y × Z`. Оттенок получают только боевые корабли и их обломки;
-/// станция и ракета остаются исходных цветов.
+/// `Y × Z`. Оттенок получают только модели с признаком `tintable`;
+/// станция, ракеты и прочие объекты остаются исходных цветов.
 fn push_z80_slot(
     bodies: &mut Vec<Body>,
     mem: &[u8],
@@ -310,7 +310,7 @@ fn push_z80_slot(
     let Some((model, pos)) = slot_object(mem, base) else {
         return;
     };
-    let tint = tintable.then(|| tints.assign(source, model));
+    let tint = (tintable && model.tintable).then(|| tints.assign(source, model));
     let z_axis = [
         memory::read_signed8(mem[base + 0x0A]),
         memory::read_signed8(mem[base + 0x0C]),

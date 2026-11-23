@@ -9,6 +9,7 @@ pub(super) static SHIP_D_ASP: Ship = Ship {
     full_name: "Asp Mk II",
     addr: 0x62f7,
     category: 4,
+    tintable: true,
     stats: Stats {
         cargo: 0, collision: 60, fire_chance: 250,
         max_speed: 40, energy: 150, cash: 200,

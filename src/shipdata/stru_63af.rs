@@ -11,6 +11,7 @@ pub(super) static SHIP_STRU_63AF: Ship = Ship {
     full_name: "Kladov Scout",
     addr: 0x63af,
     category: 4,
+    tintable: true,
     stats: Stats {
         cargo: 2, collision: 30, fire_chance: 152,
         max_speed: 34, energy: 140, cash: 100,

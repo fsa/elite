@@ -64,7 +64,8 @@ impl Splash {
     /// В режиме отладки добавляются остальные уникальные модели из
     /// [`shipdata::SHIPS`]. Как и в оригинале, смена корабля заново выставляет
     /// СКО из `SKO4Intro`, поэтому поворот начинается с исходного ракурса.
-    /// Новая модель получает следующий псевдослучайный оттенок металла.
+    /// Модель с признаком `tintable` получает следующий псевдослучайный тон;
+    /// у остальных моделей цвет остаётся фиксированным.
     pub fn cycle_ship(&mut self, dir: i32) {
         let step = if dir < 0 { -1 } else { 1 };
         if self.cycle.is_empty() {
@@ -81,9 +82,10 @@ impl Splash {
             .iter()
             .position(|s| s.name == name)
             .unwrap_or(0);
+        let model = &shipdata::SHIPS[idx];
         self.index = idx;
-        self.ship = Some(&shipdata::SHIPS[idx]);
-        self.tint = next_tint(&mut self.tint_seed);
+        self.ship = Some(model);
+        self.tint = model.tintable.then(|| next_tint(&mut self.tint_seed));
         self.rot = Rotation::intro();
     }
 }

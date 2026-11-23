@@ -9,6 +9,7 @@ pub(super) static SHIP_DSIDEWINDERH: Ship = Ship {
     full_name: "Sidewinder",
     addr: 0x633c,
     category: 4,
+    tintable: true,
     stats: Stats {
         cargo: 0, collision: 65, fire_chance: 130,
         max_speed: 37, energy: 70, cash: 50,

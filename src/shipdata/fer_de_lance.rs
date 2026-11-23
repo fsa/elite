@@ -9,6 +9,7 @@ pub(super) static SHIP_D_FERDELANCE: Ship = Ship {
     full_name: "Fer-de-Lance",
     addr: 0x630e,
     category: 3,
+    tintable: true,
     stats: Stats {
         cargo: 0, collision: 40, fire_chance: 255,
         max_speed: 30, energy: 160, cash: 0,

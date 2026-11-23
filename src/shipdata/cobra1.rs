@@ -9,6 +9,7 @@ pub(super) static SHIP_D_COBRA1: Ship = Ship {
     full_name: "Cobra Mk III",
     addr: 0x629b,
     category: 2,
+    tintable: true,
     stats: Stats {
         cargo: 3, collision: 95, fire_chance: 140,
         max_speed: 28, energy: 150, cash: 0,

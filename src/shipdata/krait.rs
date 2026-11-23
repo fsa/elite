@@ -9,6 +9,7 @@ pub(super) static SHIP_D_KRAIT: Ship = Ship {
     full_name: "Krait",
     addr: 0x63dd,
     category: 4,
+    tintable: true,
     stats: Stats {
         cargo: 1, collision: 60, fire_chance: 110,
         max_speed: 30, energy: 80, cash: 20,

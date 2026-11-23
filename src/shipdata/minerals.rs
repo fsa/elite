@@ -9,6 +9,7 @@ pub(super) static SHIP_D_MINERALS: Ship = Ship {
     full_name: "Minerals",
     addr: 0x623f,
     category: 1,
+    tintable: false,
     stats: Stats {
         cargo: 176, collision: 16, fire_chance: 0,
         max_speed: 10, energy: 20, cash: 0,

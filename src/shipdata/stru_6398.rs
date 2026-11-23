@@ -11,6 +11,7 @@ pub(super) static SHIP_STRU_6398: Ship = Ship {
     full_name: "Kladov Interceptor",
     addr: 0x6398,
     category: 2,
+    tintable: true,
     stats: Stats {
         cargo: 0, collision: 40, fire_chance: 254,
         max_speed: 39, energy: 144, cash: 250,

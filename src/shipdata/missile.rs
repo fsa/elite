@@ -9,6 +9,7 @@ pub(super) static SHIP_D_MISSILE: Ship = Ship {
     full_name: "Missile",
     addr: 0x61e3,
     category: 0,
+    tintable: false,
     stats: Stats {
         cargo: 0, collision: 40, fire_chance: 0,
         max_speed: 44, energy: 2, cash: 0,

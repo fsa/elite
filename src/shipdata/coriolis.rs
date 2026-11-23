@@ -13,6 +13,7 @@ pub(super) static SHIP_D_CORIOLIS: Ship = Ship {
     full_name: "Coriolis Station",
     addr: 0x63c6,
     category: 0,
+    tintable: false,
     stats: Stats {
         cargo: 0, collision: 160, fire_chance: 0,
         max_speed: 0, energy: 240, cash: 0,

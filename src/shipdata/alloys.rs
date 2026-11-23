@@ -14,6 +14,7 @@ pub(super) static SHIP_D_ALLOYS: Ship = Ship {
     full_name: "Alloy Plate",
     addr: 0x6211,
     category: 1,
+    tintable: true,
     stats: Stats {
         cargo: 128, collision: 10, fire_chance: 0,
         max_speed: 16, energy: 16, cash: 0,

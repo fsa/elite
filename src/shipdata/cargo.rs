@@ -9,6 +9,7 @@ pub(super) static SHIP_D_CARGO: Ship = Ship {
     full_name: "Cargo Canister",
     addr: 0x6228,
     category: 1,
+    tintable: false,
     stats: Stats {
         cargo: 0, collision: 20, fire_chance: 0,
         max_speed: 15, energy: 17, cash: 0,
