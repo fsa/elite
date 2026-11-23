@@ -43,7 +43,7 @@ fn values(missiles: u8) -> CockpitValues {
         compass_station: CompassCircle::hidden(),
         compass_sun: CompassCircle::hidden(),
         in_free_space: false,
-        compass_overlap_phase: true,
+        compass_blink_phase: true,
         radar: RadarContacts::empty(),
         station_near: false,
         ecm_on: false,
@@ -740,6 +740,8 @@ fn compass_in_free_space_draws_original_glyphs() {
     let draw = |glyph: CompassGlyph| {
         let mut v = values(MISSILE_SLOTS as u8);
         v.in_free_space = true;
+        // Фаза выбирает пару знаков: солнце (`N/S`) или планету (`W/E`).
+        v.compass_blink_phase = matches!(glyph, CompassGlyph::SunFront | CompassGlyph::SunBack);
         v.compass = Compass {
             x: 0,
             y: 0,
@@ -771,6 +773,49 @@ fn compass_in_free_space_draws_original_glyphs() {
             "в космосе компас не должен рисовать зелёный круг"
         );
     }
+}
+
+/// В межпланетном пространстве фаза мигания переключает знаки солнца и
+/// планеты. После выхода из него знаки исчезают, а круг цели снова зелёный.
+#[test]
+fn compass_free_space_blinking_stops_on_exit() {
+    let font = font();
+    let g = panel_geometry(1280, 960);
+    let cell = g.compass_cell();
+    let unit = (cell.w.min(cell.h) / 20).max(1);
+    let cx = cell.x + cell.w / 2;
+    let cy = cell.y + cell.h / 2;
+    let draw = |free: bool, phase: bool| {
+        let mut v = values(MISSILE_SLOTS as u8);
+        v.in_free_space = free;
+        v.compass_blink_phase = phase;
+        v.compass = Compass {
+            x: 0,
+            y: 0,
+            glyph: CompassGlyph::SunFront,
+            visible: true,
+        };
+        let mut f = Frame::new(1280, 960);
+        Cockpit::new().draw(&mut f, &font, CockpitStyle::COBRA_MK3, &v);
+        f
+    };
+    let px = |f: &Frame, x: i32, y: i32| f.pixels()[y as usize * 1280 + x as usize];
+    // Эти точки есть только в `CompassInd_N` и только в `CompassInd_W`.
+    let north = (cx, cy - 2 * unit);
+    let west = (cx - 4 * unit, cy);
+
+    let sun = draw(true, true);
+    assert_eq!(px(&sun, north.0, north.1), FRAME_COLOR);
+    assert_eq!(px(&sun, west.0, west.1), BACKGROUND);
+
+    let planet = draw(true, false);
+    assert_eq!(px(&planet, north.0, north.1), BACKGROUND);
+    assert_eq!(px(&planet, west.0, west.1), FRAME_COLOR);
+
+    let in_system = draw(false, false);
+    assert_ne!(px(&in_system, north.0, north.1), FRAME_COLOR);
+    assert_ne!(px(&in_system, west.0, west.1), FRAME_COLOR);
+    assert_eq!(px(&in_system, cx, cy), COMPASS_PLANET);
 }
 
 /// Компас берёт готовый указатель из переменных `PrintCompass`, а не
@@ -895,14 +940,17 @@ fn compass_draws_colored_bodies_without_blinking() {
     let pointer_px = (cx, cy - 9 * unit);
 
     // Обычный режим: планета зелёная, а при появлении станции тот же круг
-    // становится обычного белого цвета.
+    // становится синеватым — как круг станции в дополнительном режиме.
     let normal = draw(CompassView::Pointer, false);
     assert_eq!(px(&normal, pointer_px.0, pointer_px.1), COMPASS_PLANET);
     assert_eq!(px(&normal, planet_px.0, planet_px.1), BACKGROUND);
     assert_eq!(px(&normal, station_px.0, station_px.1), BACKGROUND);
     assert_eq!(px(&normal, sun_px.0, sun_px.1), BACKGROUND);
     let station_mode = draw(CompassView::Pointer, true);
-    assert_eq!(px(&station_mode, pointer_px.0, pointer_px.1), FRAME_COLOR);
+    assert_eq!(
+        px(&station_mode, pointer_px.0, pointer_px.1),
+        COMPASS_STATION
+    );
 
     // Дополнительный режим: при наличии станции показываем только её,
     // планету и солнце скрываем.
@@ -952,7 +1000,7 @@ fn compass_blinks_only_when_sun_and_planet_overlap() {
         let mut v = values(MISSILE_SLOTS as u8);
         v.compass_planet = circle(planet_x, false);
         v.compass_sun = circle(sun_x, false);
-        v.compass_overlap_phase = phase;
+        v.compass_blink_phase = phase;
         let mut f = Frame::new(1280, 960);
         Cockpit::new().draw_with_geom_views(
             &mut f,

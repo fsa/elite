@@ -506,9 +506,15 @@ impl App<'_> {
                     let values = {
                         let mut values = cockpit::KLADOV_COCKPIT.read(&self.machine.mem);
                         values.blink = (self.machine.frames / 16) % 2 == 0;
-                        values.compass_overlap_phase = if values.compass_bodies_overlap() {
-                            (self.visual_phase_start.elapsed().as_millis() / COMPASS_BLINK_MS)
-                                % 2
+                        // В межпланетном пространстве мигают «стороны света»,
+                        // внутри системы — только наложенные круги солнца и
+                        // планеты. После вылета из межпланетного пространства
+                        // фаза больше не нужна: компас возвращается к обычным
+                        // цветам и не мигает.
+                        values.compass_blink_phase = if values.in_free_space
+                            || values.compass_bodies_overlap()
+                        {
+                            (self.visual_phase_start.elapsed().as_millis() / COMPASS_BLINK_MS) % 2
                                 == 0
                         } else {
                             true

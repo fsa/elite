@@ -161,7 +161,7 @@ impl CockpitLayout {
             compass_station: station,
             compass_sun: circle(self.sun_crd),
             in_free_space,
-            compass_overlap_phase: true,
+            compass_blink_phase: true,
             radar: self.read_radar(mem),
             station_near: byte(self.coriolis_near) != 0,
             ecm_on: byte(self.ecm_time) != 0,
