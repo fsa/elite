@@ -23,7 +23,7 @@ use crate::keys::{MATRIX_MAP, kempston_bit, matrix_pos};
 use crate::machine::Spectrum;
 use crate::native;
 use crate::splash;
-use crate::ui::menu::draw_pause_menu;
+use crate::ui::menu::{draw_pause_menu, menu_rect};
 use crate::ui::present::{
     DebugView, SRC_H, SRC_W, blit_zx_frame, debug_button_at, debug_button_rects, draw_debug_panel,
     save_editor_button_at, save_editor_button_rect,
@@ -70,27 +70,28 @@ use crate::world::{
         draw_pause_menu(&mut hd, font, 0, false);
 
         const WHITE: u32 = 0xFFD7_D7D7;
-        // Угол рамки панели (ZX 40,52 -> HD 200,260) — белый.
+        const BG: u32 = 0xFF00_0000;
+        let r = menu_rect(1280, 960);
+        let at = |x: usize, y: usize| hd.pixels()[y * 1280 + x];
+        // Панель по центру кадра, её рамка — белая, а фон непрозрачный.
         assert_eq!(
-            hd.pixels()[260 * 1280 + 200],
+            at(r.x as usize, r.y as usize),
             WHITE,
             "panel border not drawn"
+        );
+        assert_eq!(
+            at(r.x as usize + 15, r.y as usize + 15),
+            BG,
+            "panel bg not opaque"
         );
         // Внутри панели нарисован текст: заметное число белых пикселей.
         let white = hd.pixels().iter().filter(|&&p| p == WHITE).count();
         assert!(white > 5000, "menu text too sparse: white={white}");
-        // Панель непрозрачная (старший байт != 0), фон слоя — прозрачный.
-        assert_eq!(
-            hd.pixels()[261 * 1280 + 201],
-            0xFF00_0000,
-            "panel bg not opaque"
-        );
         assert_eq!(
             hd.pixels()[0],
             display::TRANSPARENT,
             "outside panel must stay transparent"
         );
-
         // Композитинг поверх масштабированного ZX-кадра действительно меняет картинку.
         let mut zx = vec![0u32; 256 * 192];
         m.render_rgba(&mut zx);
@@ -103,11 +104,33 @@ use crate::world::{
         let before = out.clone();
         hd.composite_onto(&mut out, 1280, 960, 0, 0);
         assert!(out != before, "overlay did not change the frame");
-        assert_eq!(out[260 * 1280 + 200], WHITE, "overlay not composited");
+        assert_eq!(
+            out[r.y as usize * 1280 + r.x as usize],
+            WHITE,
+            "overlay not composited"
+        );
 
         if let Ok(path) = env::var("ELITE_DUMP_MENU") {
             write_ppm(&path, &out, 1280, 960);
         }
+    }
+
+    /// На заставке пункт сохранения виден серым, но не выделяется, даже если
+    /// внутренний выбор на него указывает. В игре тот же пункт выделяется как обычно.
+    #[test]
+    fn pause_menu_dimmed_save_is_visible_but_not_selected() {
+        let mut hd = display::Frame::new(1280, 960);
+        const DIM: u32 = 0xFF80_8080;
+        const SELECT_BG: u32 = 0xFF00_5458;
+
+        draw_pause_menu(&mut hd, ZX_FONT, 1, true);
+        let px = hd.pixels();
+        assert!(px.contains(&DIM), "недоступный пункт должен быть виден");
+        assert!(!px.contains(&SELECT_BG), "недоступный пункт не выделяется");
+
+        draw_pause_menu(&mut hd, ZX_FONT, 1, false);
+        let px = hd.pixels();
+        assert!(px.contains(&SELECT_BG), "в игре пункт выделяется");
     }
 
     /// Физические клавиши раскладываются по матрице ZX Spectrum без зависимости
@@ -2287,13 +2310,30 @@ use crate::world::{
         app.machine.save_requested = false;
         app.key_event(KeyCode::Escape, true, false);
         assert!(app.menu);
-        // Пункт «сохранить» (1) на заставке не срабатывает.
+        // На заставке «SAVE» остаётся видимым, но недоступным: цифра 2 и
+        // стрелки его пропускают.
+        app.key_event(KeyCode::Digit2, true, false);
+        assert_eq!(
+            app.menu_sel, 0,
+            "цифра 2 не должна выбирать недоступный пункт"
+        );
+        app.key_event(KeyCode::ArrowDown, true, false);
+        assert_eq!(app.menu_sel, 2, "стрелка должна перепрыгнуть через SAVE");
+        for _ in 0..2 {
+            app.key_event(KeyCode::ArrowDown, true, false);
+        }
+        assert_eq!(app.menu_sel, 3, "выбор не должен уходить ниже последнего пункта");
+        app.key_event(KeyCode::Digit4, true, false);
+        assert_eq!(app.menu_sel, 3);
+        // Enter на затемнённом пункте ничего не делает.
         app.menu_sel = 1;
         app.key_event(KeyCode::Enter, true, false);
-        assert!(app.menu, "на заставке сохранение не должно закрывать меню");
+        app.key_event(KeyCode::Enter, false, false);
+        assert!(app.menu, "недоступный пункт не должен закрывать меню");
         assert!(!app.machine.save_requested, "на заставке сохранять нельзя");
-        // Пункт «загрузить» (2) работает: просит загрузку у игры.
-        app.menu_sel = 2;
+        assert!(!app.machine.load_requested, "недоступный пункт не загружает");
+        // Загрузка по цифре 3 работает.
+        app.key_event(KeyCode::Digit3, true, false);
         app.key_event(KeyCode::Enter, true, false);
         app.key_event(KeyCode::Enter, false, false);
         assert!(!app.menu, "загрузка должна закрыть меню");
@@ -2495,15 +2535,15 @@ use crate::world::{
         }
     }
 
-    /// Меню паузы рисует затемнённый пункт SAVE на заставке.
+    /// Меню паузы рисует видимый затемнённый пункт SAVE на заставке.
     #[test]
     fn intro_pause_menu_dims_save() {
         let font = ZX_FONT;
-        // Цвета пунктов SAVE: затемнённый на заставке и обычный в игре.
+        // Цвета пунктов SAVE: непрозрачный серый на заставке и белый в игре.
         let counts = |intro: bool| {
             let mut hd = display::Frame::new(256 * 5, 192 * 5);
             draw_pause_menu(&mut hd, font, 0, intro);
-            let dim = hd.pixels().iter().filter(|&&p| p == 0x0080_8080).count();
+            let dim = hd.pixels().iter().filter(|&&p| p == 0xFF80_8080).count();
             let white = hd.pixels().iter().filter(|&&p| p == 0xFFD7_D7D7).count();
             (dim, white)
         };

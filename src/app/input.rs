@@ -1227,26 +1227,41 @@ impl App<'_> {
 
     /// Обработка клавиш в меню паузы (Esc). Пункты: 0 — продолжить,
     /// 1 — сохранить, 2 — загрузить, 3 — выйти. На заставке сохранение
-    /// отключено (игрового процесса ещё нет), загрузка разрешена: данные
-    /// ложатся в блок командира, и запуск по `SPACE` начнёт игру с ними.
+    /// недоступно: пункт остаётся видимым, но стрелки и цифра `2` его
+    /// пропускают, а `Enter` не действует. Загрузка разрешена и на заставке:
+    /// данные ложатся в блок командира, и запуск по `SPACE` начнёт игру с ними.
     fn menu_key(&mut self, code: KeyCode) {
         let intro = self.machine.intro_seen;
+        let selectable = |i: usize| !intro || i != 1;
         match code {
             KeyCode::Escape => self.menu = false,
-            KeyCode::ArrowUp => self.menu_sel = self.menu_sel.saturating_sub(1),
-            KeyCode::ArrowDown => self.menu_sel = (self.menu_sel + 1).min(3),
+            KeyCode::ArrowUp => {
+                while self.menu_sel > 0 {
+                    self.menu_sel -= 1;
+                    if selectable(self.menu_sel) {
+                        break;
+                    }
+                }
+            }
+            KeyCode::ArrowDown => {
+                while self.menu_sel < 3 {
+                    self.menu_sel += 1;
+                    if selectable(self.menu_sel) {
+                        break;
+                    }
+                }
+            }
             KeyCode::Digit1 => self.menu_sel = 0,
-            KeyCode::Digit2 => self.menu_sel = 1,
+            KeyCode::Digit2 if !intro => self.menu_sel = 1,
             KeyCode::Digit3 => self.menu_sel = 2,
             KeyCode::Digit4 => self.menu_sel = 3,
             KeyCode::Enter | KeyCode::Space => match self.menu_sel {
                 0 => self.menu = false,
-                1 => {
-                    if !intro {
-                        storage::do_save(&mut self.machine, self.opts, &mut self.last_path);
-                        self.menu = false;
-                    }
+                1 if !intro => {
+                    storage::do_save(&mut self.machine, self.opts, &mut self.last_path);
+                    self.menu = false;
                 }
+                1 => {} // недоступный пункт «SAVE» на заставке
                 2 => {
                     storage::do_load(&mut self.machine, self.opts, &mut self.last_path);
                     self.menu = false;
