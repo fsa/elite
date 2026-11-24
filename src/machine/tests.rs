@@ -129,6 +129,22 @@ fn game_state_is_snapshot_taken_at_pass_end() {
 }
 
 #[test]
+fn game_state_is_snapshot_taken_at_transition_marker() {
+    let mut m = Spectrum::new(None);
+    m.transition_snapshot_marker = Some(0x92B3);
+    m.mem[0x7000] = 0x11;
+    assert_eq!(m.game_state()[0x7000], 0x11, "до ролика нужна живая память");
+
+    m.note_pc(0x92B3);
+    assert!(m.game_snapshot_valid);
+    m.mem[0x7000] = 0x22;
+    assert_eq!(
+        m.game_state()[0x7000], 0x11,
+        "снимок начала ролика должен хранить состояние перед тоннелем"
+    );
+}
+
+#[test]
 fn run_frames_advances_double_and_keeps_audio_rate() {
     let mut m = Spectrum::new(None);
     let prog = [

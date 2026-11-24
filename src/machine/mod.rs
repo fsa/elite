@@ -82,12 +82,17 @@ pub struct Spectrum {
     /// `GameMain`: иначе нативный слой отставал бы от смены объектов на целый
     /// проход — корабль у станции сменялся бы планетой с задержкой.
     pub snapshot_marker: Option<u16>,
+    /// Адрес начала ролика перехода (`sub_9296`), где игра уже создала новую
+    /// систему, но до конца ролика больше не возвращается в `PrintCompass`.
+    /// Без этого снимка нативный тоннель показывал бы прежнюю систему.
+    pub transition_snapshot_marker: Option<u16>,
     /// Снимок памяти на [`Spectrum::snapshot_marker`]. Граница кадра эмулятора
     /// может пройти в середине прохода игры: тогда часть объектов уже
     /// обновлена, а часть ещё нет. Нативный слой читает этот снимок, чтобы
     /// видеть всегда законченный проход, а не смесь двух проходов.
     pub game_snapshot: Vec<u8>,
-    /// Был ли уже снимок в точке [`Spectrum::snapshot_marker`].
+    /// Был ли уже снимок в одной из точек [`Spectrum::snapshot_marker`] или
+    /// [`Spectrum::transition_snapshot_marker`].
     pub game_snapshot_valid: bool,
     /// Игра сейчас на заставке (интро). Пока игра на заставке, нативные
     /// экраны (карта/закупка) не открываются — как и у оригинальных команд.
@@ -188,6 +193,7 @@ impl Spectrum {
             intro_range: None,
             game_marker: None,
             snapshot_marker: None,
+            transition_snapshot_marker: None,
             game_snapshot: vec![0; MEM_SIZE],
             game_snapshot_valid: false,
             intro_seen: false,
@@ -298,10 +304,15 @@ impl Spectrum {
     /// заставки, которые вызывают длинные рутины вне её диапазона.
     #[inline]
     pub fn note_pc(&mut self, pc: u16) {
-        if self.snapshot_marker == Some(pc) {
+        if self.snapshot_marker == Some(pc) || self.transition_snapshot_marker == Some(pc) {
             // `PrintCompass` вызывается в конце прохода `GameMain`: координаты,
             // созданные/удалённые объекты и рисунок уже полностью обновлены.
             // Снимок в этой точке не отстаёт от игры на целый проход.
+            //
+            // Вторая точка — начало ролика `sub_9296`. Гиперпрыжок создаёт
+            // новую систему прямо перед этим вызовом, а сам ролик не
+            // возвращается в `PrintCompass` до своего конца. Без снимка здесь
+            // нативный тоннель показывал бы последний кадр перед прыжком.
             self.game_snapshot.copy_from_slice(&self.mem);
             self.game_snapshot_valid = true;
         }
@@ -315,8 +326,8 @@ impl Spectrum {
         }
     }
 
-    /// Состояние игры в последнем [`Spectrum::snapshot_marker`], откуда его
-    /// безопасно читать нативному слою. До первого прохода — обычная память.
+    /// Состояние игры в последней точке снимка, откуда его безопасно читать
+    /// нативному слою. До первого прохода — обычная память.
     pub fn game_state(&self) -> &[u8] {
         if self.game_snapshot_valid {
             &self.game_snapshot

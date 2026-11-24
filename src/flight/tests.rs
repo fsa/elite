@@ -1661,6 +1661,7 @@ fn launch_kladov() -> crate::machine::Spectrum {
     m.intro_range = Some((0x739E, 0x73FD));
     m.game_marker = Some(0x7471);
     m.snapshot_marker = Some(0x81A9);
+    m.transition_snapshot_marker = Some(crate::world::transition_snapshot_marker());
 
     for _ in 0..30 {
         m.run_frame();
@@ -1758,6 +1759,62 @@ fn hyperspace_countdown_uses_live_memory_over_stale_scene_snapshot() {
     f.sync_transition_from_live(&live);
     let t = f.transition.current.expect("переход пропал");
     assert!(t.warp, "тоннель не начался после обнуления отсчёта");
+}
+
+/// Оригинал создаёт новую систему перед вызовом `sub_9296`, а весь ролик
+/// кругов выполняется в его собственном цикле — до `PrintCompass` дело не
+/// доходит. Снимок на входе в ролик должен сразу дать нативному тоннелю новую
+/// сцену, иначе на выходе из него остаётся последний кадр перед прыжком.
+#[test]
+fn hyperspace_tunnel_uses_new_system_from_transition_snapshot() {
+    let mut m = launch_kladov();
+    m.mem[0xD082] = 0x46; // Pilot_Fuel
+    m.mem[0xD08D] = 1; // PilotGyperdrive
+    for key in [winit::keyboard::KeyCode::KeyG, winit::keyboard::KeyCode::KeyH] {
+        if let Some((row, bit)) = crate::keys::matrix_pos(key) {
+            m.keyboard[row] &= !(1 << bit);
+        }
+    }
+    let planet_crd = |mem: &[u8]| {
+        let mut crd = [0u8; 9];
+        crd.copy_from_slice(&mem[Z80_PLANET_CRD..Z80_PLANET_CRD + 9]);
+        crd
+    };
+    let old_planet = planet_crd(m.game_state());
+    let mut f = open();
+    let mut new_planet = None;
+    for _ in 0..700 {
+        m.run_frame();
+        f.follow_z80_screen(&m.mem, false);
+        f.sync_from_z80(m.game_state());
+        f.sync_transition_from_live(&m.mem);
+        f.tick(0.02);
+
+        if m.mem[Z80_FLG_JUMP_DOCKING] != 0 && new_planet.is_none() {
+            let crd = planet_crd(&m.mem);
+            assert_ne!(crd, old_planet, "после прыжка не появилась новая система");
+            assert_eq!(
+                planet_crd(m.game_state()),
+                crd,
+                "снимок на входе в тоннель хранит прежнюю систему"
+            );
+            assert!(
+                f.transition.current.is_some_and(|t| t.warp),
+                "нативный тоннель не начался вместе с Z80-роликом"
+            );
+            new_planet = Some(crd);
+        }
+        if new_planet.is_some() && f.transition.current.is_none() {
+            assert_eq!(m.mem[Z80_JUMP_DOCKING], 0, "ролик Z80 ещё не закончился");
+            assert_eq!(
+                planet_crd(m.game_state()),
+                new_planet.unwrap(),
+                "на выходе из тоннеля показывается прежняя система"
+            );
+            return;
+        }
+    }
+    panic!("нативный тоннель гиперпрыжка не закончился");
 }
 
 #[test]

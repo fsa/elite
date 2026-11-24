@@ -88,6 +88,7 @@ pub fn machine(opts: &Options) -> Spectrum {
     machine.intro_range = intro;
     machine.game_marker = game_start;
     machine.snapshot_marker = Some(world::snapshot_marker());
+    machine.transition_snapshot_marker = Some(world::transition_snapshot_marker());
     // Образ снапшота уже содержит `IndDanger = 0`, то есть формально корабль
     // «пристыкован», хотя эмулятор ещё не исполнил ни одного кадра интро.
     // Без явного признака заставки приложение захватило бы управление станцией
