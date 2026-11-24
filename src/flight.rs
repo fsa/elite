@@ -43,8 +43,8 @@ use crate::render3d::Rotation;
 use self::combat::Combat;
 use self::explosions::Explosions;
 use self::memory::{
-    Z80_HIGH_DELTA_SPEED, Z80_MEM_MIN, Z80_OBJ_CORIOLIS, Z80_OBJ_MISSILE, Z80_OBJ_SLOT0,
-    Z80_PLANET_CRD, Z80_SPEED_GAUGE, Z80_STARS_FAST_SCROLL, Z80_SUN_CRD,
+    Z80_HIGH_DELTA_SPEED, Z80_MEM_MIN, Z80_OBJ_MISSILE, Z80_OBJ_SLOT0, Z80_PLANET_CRD,
+    Z80_SPEED_GAUGE, Z80_STARS_FAST_SCROLL, Z80_SUN_CRD,
 };
 use self::messages::Messages;
 use self::palette::{planet_green, PLANET_COLOR};
@@ -53,23 +53,23 @@ use self::stars::{
     StarField, SPEED_MAX, STAR_ANGLE_DU_PER_UNIT, STAR_ANGLE_LR_PER_UNIT, STAR_COUNT,
 };
 
-/// Снимок состояния, по которому различается шаг модели Z80.
+/// Снимок координат, по которому различается шаг модели Z80.
 ///
-/// Координаты меняются при движении объектов, углы — когда `CalcAngSpeed4Prn`
-/// пересчитывает управление. Крен не всегда сдвигает координаты: планета на
-/// оси `Z` при повороте вокруг неё остаётся на месте, но звёзды должны крутиться.
+/// В него входят только тела, пересчитываемые в одном проходе `GameMain`
+/// (`CalcCrdSunPlanet` и слоты). Корабли, солнце и планета меняются на шаге
+/// модели, поэтому именно их смена и есть такт. Углы `HighAngleLR/DU` — это
+/// скорость на такт, а не сам такт: они меняются реже. Анимация Coriolis
+/// (`objCoriolis`) идёт со своим смещённым таймером, и её смена — ложный такт:
+/// на ней поворот камеры применялся повторно к уже повёрнутым координатам.
 #[derive(PartialEq)]
-struct TickState {
+struct TickPositions {
     slots: [[u8; 9]; 6],
     missile: [u8; 9],
-    coriolis: [u8; 9],
     sun: [u8; 9],
     planet: [u8; 9],
-    angle_lr: u8,
-    angle_du: u8,
 }
 
-fn tick_state(mem: &[u8]) -> TickState {
+fn tick_positions(mem: &[u8]) -> TickPositions {
     let mut slots = [[0u8; 9]; 6];
     for (i, slot) in slots.iter_mut().enumerate() {
         let addr = Z80_OBJ_SLOT0 + i * self::memory::Z80_SLOT_SIZE;
@@ -77,20 +77,15 @@ fn tick_state(mem: &[u8]) -> TickState {
     }
     let mut missile = [0u8; 9];
     missile.copy_from_slice(&mem[Z80_OBJ_MISSILE..Z80_OBJ_MISSILE + 9]);
-    let mut coriolis = [0u8; 9];
-    coriolis.copy_from_slice(&mem[Z80_OBJ_CORIOLIS..Z80_OBJ_CORIOLIS + 9]);
     let mut sun = [0u8; 9];
     sun.copy_from_slice(&mem[Z80_SUN_CRD..Z80_SUN_CRD + 9]);
     let mut planet = [0u8; 9];
     planet.copy_from_slice(&mem[Z80_PLANET_CRD..Z80_PLANET_CRD + 9]);
-    TickState {
+    TickPositions {
         slots,
         missile,
-        coriolis,
         sun,
         planet,
-        angle_lr: mem[Z80_HIGH_ANGLE_LR],
-        angle_du: mem[Z80_HIGH_ANGLE_DU],
     }
 }
 use self::transition::TransitionState;
@@ -148,8 +143,8 @@ pub struct Flight {
     /// открыт, а `WhatOnScreen` ещё равен станционному `0x0B`, не закрываем его
     /// до первого полётного кадра.
     seen_flight_screen: bool,
-    /// Снимок состояния Z80: его смена означает шаг модели.
-    prev_tick_state: Option<TickState>,
+    /// Снимок координат Z80: его смена означает шаг модели.
+    prev_tick_positions: Option<TickPositions>,
     /// В памяти был замечен взвод `StarsFastScroll` (J-драйв).
     z80_fast_scroll: bool,
     /// Скорость в единицах `HighDeltaSpeed` (`0..=31`) — темп звёзд.
@@ -211,7 +206,7 @@ impl Flight {
             active: false,
             view_dir: ViewDir::Forward,
             seen_flight_screen: false,
-            prev_tick_state: None,
+            prev_tick_positions: None,
             z80_fast_scroll: false,
             speed: 0.0,
             speed_resync: false,
@@ -241,7 +236,7 @@ impl Flight {
         self.active = true;
         self.view_dir = ViewDir::Forward;
         self.seen_flight_screen = false;
-        self.prev_tick_state = None;
+        self.prev_tick_positions = None;
         self.z80_fast_scroll = false;
         self.speed = 0.0;
         self.speed_resync = false;
@@ -479,26 +474,24 @@ impl Flight {
             self.view_dir = ViewDir::Forward;
         }
 
-        // Координаты и углы пересчитываются в игровом цикле Z80, а не на
-        // каждом кадре эмулятора. Признак шага — смена координат объектов или
-        // углов: крен не всегда двигает объекты (планета на оси Z), но звёзды
-        // должны поворачиваться. Таблица `byte_7A39` (`PrintStars`) обновляется
-        // чаще модели, и её использование как «такта» заставляло применять
-        // поворот камеры к уже повёрнутым координатам — планеты и корабли
-        // дёргались.
+        // Координаты тел пересчитываются в игровом цикле Z80, а не на каждом
+        // кадре эмулятора. Признак шага — смена координат самих тел. Ни
+        // таблица звёзд (`byte_7A39`), ни анимация Coriolis, ни углы
+        // `HighAngleLR/DU` не годятся: все они меняются со своим таймером, и
+        // ложный такт повторно применяет поворот камеры к уже повёрнутым
+        // координатам — планеты и корабли начинают дёргаться.
         if mem[Z80_STARS_FAST_SCROLL] == 1 {
             self.z80_fast_scroll = true;
         }
 
-        // Сцена ещё не собрана: для определения шага берём те же слоты Z80,
-        // откуда берутся тела (`Z80_OBJ_SLOT0`, планета/солнце, станция), и
-        // углы. Таблица звёзд не годится: она меняется чаще модели.
-        let state = tick_state(mem);
+        // Сцена ещё не собрана: для определения шага берём те же координаты
+        // Z80, откуда берутся тела (`Z80_OBJ_SLOT0`, солнце, планета).
+        let positions = tick_positions(mem);
         let ticked = self
-            .prev_tick_state
+            .prev_tick_positions
             .as_ref()
-            .is_some_and(|prev| prev != &state);
-        self.prev_tick_state = Some(state);
+            .is_some_and(|prev| prev != &positions);
+        self.prev_tick_positions = Some(positions);
         let prev_bodies_snapshot = self.bodies.clone();
 
         // Поворот за один игровой такт нужен и звёздам, и телам:

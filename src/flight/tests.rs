@@ -214,10 +214,9 @@ fn planet_does_not_jitter_when_only_star_table_changes() {
         .expect("планета не прочитана")
         .pos;
 
-    // Кадр эмулятора, на котором изменилась таблица звёзд и углы, но Z80 ещё
-    // не пересчитал координаты планеты. Поворот камеры не должен сдвинуть её.
+    // Кадр эмулятора, на котором изменилась только таблица звёзд: Z80 ещё не
+    // пересчитал координаты планеты. Поворот камеры не должен сдвинуть её.
     mem[Z80_STARS_TABLE] = mem[Z80_STARS_TABLE].wrapping_add(1);
-    mem[Z80_HIGH_ANGLE_LR] = 0x40;
     f.sync_from_z80(&mem);
     let after = f
         .render_bodies()
@@ -256,22 +255,34 @@ fn sync_captures_camera_turn_only_on_game_tick() {
 }
 
 #[test]
-fn angle_change_counts_as_game_tick() {
+fn coriolis_change_does_not_count_as_game_tick() {
     let mut f = open();
     let mut mem = z80_mem_with_flight();
     f.sync_from_z80(&mem);
 
-    // При чистом крене координаты планеты на оси Z не меняются, но углы
-    // `CalcAngSpeed4Prn` пересчитаны — звёзды обязаны повернуться.
+    // Настоящий такт с креном: в `last_camera_turn` записан поворот камеры.
     mem[Z80_HIGH_ANGLE_LR] = 8;
+    game_tick(&mut mem);
     f.sync_from_z80(&mem);
-    let axis = f.last_camera_turn.apply([1.0, 0.0, 0.0]);
-    let angle = axis[1].atan2(axis[0]);
-    let expected = 8.0 * STAR_ANGLE_LR_PER_UNIT;
-    assert!(
-        (angle - expected).abs() < 1e-3,
-        "крен без движения координат не зафиксирован: {angle} против {expected}"
-    );
+    f.tick(0.02);
+    let before = f
+        .render_bodies()
+        .into_iter()
+        .find(|b| b.source == BODY_SRC_PLANET)
+        .expect("планета не прочитана")
+        .pos;
+
+    // Анимация Coriolis идёт со своим таймером. Её смена не должна заново
+    // применять тот же поворот к прежним координатам планеты.
+    mem[Z80_OBJ_CORIOLIS] = mem[Z80_OBJ_CORIOLIS].wrapping_add(1);
+    f.sync_from_z80(&mem);
+    let after = f
+        .render_bodies()
+        .into_iter()
+        .find(|b| b.source == BODY_SRC_PLANET)
+        .expect("планета не прочитана")
+        .pos;
+    assert_vec_close(after, before);
 }
 
 #[test]
