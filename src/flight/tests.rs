@@ -1660,6 +1660,7 @@ fn launch_kladov() -> crate::machine::Spectrum {
     crate::native::install_save(&mut m, crate::native::KLADOV_SAVE);
     m.intro_range = Some((0x739E, 0x73FD));
     m.game_marker = Some(0x7471);
+    m.snapshot_marker = Some(0x81A9);
 
     for _ in 0..30 {
         m.run_frame();
@@ -1698,10 +1699,16 @@ fn launch_kladov() -> crate::machine::Spectrum {
 }
 
 #[test]
+fn snapshot_marker_is_reached_in_live_flight() {
+    let m = launch_kladov();
+    assert!(m.game_snapshot_valid, "PrintCompass не достигнут в полёте");
+}
+
+#[test]
 fn flight_ignores_partially_updated_game_pass() {
     let mut m = crate::machine::Spectrum::new(None);
-    let marker = 0x7471;
-    m.game_marker = Some(marker);
+    let marker = 0x81A9; // PrintCompass — конец прохода GameMain
+    m.snapshot_marker = Some(marker);
     m.mem.copy_from_slice(&z80_mem_with_flight());
     // Чем больше объектов, тем дольше проход и выше шанс, что граница кадра
     // эмулятора придётся на середину обновления объектов.
@@ -1711,7 +1718,7 @@ fn flight_ignores_partially_updated_game_pass() {
         let x = (1000 + i as u32 * 400).to_le_bytes();
         m.mem[base..base + 3].copy_from_slice(&x[..3]);
     }
-    // На входе в игру память ещё хранит полностью законченный проход.
+    // В конце прохода память уже хранит полностью обновлённые объекты.
     m.note_pc(marker);
     assert!(m.game_snapshot_valid);
 
@@ -1736,7 +1743,7 @@ fn flight_ignores_partially_updated_game_pass() {
     assert_eq!(slot_x(&stable), before, "снимок не защитил от разрыва прохода");
     assert_ne!(slot_x(&live), before, "живая память должна была измениться");
 
-    // Следующий вход в `GameMain` публикует уже законченный проход.
+    // Следующий конец прохода публикует новые объекты.
     m.note_pc(marker);
     stable.sync_from_z80(m.game_state());
     assert_ne!(slot_x(&stable), before, "новый проход не был прочитан");

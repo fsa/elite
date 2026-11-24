@@ -107,18 +107,19 @@ fn beeper_edges_become_audio() {
 }
 
 #[test]
-fn game_state_is_snapshot_taken_at_game_marker() {
+fn game_state_is_snapshot_taken_at_pass_end() {
     let mut m = Spectrum::new(None);
     m.game_marker = Some(0x7471);
+    m.snapshot_marker = Some(0x81A9);
     m.mem[0x7000] = 0x11;
     assert_eq!(m.game_state()[0x7000], 0x11, "до прохода нужна живая память");
 
-    m.note_pc(0x7471);
+    m.note_pc(0x81A9);
     assert!(m.game_snapshot_valid);
     m.mem[0x7000] = 0x22;
-    assert_eq!(m.game_state()[0x7000], 0x11, "снимок должен хранить вход в проход");
+    assert_eq!(m.game_state()[0x7000], 0x11, "снимок должен хранить конец прохода");
 
-    m.note_pc(0x7471);
+    m.note_pc(0x81A9);
     assert_eq!(m.game_state()[0x7000], 0x22, "новый проход обновляет снимок");
 
     m.intro_range = Some((0x739E, 0x73FD));
