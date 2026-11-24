@@ -161,6 +161,13 @@ impl ApplicationHandler for App<'_> {
             WindowEvent::KeyboardInput { event, .. } => {
                 if let PhysicalKey::Code(code) = event.physical_key {
                     let pressed = event.state == ElementState::Pressed;
+                    // Текстовое событие нужно для знаков препинания и точного
+                    // регистра в комментарии: physical_key даёт только позицию.
+                    self.input_char = event
+                        .text
+                        .as_ref()
+                        .and_then(|text| text.chars().next())
+                        .filter(|_| pressed);
                     self.key_event(code, pressed, event.repeat);
                 }
                 if self.quit {
@@ -234,7 +241,10 @@ impl ApplicationHandler for App<'_> {
                         self.debug_view = view;
                         return;
                     }
-                    if !self.machine.intro_seen && save_editor_button_at(out_w, out_h, self.cursor_x, self.cursor_y) {
+                    if !self.machine.intro_seen
+                        && self.save_screen.is_none()
+                        && save_editor_button_at(out_w, out_h, self.cursor_x, self.cursor_y)
+                    {
                         self.save_editor_open = true;
                         self.save_editor_sel = 0;
                         self.save_editor_editing = false;

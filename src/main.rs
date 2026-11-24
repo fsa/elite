@@ -51,6 +51,15 @@ mod z80;
 fn main() {
     let opts = cli::parse_args();
     let mut machine = boot::machine(&opts);
+    // `--save FILE` теперь только стартовая загрузка: файл на 102 байта
+    // импортируется в каталог, ложится в память и уводит игру на станцию,
+    // минуя заставку. Обычное сохранение из игры идёт только в каталог.
+    if let Some(path) = &opts.save {
+        let path = std::path::Path::new(path);
+        if let Err(e) = storage::load_startup_save(&mut machine, path) {
+            eprintln!("Ошибка загрузки при старте: {e}");
+        }
+    }
     if opts.headless {
         headless::run(&mut machine, &opts);
     } else {

@@ -15,6 +15,7 @@ use crate::galaxy;
 use crate::state::Screen;
 use crate::storage;
 use crate::ui::menu::draw_pause_menu;
+use crate::ui::saves::{draw_load_list, draw_save_prompt};
 use crate::ui::present::{blit_zx_frame, draw_debug_panel};
 use crate::{native, world};
 
@@ -402,7 +403,7 @@ impl App<'_> {
                             self.follow_native_screens();
                             if self.machine.save_requested {
                                 self.machine.save_requested = false;
-                                storage::do_save(&mut self.machine, self.opts, &mut self.last_path);
+                                self.open_save_prompt();
                             }
                             self.sync_flight_after_frames(z80_frames);
                             self.play_frame_audio(true);
@@ -454,7 +455,7 @@ impl App<'_> {
                             self.follow_native_screens();
                             if self.machine.save_requested {
                                 self.machine.save_requested = false;
-                                storage::do_save(&mut self.machine, self.opts, &mut self.last_path);
+                                self.open_save_prompt();
                             }
                             self.play_frame_audio(true);
                         }
@@ -497,7 +498,7 @@ impl App<'_> {
         // перекрывает нативный экран, который был открыт до неё.
         if self.docked.is_active() {
             self.docked.draw(&mut self.machine.hd, ZX_FONT);
-            if self.state.menu {
+            if self.state.menu && self.save_screen.is_none() {
                 draw_pause_menu(&mut self.machine.hd, ZX_FONT, self.menu_sel, self.machine.intro_seen);
             }
         } else {
@@ -506,7 +507,7 @@ impl App<'_> {
                     self.hdmap.draw(&mut self.machine.hd, ZX_FONT);
                     self.draw_danger_half();
                     self.draw_jump_countdown();
-                    if self.state.menu {
+                    if self.state.menu && self.save_screen.is_none() {
                         draw_pause_menu(&mut self.machine.hd, ZX_FONT, self.menu_sel, self.machine.intro_seen);
                     }
                 }
@@ -556,7 +557,7 @@ impl App<'_> {
                         self.radar_view,
                         self.compass_view,
                     );
-                    if self.state.menu {
+                    if self.state.menu && self.save_screen.is_none() {
                         draw_pause_menu(
                             &mut self.machine.hd,
                             ZX_FONT,
@@ -570,7 +571,7 @@ impl App<'_> {
                         .draw(&mut self.machine.hd, ZX_FONT, &self.machine.mem);
                     self.draw_danger_half();
                     self.draw_jump_countdown();
-                    if self.state.menu {
+                    if self.state.menu && self.save_screen.is_none() {
                         draw_pause_menu(&mut self.machine.hd, ZX_FONT, self.menu_sel, self.machine.intro_seen);
                     }
                 }
@@ -579,7 +580,7 @@ impl App<'_> {
                     self.status.draw(&mut self.machine.hd, ZX_FONT);
                     self.draw_danger_half();
                     self.draw_jump_countdown();
-                    if self.state.menu {
+                    if self.state.menu && self.save_screen.is_none() {
                         draw_pause_menu(
                             &mut self.machine.hd,
                             ZX_FONT,
@@ -593,7 +594,7 @@ impl App<'_> {
                     self.sysinfo.draw(&mut self.machine.hd, ZX_FONT);
                     self.draw_danger_half();
                     self.draw_jump_countdown();
-                    if self.state.menu {
+                    if self.state.menu && self.save_screen.is_none() {
                         draw_pause_menu(
                             &mut self.machine.hd,
                             ZX_FONT,
@@ -612,7 +613,7 @@ impl App<'_> {
                     self.market.draw(&mut self.machine.hd, ZX_FONT);
                     self.draw_danger_half();
                     self.draw_jump_countdown();
-                    if self.state.menu {
+                    if self.state.menu && self.save_screen.is_none() {
                         draw_pause_menu(&mut self.machine.hd, ZX_FONT, self.menu_sel, self.machine.intro_seen);
                     }
                 }
@@ -626,7 +627,7 @@ impl App<'_> {
                         cockpit::CockpitStyle::COBRA_MK3,
                         &self.splash_values,
                     );
-                    if self.state.menu {
+                    if self.state.menu && self.save_screen.is_none() {
                         draw_pause_menu(
                             &mut self.machine.hd,
                             ZX_FONT,
@@ -636,7 +637,7 @@ impl App<'_> {
                     }
                 }
                 Screen::Emulator(_) => {
-                    if self.state.menu {
+                    if self.state.menu && self.save_screen.is_none() {
                         draw_pause_menu(
                             &mut self.machine.hd,
                             ZX_FONT,
@@ -652,6 +653,18 @@ impl App<'_> {
         // надпись по центру; сам кадр и нативный слой остаются на месте.
         if self.pause_active {
             crate::ui::message::draw_banner(&mut self.machine.hd, ZX_FONT, "PAUSE");
+        }
+
+        // Экран сохранения/загрузки — самый верхний слой: кадр под ним уже
+        // нарисован, но Z80 заморожен, поэтому его содержимое не мешает
+        // работе с каталогом.
+        if let Some(screen) = self.save_screen.clone() {
+            match screen {
+                storage::SaveScreen::Save(prompt) => {
+                    draw_save_prompt(&mut self.machine.hd, &prompt)
+                }
+                storage::SaveScreen::Load(list) => draw_load_list(&mut self.machine.hd, &list),
+            }
         }
 
         self.present(&window, &layout);

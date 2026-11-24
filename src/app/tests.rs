@@ -23,6 +23,7 @@ use crate::keys::{MATRIX_MAP, kempston_bit, matrix_pos};
 use crate::machine::Spectrum;
 use crate::native;
 use crate::splash;
+use crate::storage;
 use crate::ui::menu::{draw_pause_menu, menu_rect};
 use crate::ui::present::{
     DebugView, SRC_H, SRC_W, blit_zx_frame, debug_button_at, debug_button_rects, draw_debug_panel,
@@ -2388,7 +2389,10 @@ use crate::world::{
         for _ in 0..2 {
             app.key_event(KeyCode::ArrowDown, true, false);
         }
-        assert_eq!(app.menu_sel, 3, "выбор не должен уходить ниже последнего пункта");
+        assert_eq!(
+            app.menu_sel, 3,
+            "выбор не должен уходить ниже последнего пункта"
+        );
         app.key_event(KeyCode::Digit4, true, false);
         assert_eq!(app.menu_sel, 3);
         // Enter на затемнённом пункте ничего не делает.
@@ -2397,12 +2401,33 @@ use crate::world::{
         app.key_event(KeyCode::Enter, false, false);
         assert!(app.menu, "недоступный пункт не должен закрывать меню");
         assert!(!app.machine.save_requested, "на заставке сохранять нельзя");
-        assert!(!app.machine.load_requested, "недоступный пункт не загружает");
-        // Загрузка по цифре 3 работает.
+        assert!(
+            !app.machine.load_requested,
+            "недоступный пункт не загружает"
+        );
+        // Загрузка по цифре 3 открывает полноэкранную таблицу.
         app.key_event(KeyCode::Digit3, true, false);
         app.key_event(KeyCode::Enter, true, false);
         app.key_event(KeyCode::Enter, false, false);
-        assert!(!app.menu, "загрузка должна закрыть меню");
+        assert!(
+            matches!(app.save_screen, Some(storage::SaveScreen::Load(_))),
+            "загрузка должна открыть таблицу"
+        );
+        // Запись в таблице: Enter грузит её и закрывает экран.
+        let data = native::commander_snapshot(&mut app.machine, save_layout_kladov());
+        app.save_screen = Some(storage::SaveScreen::Load(storage::LoadList {
+            entries: vec![storage::Entry {
+                name: "TEST".to_string(),
+                comment: String::new(),
+                saved_at: 0,
+                data,
+            }],
+            sel: 0,
+            status: String::new(),
+        }));
+        app.key_event(KeyCode::Enter, true, false);
+        app.key_event(KeyCode::Enter, false, false);
+        assert!(app.save_screen.is_none(), "загрузка должна закрыть экран");
         assert!(app.machine.load_requested, "загрузка не запрошена");
     }
 
@@ -2438,15 +2463,27 @@ use crate::world::{
             m.run_frame();
         }
         assert!(m.intro_seen, "подготовка: нет заставки");
-        let mut opts = test_options();
-        opts.save = Some(path.clone());
+        let opts = test_options();
         let mut app = App::new(m, &opts);
         app.key_event(KeyCode::Escape, true, false);
         assert!(app.menu, "Esc не открыл меню");
         app.menu_sel = 2;
         app.key_event(KeyCode::Enter, true, false);
         app.key_event(KeyCode::Enter, false, false);
-        assert!(!app.menu, "загрузка должна закрыть меню");
+        assert!(
+            matches!(app.save_screen, Some(storage::SaveScreen::Load(_))),
+            "меню должно открыть таблицу загрузки"
+        );
+        // Берём запись из подготовленного файла и выбираем её в таблице.
+        let entry = storage::entry_from_save_file(std::path::Path::new(&path)).unwrap();
+        app.save_screen = Some(storage::SaveScreen::Load(storage::LoadList {
+            entries: vec![entry],
+            sel: 0,
+            status: String::new(),
+        }));
+        app.key_event(KeyCode::Enter, true, false);
+        app.key_event(KeyCode::Enter, false, false);
+        assert!(app.save_screen.is_none(), "загрузка должна закрыть экран");
         assert!(app.machine.load_requested, "загрузка не запрошена");
 
         // Даём игре дойти до станции.
@@ -2480,9 +2517,11 @@ use crate::world::{
 
     #[test]
     fn pause_menu_selection_and_actions() {
-        let base = env!("CARGO_MANIFEST_DIR");
-        let mut opts = test_options();
-        opts.save = Some(format!("{base}/tmp/test_menu_save.zxelite"));
+        let catalog =
+            std::env::temp_dir().join(format!("elite-menu-catalog-{}.bin", std::process::id()));
+        let _ = fs::remove_file(&catalog);
+        storage::set_test_catalog(Some(catalog.clone()));
+        let opts = test_options();
         let mut app = App::new(boot(), &opts);
         app.machine.intro_seen = false;
         app.machine.save_requested = false;
@@ -2495,16 +2534,24 @@ use crate::world::{
         app.key_event(KeyCode::ArrowUp, true, false);
         app.key_event(KeyCode::ArrowUp, true, false);
         assert_eq!(app.menu_sel, 0, "выбор не должен уходить ниже нуля");
-        // Цифра задаёт пункт напрямую, Enter по «сохранить» закрывает меню и
-        // сохраняет блок командира.
+        // Цифра задаёт пункт напрямую, Enter по «сохранить» открывает
+        // приглашение с именем и комментарием.
         app.key_event(KeyCode::Digit2, true, false);
         assert_eq!(app.menu_sel, 1);
         app.key_event(KeyCode::Enter, true, false);
-        assert!(!app.menu, "сохранение должно закрыть меню");
         assert!(
-            std::path::Path::new(&opts.save.as_ref().unwrap()).exists(),
-            "файл сохранения не создан"
+            matches!(app.save_screen, Some(storage::SaveScreen::Save(_))),
+            "меню должно открыть приглашение сохранения"
         );
+        // Enter на NAME переводит фокус в COMMENT, второй Enter записывает.
+        app.key_event(KeyCode::Enter, true, false);
+        app.key_event(KeyCode::Enter, true, false);
+        assert!(app.save_screen.is_none(), "сохранение должно закрыть экран");
+        let entries = storage::read_entries_from(&catalog).unwrap();
+        assert_eq!(entries.len(), 1, "запись не попала в каталог");
+        assert_eq!(entries[0].data.len(), 102);
+        storage::set_test_catalog(None);
+        let _ = fs::remove_file(&catalog);
     }
 
     /// На заставке Кладова `SPACE` запускает игру: хук на точках цикла
@@ -2940,24 +2987,38 @@ use crate::world::{
     /// замороженным, а файл появляется без передачи клавиши в Z80.
     #[test]
     fn right_shift_saves_natively_on_station() {
-        let path = env::temp_dir().join("elite-station-save-test.zxelite");
-        let _ = fs::remove_file(&path);
-        let mut opts = test_options();
-        opts.save = Some(path.to_string_lossy().into_owned());
+        let catalog =
+            std::env::temp_dir().join(format!("elite-station-catalog-{}.bin", std::process::id()));
+        let _ = fs::remove_file(&catalog);
+        storage::set_test_catalog(Some(catalog.clone()));
+        let opts = test_options();
 
         let mut app = App::new(boot(), &opts);
         app.machine.intro_seen = false;
         app.machine.mem[flight::Z80_IND_DANGER] = 0;
         app.machine.mem[flight::Z80_WHAT_ON_SCREEN] = 0x0B;
         app.maybe_enter_native_station();
-        assert!(app.station_native, "подготовка: станция не в нативном режиме");
+        assert!(
+            app.station_native,
+            "подготовка: станция не в нативном режиме"
+        );
 
         app.key_event(KeyCode::ShiftRight, true, false);
-        assert!(path.exists(), "Right Shift не создал файл сохранения");
+        assert!(
+            matches!(app.save_screen, Some(storage::SaveScreen::Save(_))),
+            "Right Shift не открыл приглашение сохранения"
+        );
+        // Подтверждаем имя и пустой комментарий — запись идёт в каталог.
+        app.key_event(KeyCode::Enter, true, false);
+        app.key_event(KeyCode::Enter, true, false);
+        assert!(catalog.exists(), "Right Shift не создал запись в каталоге");
+        let entries = storage::read_entries_from(&catalog).unwrap();
+        assert_eq!(entries.len(), 1, "в каталоге не одна запись");
         assert!(app.station_native, "Right Shift отдал управление эмулятору");
         assert!(!app.station_emulator, "Right Shift включил эмулятор");
         assert_eq!(app.pending_key, None, "Right Shift отправил клавишу в игру");
-        fs::remove_file(&path).ok();
+        storage::set_test_catalog(None);
+        let _ = fs::remove_file(&catalog);
     }
 
     /// На станции `G`/`H` показывают нативный экран `DOCKED` со звуком:

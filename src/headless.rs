@@ -101,7 +101,7 @@ pub fn run(machine: &mut Spectrum, opts: &Options) {
         machine.run_frame();
         if machine.save_requested {
             machine.save_requested = false;
-            let path = opts.save.clone().unwrap_or_else(storage::default_save_name);
+            let path = storage::default_save_name();
             match native::commander_save(&mut *machine, &path, world::save_layout_kladov()) {
                 Ok(()) => println!("Сохранено в {}", path),
                 Err(e) => eprintln!("Ошибка сохранения: {e}"),

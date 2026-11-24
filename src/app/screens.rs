@@ -152,6 +152,8 @@ impl App<'_> {
     fn clear_handoff_overlays(&mut self) {
         self.exit_pause();
         self.menu = false;
+        self.save_screen = None;
+        self.input_char = None;
         self.save_editor_open = false;
         self.save_editor_editing = false;
         self.save_editor_input.clear();

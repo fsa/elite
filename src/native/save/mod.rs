@@ -149,16 +149,19 @@ pub fn commander_block(m: &Spectrum, layout: SaveLayout) -> &[u8] {
 /// командира: у Кладова `unk_D28F` = `aJameson_1`+93.
 pub(crate) const SUN_FIELD_OFF: usize = 93;
 
-/// Записать блок командира в файл `path`.
+/// Подготовить 102 байта блока командира для записи.
 ///
-/// Перед записью выполняется то же, что делает родная `SaveGame`: координаты
+/// Перед снимком выполняется то же, что делает родная `SaveGame`: координаты
 /// солнца для отрисовки копируются в поле `PilotDataOfSun` блока командира
 /// (`ld hl,SunCrd / ld de,PilotDataOfSun / ld bc,9 / ldir`), и теневой буфер
 /// синхронизируется из живого блока (`ld hl,PilotName / ld de,PilotDataSaved /
 /// ld bc,102 / ldir`). Из тени `InitGame` восстанавливает пилота при
 /// перезапуске, поэтому без этой копии загрузка вернула бы устаревшие данные
 /// и солнце рисовалось бы не по тем координатам.
-pub fn commander_save(m: &mut Spectrum, path: &str, layout: SaveLayout) -> std::io::Result<()> {
+///
+/// Возвращается обычный набор байт без конверта: каталог сохранений хранит
+/// метаданные отдельно, а экспорт пишет эти же байты в файл ровно по 102 байта.
+pub fn commander_snapshot(m: &mut Spectrum, layout: SaveLayout) -> Vec<u8> {
     let src = layout.pilot_name as usize;
     let sun = layout.sun_crd as usize;
     let sun_data = m.mem[sun..sun + 9].to_vec();
@@ -169,22 +172,36 @@ pub fn commander_save(m: &mut Spectrum, path: &str, layout: SaveLayout) -> std::
         let data = m.mem[src..src + n].to_vec();
         m.mem[dst..dst + n].copy_from_slice(&data);
     }
-    std::fs::write(path, commander_block(m, layout))
+    commander_block(m, layout).to_vec()
 }
 
-/// Прочитать блок командира из файла `path` и поместить в память.
-pub fn commander_load(m: &mut Spectrum, path: &str, layout: SaveLayout) -> std::io::Result<()> {
-    let data = std::fs::read(path)?;
+/// Записать блок командира в файл `path` (сырые 102 байта).
+pub fn commander_save(m: &mut Spectrum, path: &str, layout: SaveLayout) -> std::io::Result<()> {
+    std::fs::write(path, commander_snapshot(m, layout))
+}
+
+/// Поместить блок командира из байт в память, включая теневой буфер.
+///
+/// Теневой буфер синхронизируется обязательно: `InitGame` восстанавливает
+/// пилота именно из него, иначе загруженные данные затрёт старая копия.
+pub fn commander_load_bytes(m: &mut Spectrum, data: &[u8], layout: SaveLayout) {
     let n = data.len().min(layout.commander_len);
     let a = layout.pilot_name as usize;
     m.mem[a..a + n].copy_from_slice(&data[..n]);
-    // Синхронизировать теневой буфер, из которого `InitGame` восстанавливает
-    // пилота, иначе загруженные данные затрёт копия из памяти.
     if let Some((addr, len)) = layout.pilot_shadow {
         let s = data.len().min(len);
         let a = addr as usize;
         m.mem[a..a + s].copy_from_slice(&data[..s]);
     }
+}
+
+/// Прочитать блок командира из файла `path` и поместить в память.
+/// Оставлен для тестов и внешнего импорта; игровой путь использует
+/// [`commander_load_bytes`] напрямую из каталога.
+#[allow(dead_code)]
+pub fn commander_load(m: &mut Spectrum, path: &str, layout: SaveLayout) -> std::io::Result<()> {
+    let data = std::fs::read(path)?;
+    commander_load_bytes(m, &data, layout);
     Ok(())
 }
 

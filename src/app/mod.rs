@@ -31,6 +31,7 @@ use crate::market;
 use crate::sfx;
 use crate::splash;
 use crate::state::{Animation, GameState, Location, OriginalScreen, Screen};
+use crate::storage;
 use crate::status;
 use crate::sysinfo;
 use crate::ui::present::{DebugView, SRC_H, SRC_W};
@@ -100,7 +101,13 @@ struct App<'a> {
     audio_buf: Vec<i16>,
     wav_samples: Option<Vec<i16>>,
     sfx: sfx::SfxPlayer,
-    last_path: String,
+    /// Полноэкранный экран сохранения/загрузки. Пока он открыт, `menu` тоже
+    /// взведён: Z80 заморожен, а кадр рисует именно этот экран.
+    save_screen: Option<storage::SaveScreen>,
+    /// Символ из текстового события клавиатуры (ввод имени/комментария).
+    /// Физические клавиши A-Z обрабатываются и без него, но пунктуация и
+    /// регистр приходят именно отсюда.
+    input_char: Option<char>,
     /// Централизованное состояние игры (место игрока, текущий экран, меню).
     /// Нативные компоненты читают его вместо прямых обращений к эмулятору.
     state: GameState,
@@ -274,6 +281,9 @@ struct App<'a> {
 impl<'a> App<'a> {
     pub(crate) fn new(machine: Spectrum, opts: &'a Options) -> Self {
         let radar_view = flight::z80_radar_view(&machine.mem);
+        // Хук стартовой загрузки уже поставлен: титр не нужен, сразу показываем
+        // кадр эмулятора. Значение берём до перемещения `machine` в структуру.
+        let splash_emulator = machine.load_requested;
         let mut app = Self {
             state: GameState::default(),
             machine,
@@ -282,7 +292,8 @@ impl<'a> App<'a> {
             audio_buf: Vec::new(),
             wav_samples: opts.wav.as_ref().map(|_| Vec::new()),
             sfx: sfx::SfxPlayer::new(),
-            last_path: String::new(),
+            save_screen: None,
+            input_char: None,
             menu: false,
             hdmap: hdmap::Map::new(),
             hdmap_screen: None,
@@ -308,7 +319,7 @@ impl<'a> App<'a> {
             pending_market: false,
             flight: flight::Flight::new(),
             splash: splash::Splash::with_debug(opts.debug),
-            splash_emulator: false,
+            splash_emulator,
             emulator_transition_lock: false,
             cockpit: cockpit::Cockpit::new(),
             splash_values: cockpit::CockpitValues::for_splash(),
@@ -359,6 +370,55 @@ impl<'a> App<'a> {
         app.enter_native_station();
         app.sync_state();
         app
+    }
+
+    /// Открыть приглашение сохранения: имя берём из текущего блока commander,
+    /// комментарий начинается пустым.
+    pub(super) fn open_save_prompt(&mut self) {
+        let name = {
+            let layout = world::save_layout_kladov();
+            storage::name_from_block(crate::native::commander_block(&self.machine, layout))
+        };
+        self.save_screen = Some(storage::SaveScreen::Save(storage::SavePrompt {
+            name,
+            comment: String::new(),
+            field: storage::PromptField::Name,
+            status: String::new(),
+        }));
+        self.menu = true;
+        self.menu_sel = 0;
+        self.input_char = None;
+    }
+
+    /// Открыть таблицу сохранений, свежие записи сверху.
+    pub(super) fn open_load_list(&mut self) {
+        let (entries, status) = match storage::read_entries() {
+            Ok(mut entries) => {
+                storage::sorted_for_table(&mut entries);
+                let status = if entries.is_empty() {
+                    "NO SAVES YET".to_string()
+                } else {
+                    String::new()
+                };
+                (entries, status)
+            }
+            Err(_) => (Vec::new(), "ERROR: CANNOT READ CATALOG".to_string()),
+        };
+        self.save_screen = Some(storage::SaveScreen::Load(storage::LoadList {
+            entries,
+            sel: 0,
+            status,
+        }));
+        self.menu = true;
+        self.menu_sel = 0;
+        self.input_char = None;
+    }
+
+    /// Закрыть экран сохранения/загрузки и снять модальную заморозку Z80.
+    pub(super) fn close_save_screen(&mut self) {
+        self.save_screen = None;
+        self.menu = false;
+        self.input_char = None;
     }
 
     /// Размер игровой области окна. В режиме `--debug` справа остаётся
@@ -440,7 +500,7 @@ impl<'a> App<'a> {
         self.state = GameState {
             location,
             screen,
-            menu: self.menu,
+            menu: self.menu || self.save_screen.is_some(),
             intro,
             emu_screen,
             system: world::current_system_name(&self.machine.mem),
