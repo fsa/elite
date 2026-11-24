@@ -16,7 +16,10 @@ use super::palette::{
 };
 use super::render::scene::{draw_star, draw_stars_view};
 use super::scene::{BodyKind, BODY_SRC_MISSILE, BODY_SRC_SLOT0, PLANET_RADIUS, SUN_RADIUS};
-use super::stars::{star_count_for, Star, SPEED_MAX, STAR_COUNT, STAR_COUNT_MAX, STAR_FIELD_RADIUS};
+use super::stars::{
+    star_count_for, Star, SPEED_MAX, STAR_ANGLE_LR_PER_UNIT, STAR_COUNT, STAR_COUNT_MAX,
+    STAR_FIELD_RADIUS,
+};
 use super::transition::Transition;
 use super::view;
 
@@ -41,6 +44,185 @@ fn put_obj(mem: &mut [u8], base: usize, name: &str) {
 
 fn star(pos: [f32; 3]) -> Star {
     Star { pos, mag: 128 }
+}
+
+/// Тело сцены для проверки интерполяции без обращения к памяти Z80.
+fn test_body(source: u8, pos: [f32; 3], rot: Rotation) -> Body {
+    Body {
+        source,
+        kind: BodyKind::Ship,
+        model: None,
+        pos,
+        rot,
+        radius: 10.0,
+        color: 0,
+        tint: None,
+    }
+}
+
+fn assert_vec_close(a: [f32; 3], b: [f32; 3]) {
+    for k in 0..3 {
+        assert!(
+            (a[k] - b[k]).abs() < 1e-3,
+            "векторы не совпали: {a:?} против {b:?}"
+        );
+    }
+}
+
+#[test]
+fn body_interpolation_follows_camera_turn() {
+    let mut f = open();
+    let turn = Rotation::axis_angle([0.0, 0.0, 1.0], 0.25)
+        .mul(&Rotation::axis_angle([1.0, 0.0, 0.0], -0.12));
+    let rot = Rotation::axis_angle([0.0, 1.0, 0.0], 0.4);
+    let pos = [800.0, 100.0, 3000.0];
+    let moved = [pos[0] + 20.0, pos[1], pos[2] - 40.0];
+
+    // Z80 за такт повернул оба тела вместе с камерой, а второе ещё и сдвинул
+    // своей скоростью. Прежние координаты записаны в старой системе игрока.
+    f.prev_bodies = vec![
+        test_body(BODY_SRC_SLOT0, pos, rot),
+        test_body(BODY_SRC_SLOT0 + 1, pos, rot),
+    ];
+    f.bodies = vec![
+        test_body(BODY_SRC_SLOT0, turn.apply(pos), turn.mul(&rot)),
+        test_body(BODY_SRC_SLOT0 + 1, turn.apply(moved), turn.mul(&rot)),
+    ];
+    f.last_camera_turn = turn;
+    f.tick_interval = 0.2;
+
+    for &accum in &[0.0, 0.05, 0.1, 0.19] {
+        f.tick_accum = accum;
+        let rendered = f.render_bodies();
+        let alpha = accum / f.tick_interval;
+        // Неподвижное тело не должно «уезжать» из-за поворота камеры.
+        assert_vec_close(rendered[0].pos, turn.apply(pos));
+        let axis = rendered[0].rot.apply([1.0, 0.0, 0.0]);
+        assert_vec_close(axis, turn.mul(&rot).apply([1.0, 0.0, 0.0]));
+        // Собственное движение тела интерполируется в новой системе.
+        let start = turn.apply(pos);
+        let end = turn.apply(moved);
+        let expected = [
+            start[0] + (end[0] - start[0]) * alpha,
+            start[1] + (end[1] - start[1]) * alpha,
+            start[2] + (end[2] - start[2]) * alpha,
+        ];
+        assert_vec_close(rendered[1].pos, expected);
+    }
+}
+
+#[test]
+fn body_snapshot_follows_game_tick_not_display_frame() {
+    let mut f = open();
+    let mut mem = z80_mem_with_flight();
+
+    // Первый синк только запоминает таблицу звёзд: такта ещё не было.
+    mem[Z80_STARS_TABLE] = 1;
+    f.sync_from_z80(&mem);
+    let initial = f.bodies.clone();
+
+    // Кадр 50 Гц без нового игрового такта: координаты в памяти сдвинулись,
+    // но previous остаётся от предыдущего такта, иначе интервал интерполяции
+    // станет равным кадру и `alpha` всегда будет 1.
+    mem[Z80_OBJ_SLOT0] = mem[Z80_OBJ_SLOT0].wrapping_add(0x10);
+    f.sync_from_z80(&mem);
+    let prev = f
+        .prev_bodies
+        .iter()
+        .find(|b| b.source == BODY_SRC_SLOT0)
+        .expect("нет предыдущего состояния корабля");
+    let start = initial
+        .iter()
+        .find(|b| b.source == BODY_SRC_SLOT0)
+        .expect("нет корабля в начальной сцене");
+    assert_vec_close(prev.pos, start.pos);
+    let current = f
+        .bodies
+        .iter()
+        .find(|b| b.source == BODY_SRC_SLOT0)
+        .unwrap()
+        .clone();
+
+    // Игровой такт: таблица звёзд изменилась — previous обновляется.
+    mem[Z80_STARS_TABLE] = 2;
+    f.sync_from_z80(&mem);
+    let prev = f
+        .prev_bodies
+        .iter()
+        .find(|b| b.source == BODY_SRC_SLOT0)
+        .expect("нет предыдущего состояния корабля");
+    assert_vec_close(prev.pos, current.pos);
+}
+
+#[test]
+fn interpolation_spans_several_display_frames() {
+    let mut f = open();
+    let mut mem = z80_mem_with_flight();
+
+    // Первый игровой такт.
+    mem[Z80_STARS_TABLE] = 1;
+    f.sync_from_z80(&mem);
+
+    // Девять кадров 50 Гц без нового такта.
+    for _ in 0..9 {
+        f.tick(1.0 / 50.0);
+    }
+
+    // Второй такт: координаты корабля в памяти сдвинулись.
+    mem[Z80_STARS_TABLE] = 2;
+    mem[Z80_OBJ_SLOT0] = mem[Z80_OBJ_SLOT0].wrapping_add(0x20);
+    f.sync_from_z80(&mem);
+    assert!(
+        (f.tick_interval - 9.0 / 50.0).abs() < 1e-6,
+        "интервал должен покрывать несколько кадров: {}",
+        f.tick_interval
+    );
+
+    // Сразу после такта alpha мал: корабль ещё не дошёл до нового положения.
+    f.tick(1.0 / 50.0);
+    let current = f
+        .bodies
+        .iter()
+        .find(|b| b.source == BODY_SRC_SLOT0)
+        .unwrap()
+        .clone();
+    let rendered = f.render_bodies();
+    let shown = rendered
+        .iter()
+        .find(|b| b.source == BODY_SRC_SLOT0)
+        .unwrap();
+    assert!(
+        (shown.pos[0] - current.pos[0]).abs() > 1e-3,
+        "интерполяция отключена: показано новое положение без плавного перехода"
+    );
+}
+
+#[test]
+fn sync_captures_camera_turn_only_on_game_tick() {
+    let mut f = open();
+    let mut mem = z80_mem_with_flight();
+    mem[Z80_STARS_TABLE] = 1;
+    f.sync_from_z80(&mem);
+    let axis = f.last_camera_turn.apply([1.0, 0.0, 0.0]);
+    assert_vec_close(axis, [1.0, 0.0, 0.0]);
+
+    // Крен вправо на 4 единицы: поворот должен попасть в `last_camera_turn`.
+    mem[Z80_HIGH_ANGLE_LR] = 4;
+    mem[Z80_STARS_TABLE] = 2;
+    f.sync_from_z80(&mem);
+    let axis = f.last_camera_turn.apply([1.0, 0.0, 0.0]);
+    let angle = axis[1].atan2(axis[0]);
+    let expected = 4.0 * STAR_ANGLE_LR_PER_UNIT;
+    assert!(
+        (angle - expected).abs() < 1e-3,
+        "неверный поворот камеры: {angle} против {expected}"
+    );
+
+    // Кадр без такта не меняет записанный поворот, даже если углы в памяти
+    // уже другие: Z80 ещё не применил их к координатам объектов.
+    mem[Z80_HIGH_ANGLE_LR] = 20;
+    f.sync_from_z80(&mem);
+    assert_vec_close(f.last_camera_turn.apply([1.0, 0.0, 0.0]), axis);
 }
 
 #[test]

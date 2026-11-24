@@ -131,9 +131,16 @@ pub struct Flight {
     /// Оттенки кораблей, привязанные к слотам Z80.
     ship_tints: ShipTints,
     /// Положение/ориентация тел на предыдущем игровом такте Z80.
-    /// Используется для интерполяции между тактами (~5.5 Гц), чтобы корабли
-    /// не «прыгали» при отрисовке 50 Гц.
+    /// Используется для интерполяции между тактами, чтобы корабли не «прыгали»
+    /// при отрисовке 50 Гц.
     prev_bodies: Vec<Body>,
+    /// Поворот камеры, который Z80 выполнил над координатами объектов на
+    /// последнем игровом такте. Тела и звёзды поворачиваются одной матрицей
+    /// (`CalcNewCrdObj_Pl` / `sub_78B1`), поэтому прежние координаты надо
+    /// перевести в текущую систему игрока перед интерполяцией. Иначе поворот
+    /// камеры принимается за движение корабля, и тот «уезжает» с места, а
+    /// потом возвращается.
+    last_camera_turn: Rotation,
     /// Время, прошедшее с последнего игрового такта Z80.
     tick_accum: f32,
     /// Длительность последнего интервала между игровыми тактами Z80.
@@ -173,6 +180,7 @@ impl Flight {
             bodies: Vec::new(),
             ship_tints: ShipTints::new(),
             prev_bodies: Vec::new(),
+            last_camera_turn: Rotation::identity(),
             tick_accum: 0.0,
             tick_interval: 1.0 / 5.5,
             stars: StarField::new(STAR_COUNT),
@@ -202,6 +210,7 @@ impl Flight {
         self.bodies.clear();
         self.ship_tints.reset();
         self.prev_bodies.clear();
+        self.last_camera_turn = Rotation::identity();
         self.tick_accum = 0.0;
         self.tick_interval = 1.0 / 5.5;
         self.transition.reset();
@@ -429,11 +438,14 @@ impl Flight {
             self.view_dir = ViewDir::Forward;
         }
 
-        // Угловые скорости известны, но оригинал пересчитывает звёзды и
-        // координаты объектов не каждый кадр, а на игровом такте (~5.5 Гц):
-        // таблица звёзд `byte_7A39` меняется только тогда. Раньше поворот
-        // применялся на каждом кадре 50 Гц, из-за чего звёзды крутились
-        // примерно в 9 раз быстрее объектов.
+        // Углы, звёзды и координаты объектов пересчитываются в игровом цикле
+        // Z80, а не на каждом кадре эмулятора. Изменение таблицы `byte_7A39`
+        // (`PrintStars`) — практический признак прохода обычной 3D-ветви.
+        // Снимок previous/current и интервал интерполяции привязаны к этому же
+        // такту: если обновлять их на каждом кадре 50 Гц, `alpha` почти всегда
+        // равен 1 и интерполяция не работает, а последний поворот применяется
+        // повторно к уже повёрнутым координатам — корабль смещается, а потом
+        // возвращается на место.
         let mut table = [0u8; Z80_STARS_LEN];
         table.copy_from_slice(&mem[Z80_STARS_TABLE..Z80_STARS_TABLE + Z80_STARS_LEN]);
         let ticked = self.prev_star_table.is_some_and(|prev| prev != table);
@@ -442,6 +454,15 @@ impl Flight {
             self.z80_fast_scroll = true;
         }
         let prev_bodies_snapshot = self.bodies.clone();
+
+        // Поворот за один игровой такт нужен и звёздам, и телам:
+        // `CalcNewCrdObj_Pl` переносит координаты объектов в новую систему
+        // игрока той же матрицей, что `sub_78B1` — координаты звёзд.
+        let roll = memory::read_signed8(mem[Z80_HIGH_ANGLE_LR]) * STAR_ANGLE_LR_PER_UNIT;
+        let pitch = -memory::read_signed8(mem[Z80_HIGH_ANGLE_DU]) * STAR_ANGLE_DU_PER_UNIT;
+        let turn = Rotation::axis_angle([0.0, 0.0, 1.0], roll)
+            .mul(&Rotation::axis_angle([1.0, 0.0, 0.0], pitch));
+
         if ticked {
             // J-драйв `PrintStars` проматывает звёзды тремя проходами
             // `sub_78B1` (скорости `0x1E` и дважды `0x10`) и на этом такте
@@ -453,10 +474,6 @@ impl Flight {
                 && (self.z80_fast_scroll
                     || (!self.speed_resync
                         && mem[Z80_HIGH_DELTA_SPEED] as i32 != self.speed.round() as i32));
-            let roll = memory::read_signed8(mem[Z80_HIGH_ANGLE_LR]) * STAR_ANGLE_LR_PER_UNIT;
-            let pitch = -memory::read_signed8(mem[Z80_HIGH_ANGLE_DU]) * STAR_ANGLE_DU_PER_UNIT;
-            let turn = Rotation::axis_angle([0.0, 0.0, 1.0], roll)
-                .mul(&Rotation::axis_angle([1.0, 0.0, 0.0], pitch));
             if self.game_over {
                 // При гибели оригинал обнуляет скорость и блокирует управление:
                 // камера стоит. Обломки из слотов Z80 уносятся своей скоростью,
@@ -464,6 +481,7 @@ impl Flight {
                 // Шаг `CalcNewCrdObj_Pl` при `HighDeltaSpeed == 0` равен 2.
                 let delta_z = 2.0;
                 self.explosions.tick_death(delta_z);
+                self.last_camera_turn = Rotation::identity();
             } else {
                 // Каждый проход `sub_78B1` поворачивает поле, поэтому при
                 // J-драйве за такт набегает тройной поворот.
@@ -476,6 +494,9 @@ impl Flight {
                 // игроку на шаг `CalcNewCrdObj_Pl`.
                 let delta_z = 2.0 * (self.speed.round() + 1.0);
                 self.explosions.tick_world(&turn, delta_z);
+                // Тела поворачиваются один раз за такт (`CalcNewCrdObj_Pl`);
+                // тройной поворот звёзд относится только к `PrintStars`.
+                self.last_camera_turn = turn;
             }
             self.z80_fast_scroll = false;
             self.prev_bodies = prev_bodies_snapshot;
@@ -550,10 +571,12 @@ impl Flight {
 
     /// Тела сцены для рендера с интерполяцией между игровыми тактами Z80.
     ///
-    /// Z80 обновляет координаты объектов на своём такте (~5.5 Гц), а рендер
-    /// идёт с частотой кадра. Без интерполяции корабли и станция заметно
-    /// «прыгают». Звёзды не интерполируются: они рисуются из живого поля,
-    /// которое уже обновляется по `dt`.
+    /// Z80 обновляет координаты объектов (`ReCalcCrdObj`) на своём такте, а
+    /// рендер идёт с частотой кадра. Прежние координаты переводятся в текущую
+    /// систему игрока поворотом за последний такт, иначе при повороте камеры
+    /// корабль сначала рисуется смещённым, а потом возвращается на место.
+    /// Звёзды не интерполируются: они рисуются из живого поля, которое уже
+    /// обновляется по `dt`.
     pub(in crate::flight) fn render_bodies(&self) -> Vec<Body> {
         let alpha = if self.tick_interval > 0.0 {
             (self.tick_accum / self.tick_interval).clamp(0.0, 1.0)
@@ -577,11 +600,17 @@ impl Flight {
                 {
                     return body.clone();
                 }
+                // Обе позиции в системе игрока, но в разные моменты: Z80
+                // повернул камеру между ними. Переводим прежнюю позицию в
+                // текущую систему: иначе поворот камеры выглядит как движение
+                // корабля, и он сдвигается, а потом возвращается.
+                let prev_pos = self.last_camera_turn.apply(prev.pos);
+                let prev_rot = self.last_camera_turn.mul(&prev.rot);
                 let mut out = body.clone();
                 for k in 0..3 {
-                    out.pos[k] = prev.pos[k] + (body.pos[k] - prev.pos[k]) * alpha;
+                    out.pos[k] = prev_pos[k] + (body.pos[k] - prev_pos[k]) * alpha;
                 }
-                out.rot = lerp_rotation(&prev.rot, &body.rot, alpha);
+                out.rot = lerp_rotation(&prev_rot, &body.rot, alpha);
                 out
             })
             .collect()
