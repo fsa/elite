@@ -8,14 +8,16 @@ use super::memory::{
     read_signed24, read_signed8, Z80_DAMAGE_FRONT_SHIELD, Z80_IN_FREE_SPACE, Z80_LASER_MOUNTS,
     Z80_OBJ_CORIOLIS, Z80_OBJ_MISSILE, Z80_OBJ_SLOT0, Z80_OENERG_DESTROYED, Z80_PLANET_CRD,
     Z80_SHIELD_FRONT, Z80_SHIELD_REAR, Z80_SLOT_OADRDATA, Z80_SLOT_OENERG, Z80_SLOT_SIZE,
-    Z80_SUN_CRD, Z80_TEMP_LASER,
+    Z80_STARS_TABLE, Z80_SUN_CRD, Z80_TEMP_LASER,
 };
 use super::messages::{countdown_number, view_label, BOTTOM_MSG_TTL};
 use super::palette::{
     planet_rim, sun_tint, CYAN, ENEMY_BEAM, RED, STAR_RIM_COLOR, VIEW_LABEL_COLOR,
 };
 use super::render::scene::{draw_star, draw_stars_view};
-use super::scene::{BodyKind, BODY_SRC_MISSILE, BODY_SRC_SLOT0, PLANET_RADIUS, SUN_RADIUS};
+use super::scene::{
+    BodyKind, BODY_SRC_MISSILE, BODY_SRC_PLANET, BODY_SRC_SLOT0, PLANET_RADIUS, SUN_RADIUS,
+};
 use super::stars::{
     star_count_for, Star, SPEED_MAX, STAR_ANGLE_LR_PER_UNIT, STAR_COUNT, STAR_COUNT_MAX,
     STAR_FIELD_RADIUS,
@@ -32,6 +34,12 @@ fn open() -> Flight {
     let mut f = Flight::new();
     f.open(0xFF40_80C0);
     f
+}
+
+/// Имитировать шаг модели Z80: сдвинуть координату объекта. Именно по смене
+/// координат нативный слой отличает игровой такт от кадров эмулятора.
+fn game_tick(mem: &mut [u8]) {
+    mem[Z80_OBJ_SLOT0] = mem[Z80_OBJ_SLOT0].wrapping_add(1);
 }
 
 /// Записать в слот Z80 объект с заданной моделью.
@@ -116,15 +124,14 @@ fn body_snapshot_follows_game_tick_not_display_frame() {
     let mut f = open();
     let mut mem = z80_mem_with_flight();
 
-    // Первый синк только запоминает таблицу звёзд: такта ещё не было.
-    mem[Z80_STARS_TABLE] = 1;
+    // Первый синк только запоминает координаты: такта ещё не было.
     f.sync_from_z80(&mem);
     let initial = f.bodies.clone();
 
-    // Кадр 50 Гц без нового игрового такта: координаты в памяти сдвинулись,
-    // но previous остаётся от предыдущего такта, иначе интервал интерполяции
+    // Кадр 50 Гц без игрового такта: меняется только таблица звёзд.
+    // Previous остаётся от предыдущего такта, иначе интервал интерполяции
     // станет равным кадру и `alpha` всегда будет 1.
-    mem[Z80_OBJ_SLOT0] = mem[Z80_OBJ_SLOT0].wrapping_add(0x10);
+    mem[Z80_STARS_TABLE] = mem[Z80_STARS_TABLE].wrapping_add(1);
     f.sync_from_z80(&mem);
     let prev = f
         .prev_bodies
@@ -143,8 +150,8 @@ fn body_snapshot_follows_game_tick_not_display_frame() {
         .unwrap()
         .clone();
 
-    // Игровой такт: таблица звёзд изменилась — previous обновляется.
-    mem[Z80_STARS_TABLE] = 2;
+    // Игровой такт: координаты изменились — previous обновляется.
+    game_tick(&mut mem);
     f.sync_from_z80(&mem);
     let prev = f
         .prev_bodies
@@ -159,8 +166,7 @@ fn interpolation_spans_several_display_frames() {
     let mut f = open();
     let mut mem = z80_mem_with_flight();
 
-    // Первый игровой такт.
-    mem[Z80_STARS_TABLE] = 1;
+    // Первый синк фиксирует координаты, но тактом не считается.
     f.sync_from_z80(&mem);
 
     // Девять кадров 50 Гц без нового такта.
@@ -168,8 +174,7 @@ fn interpolation_spans_several_display_frames() {
         f.tick(1.0 / 50.0);
     }
 
-    // Второй такт: координаты корабля в памяти сдвинулись.
-    mem[Z80_STARS_TABLE] = 2;
+    // Игровой такт: координаты корабля в памяти сдвинулись.
     mem[Z80_OBJ_SLOT0] = mem[Z80_OBJ_SLOT0].wrapping_add(0x20);
     f.sync_from_z80(&mem);
     assert!(
@@ -198,17 +203,42 @@ fn interpolation_spans_several_display_frames() {
 }
 
 #[test]
+fn planet_does_not_jitter_when_only_star_table_changes() {
+    let mut f = open();
+    let mut mem = z80_mem_with_flight();
+    f.sync_from_z80(&mem);
+    let before = f
+        .render_bodies()
+        .into_iter()
+        .find(|b| b.source == BODY_SRC_PLANET)
+        .expect("планета не прочитана")
+        .pos;
+
+    // Кадр эмулятора, на котором изменилась таблица звёзд и углы, но Z80 ещё
+    // не пересчитал координаты планеты. Поворот камеры не должен сдвинуть её.
+    mem[Z80_STARS_TABLE] = mem[Z80_STARS_TABLE].wrapping_add(1);
+    mem[Z80_HIGH_ANGLE_LR] = 0x40;
+    f.sync_from_z80(&mem);
+    let after = f
+        .render_bodies()
+        .into_iter()
+        .find(|b| b.source == BODY_SRC_PLANET)
+        .expect("планета не прочитана")
+        .pos;
+    assert_vec_close(after, before);
+}
+
+#[test]
 fn sync_captures_camera_turn_only_on_game_tick() {
     let mut f = open();
     let mut mem = z80_mem_with_flight();
-    mem[Z80_STARS_TABLE] = 1;
     f.sync_from_z80(&mem);
     let axis = f.last_camera_turn.apply([1.0, 0.0, 0.0]);
     assert_vec_close(axis, [1.0, 0.0, 0.0]);
 
     // Крен вправо на 4 единицы: поворот должен попасть в `last_camera_turn`.
     mem[Z80_HIGH_ANGLE_LR] = 4;
-    mem[Z80_STARS_TABLE] = 2;
+    game_tick(&mut mem);
     f.sync_from_z80(&mem);
     let axis = f.last_camera_turn.apply([1.0, 0.0, 0.0]);
     let angle = axis[1].atan2(axis[0]);
@@ -218,11 +248,30 @@ fn sync_captures_camera_turn_only_on_game_tick() {
         "неверный поворот камеры: {angle} против {expected}"
     );
 
-    // Кадр без такта не меняет записанный поворот, даже если углы в памяти
-    // уже другие: Z80 ещё не применил их к координатам объектов.
-    mem[Z80_HIGH_ANGLE_LR] = 20;
+    // Кадр без такта не меняет записанный поворот: одна только таблица звёзд
+    // обновляется чаще модели Z80.
+    mem[Z80_STARS_TABLE] = mem[Z80_STARS_TABLE].wrapping_add(1);
     f.sync_from_z80(&mem);
     assert_vec_close(f.last_camera_turn.apply([1.0, 0.0, 0.0]), axis);
+}
+
+#[test]
+fn angle_change_counts_as_game_tick() {
+    let mut f = open();
+    let mut mem = z80_mem_with_flight();
+    f.sync_from_z80(&mem);
+
+    // При чистом крене координаты планеты на оси Z не меняются, но углы
+    // `CalcAngSpeed4Prn` пересчитаны — звёзды обязаны повернуться.
+    mem[Z80_HIGH_ANGLE_LR] = 8;
+    f.sync_from_z80(&mem);
+    let axis = f.last_camera_turn.apply([1.0, 0.0, 0.0]);
+    let angle = axis[1].atan2(axis[0]);
+    let expected = 8.0 * STAR_ANGLE_LR_PER_UNIT;
+    assert!(
+        (angle - expected).abs() < 1e-3,
+        "крен без движения координат не зафиксирован: {angle} против {expected}"
+    );
 }
 
 #[test]
@@ -246,14 +295,13 @@ fn z80_stars_turn_with_angle_rates() {
     let mut f = open();
     let mut mem = vec![0u8; Z80_MEM_MIN];
 
-    // Первый синк только запоминает таблицу звёзд: такта ещё не было.
+    // Первый синк только запоминает координаты: такта ещё не было.
     f.sync_from_z80(&mem);
 
-    // Поворот без нового такта не применяется: иначе звёзды крутились бы
-    // на каждом кадре 50 Гц, а не с частотой игрового цикла (~5.5 Гц).
+    // Поворот без нового такта не применяется: одна только таблица звёзд
+    // меняется чаще игрового цикла.
     f.stars.stars = vec![star([1000.0, 0.0, 0.0])];
-    mem[Z80_HIGH_ANGLE_LR] = 0x04;
-    mem[Z80_HIGH_ANGLE_DU] = 0x00;
+    mem[Z80_STARS_TABLE] = mem[Z80_STARS_TABLE].wrapping_add(1);
     f.sync_from_z80(&mem);
     assert_eq!(
         f.stars.stars[0].pos,
@@ -261,10 +309,11 @@ fn z80_stars_turn_with_angle_rates() {
         "поворот применён без игрового такта"
     );
 
-    // Игровой такт ловим по изменению таблицы звёзд, как в памяти игры.
+    // Игровой такт ловим по изменению координат объектов в памяти игры.
     // Крен вправо: звезда на оси X должна уйти в +Y.
+    mem[Z80_HIGH_ANGLE_LR] = 0x04;
     let tick = |f: &mut Flight, mem: &mut [u8]| {
-        mem[Z80_STARS_TABLE] = mem[Z80_STARS_TABLE].wrapping_add(1);
+        game_tick(mem);
         f.sync_from_z80(mem);
     };
     tick(&mut f, &mut mem);
@@ -329,19 +378,19 @@ fn j_drive_accelerates_stars_on_game_tick() {
     let mut mem = vec![0u8; Z80_MEM_MIN];
     mem[Z80_SPEED_GAUGE] = 0x41; // скорость 12
     mem[Z80_HIGH_DELTA_SPEED] = 12;
-    f.sync_from_z80(&mem); // запомнили таблицу звёзд
+    f.sync_from_z80(&mem); // запомнили координаты объектов
 
-    // Обычный такт: таблица обновилась, скорость настоящая.
+    // Обычный такт: координаты обновились, скорость настоящая.
     f.stars.stars = vec![star([100.0, 0.0, 1000.0])];
-    mem[Z80_STARS_TABLE] = 1;
+    game_tick(&mut mem);
     f.sync_from_z80(&mem);
     let before = f.stars.stars[0].pos[2];
     f.tick(1.0 / 50.0);
     let normal = (f.stars.stars[0].pos[2] - before).abs();
 
-    // Такт J-драйва: HighDeltaSpeed затёрт, таблица обновилась.
+    // Такт J-драйва: HighDeltaSpeed затёрт, координаты обновились.
     f.stars.stars = vec![star([100.0, 0.0, 1000.0])];
-    mem[Z80_STARS_TABLE] = 2;
+    game_tick(&mut mem);
     mem[Z80_HIGH_DELTA_SPEED] = 0x10;
     f.sync_from_z80(&mem);
     let before = f.stars.stars[0].pos[2];
@@ -369,7 +418,7 @@ fn j_drive_flag_latches_until_game_tick() {
     f.sync_from_z80(&mem);
     assert!(!f.stars.boost, "разгон включён до игрового такта");
 
-    mem[Z80_STARS_TABLE] = 3;
+    game_tick(&mut mem);
     f.sync_from_z80(&mem);
     assert!(f.stars.boost, "флаг J-драйва потерян между кадрами");
 }
@@ -385,10 +434,10 @@ fn launch_service_speed_does_not_trigger_j_drive() {
     // Вылет: сначала скорость ещё настоящая, а в конце ролика Z80 пишет в
     // HighDeltaSpeed служебное 7, хотя индикатор хранит прежние 12.
     f.start_transition(true, &mem);
-    mem[Z80_STARS_TABLE] = 1;
+    game_tick(&mut mem);
     f.sync_from_z80(&mem);
     mem[Z80_HIGH_DELTA_SPEED] = 7;
-    mem[Z80_STARS_TABLE] = 2;
+    game_tick(&mut mem);
     f.sync_from_z80(&mem);
     assert!(
         !f.stars.boost,
@@ -397,7 +446,7 @@ fn launch_service_speed_does_not_trigger_j_drive() {
 
     // Переход уже закончился, но игра ещё не пересчитала скорость.
     f.transition.reset();
-    mem[Z80_STARS_TABLE] = 3;
+    game_tick(&mut mem);
     f.sync_from_z80(&mem);
     assert!(
         !f.stars.boost,
@@ -406,10 +455,10 @@ fn launch_service_speed_does_not_trigger_j_drive() {
 
     // Настоящая скорость снова совпала — обычный J-драйв опять ловится.
     mem[Z80_HIGH_DELTA_SPEED] = 12;
-    mem[Z80_STARS_TABLE] = 4;
+    game_tick(&mut mem);
     f.sync_from_z80(&mem);
     mem[Z80_HIGH_DELTA_SPEED] = 0x10;
-    mem[Z80_STARS_TABLE] = 5;
+    game_tick(&mut mem);
     f.sync_from_z80(&mem);
     assert!(f.stars.boost, "J-драйв перестал распознаваться");
 }
@@ -426,8 +475,8 @@ fn stars_stay_in_view_after_many_turns() {
     for frame in 0..2000 {
         mem[Z80_HIGH_ANGLE_LR] = if frame % 2 == 0 { 0x0F } else { 0x8F };
         mem[Z80_HIGH_ANGLE_DU] = if frame % 3 == 0 { 0x0F } else { 0x00 };
-        // Имитируем игровой такт: таблица звёзд обновляется.
-        mem[Z80_STARS_TABLE + frame % Z80_STARS_LEN] = frame as u8;
+        // Имитируем игровой такт: обновляются координаты объектов.
+        game_tick(&mut mem);
         f.sync_from_z80(&mem);
         f.tick(1.0 / 50.0);
     }
@@ -712,7 +761,7 @@ fn enemy_beam_shown_when_shield_is_already_zero() {
 
     // Щит уже нулевой, поэтому не меняется, но оригинал всё равно рисует луч.
     mem[Z80_DAMAGE_FRONT_SHIELD] = 7;
-    mem[Z80_STARS_TABLE] = mem[Z80_STARS_TABLE].wrapping_add(1);
+    game_tick(&mut mem);
     f.sync_from_z80(&mem);
     assert_eq!(
         f.combat.enemy_shots.len(),
@@ -1145,7 +1194,7 @@ fn game_over_does_not_trigger_star_boost() {
     mem[Z80_SPEED_GAUGE] = 0xA0; // скорость 31
     mem[Z80_PLAYER_GAME_OVER] = 1;
     f.sync_from_z80(&mem);
-    mem[Z80_STARS_TABLE] = 1; // звёздный такт
+    game_tick(&mut mem);
     f.sync_from_z80(&mem);
     assert!(!f.stars.boost, "на гибели включился J-драйв");
 }
@@ -1963,8 +2012,8 @@ fn particle_cloud_follows_game_tick() {
     f.sync_from_z80(&mem);
     let before = f.explosions.clouds[0].center;
 
-    // Игровой такт: меняется таблица звёзд, а вместе с ней и углы камеры.
-    mem[Z80_STARS_TABLE] = mem[Z80_STARS_TABLE].wrapping_add(1);
+    // Игровой такт: меняются координаты, а вместе с ними и углы камеры.
+    game_tick(&mut mem);
     mem[Z80_HIGH_ANGLE_LR] = 0x40;
     f.sync_from_z80(&mem);
     let after = f.explosions.clouds[0].center;
@@ -1990,7 +2039,7 @@ fn game_over_cloud_flies_away_from_camera() {
 
     let before = f.explosions.clouds[0].center;
     // Игровой такт с поворотом камеры и гибелью игрока.
-    mem[Z80_STARS_TABLE] = mem[Z80_STARS_TABLE].wrapping_add(1);
+    game_tick(&mut mem);
     mem[Z80_HIGH_ANGLE_LR] = 0x40;
     mem[Z80_PLAYER_GAME_OVER] = 1;
     f.sync_from_z80(&mem);

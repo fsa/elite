@@ -99,11 +99,9 @@ pub(super) const Z80_DAMAGE_REAR_SHIELD: usize = 0x9CA4;
 pub(super) const Z80_TEMP_LASER: usize = 0x70F0;
 /// Таблица звёзд оригинала (`byte_7A39`): 16 пар координат.
 ///
-/// Оригинал пересчитывает её только на игровом такте (около 5.5 Гц), а не
-/// каждый кадр 50 Гц. По изменению таблицы удобно ловить сам такт.
+/// Изменяется чаще, чем координаты объектов: используется только тестами как
+/// пример кадра, на котором игровая модель ещё не шагнула.
 pub(super) const Z80_STARS_TABLE: usize = 0x7A39;
-/// Длина таблицы звёзд в байтах.
-pub(super) const Z80_STARS_LEN: usize = 0x20;
 /// `StarsFastScroll` — взводится на такт J-драйва, гасится в `PrintStars`.
 pub(super) const Z80_STARS_FAST_SCROLL: usize = 0x7EDD;
 /// Слот станции (`objCoriolis`).

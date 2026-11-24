@@ -1,9 +1,9 @@
 //! Экран полёта: нативный рендер по данным Z80 (клавиша `F1`).
 //!
 //! Своей симуляции у экрана нет. Пока он открыт, продолжает работать
-//! эмулятор: координаты объектов, угловые скорости, скорость, показания
-//! приборов и таблица звёзд читаются из памяти игры в
-//! [`Flight::sync_from_z80`]. Рендер только рисует то, что уже посчитал Z80,
+//! эмулятор: координаты объектов, угловые скорости, скорость и показания
+//! приборов читаются из памяти игры в [`Flight::sync_from_z80`]. Рендер только
+//! рисует то, что уже посчитал Z80,
 //! поэтому полёт совпадает с оригиналом, включая J-драйв и его особенности.
 //!
 //! Экран занимает верхнюю часть окна — вид из кабины. Ниже и вокруг него
@@ -43,8 +43,8 @@ use crate::render3d::Rotation;
 use self::combat::Combat;
 use self::explosions::Explosions;
 use self::memory::{
-    Z80_HIGH_DELTA_SPEED, Z80_MEM_MIN, Z80_SPEED_GAUGE, Z80_STARS_FAST_SCROLL, Z80_STARS_LEN,
-    Z80_STARS_TABLE,
+    Z80_HIGH_DELTA_SPEED, Z80_MEM_MIN, Z80_OBJ_CORIOLIS, Z80_OBJ_MISSILE, Z80_OBJ_SLOT0,
+    Z80_PLANET_CRD, Z80_SPEED_GAUGE, Z80_STARS_FAST_SCROLL, Z80_SUN_CRD,
 };
 use self::messages::Messages;
 use self::palette::{planet_green, PLANET_COLOR};
@@ -52,6 +52,47 @@ use self::scene::{Body, ShipTints};
 use self::stars::{
     StarField, SPEED_MAX, STAR_ANGLE_DU_PER_UNIT, STAR_ANGLE_LR_PER_UNIT, STAR_COUNT,
 };
+
+/// Снимок состояния, по которому различается шаг модели Z80.
+///
+/// Координаты меняются при движении объектов, углы — когда `CalcAngSpeed4Prn`
+/// пересчитывает управление. Крен не всегда сдвигает координаты: планета на
+/// оси `Z` при повороте вокруг неё остаётся на месте, но звёзды должны крутиться.
+#[derive(PartialEq)]
+struct TickState {
+    slots: [[u8; 9]; 6],
+    missile: [u8; 9],
+    coriolis: [u8; 9],
+    sun: [u8; 9],
+    planet: [u8; 9],
+    angle_lr: u8,
+    angle_du: u8,
+}
+
+fn tick_state(mem: &[u8]) -> TickState {
+    let mut slots = [[0u8; 9]; 6];
+    for (i, slot) in slots.iter_mut().enumerate() {
+        let addr = Z80_OBJ_SLOT0 + i * self::memory::Z80_SLOT_SIZE;
+        slot.copy_from_slice(&mem[addr..addr + 9]);
+    }
+    let mut missile = [0u8; 9];
+    missile.copy_from_slice(&mem[Z80_OBJ_MISSILE..Z80_OBJ_MISSILE + 9]);
+    let mut coriolis = [0u8; 9];
+    coriolis.copy_from_slice(&mem[Z80_OBJ_CORIOLIS..Z80_OBJ_CORIOLIS + 9]);
+    let mut sun = [0u8; 9];
+    sun.copy_from_slice(&mem[Z80_SUN_CRD..Z80_SUN_CRD + 9]);
+    let mut planet = [0u8; 9];
+    planet.copy_from_slice(&mem[Z80_PLANET_CRD..Z80_PLANET_CRD + 9]);
+    TickState {
+        slots,
+        missile,
+        coriolis,
+        sun,
+        planet,
+        angle_lr: mem[Z80_HIGH_ANGLE_LR],
+        angle_du: mem[Z80_HIGH_ANGLE_DU],
+    }
+}
 use self::transition::TransitionState;
 
 mod combat;
@@ -107,8 +148,8 @@ pub struct Flight {
     /// открыт, а `WhatOnScreen` ещё равен станционному `0x0B`, не закрываем его
     /// до первого полётного кадра.
     seen_flight_screen: bool,
-    /// Снимок таблицы звёзд Z80: её изменение означает игровой такт.
-    prev_star_table: Option<[u8; Z80_STARS_LEN]>,
+    /// Снимок состояния Z80: его смена означает шаг модели.
+    prev_tick_state: Option<TickState>,
     /// В памяти был замечен взвод `StarsFastScroll` (J-драйв).
     z80_fast_scroll: bool,
     /// Скорость в единицах `HighDeltaSpeed` (`0..=31`) — темп звёзд.
@@ -170,7 +211,7 @@ impl Flight {
             active: false,
             view_dir: ViewDir::Forward,
             seen_flight_screen: false,
-            prev_star_table: None,
+            prev_tick_state: None,
             z80_fast_scroll: false,
             speed: 0.0,
             speed_resync: false,
@@ -200,7 +241,7 @@ impl Flight {
         self.active = true;
         self.view_dir = ViewDir::Forward;
         self.seen_flight_screen = false;
-        self.prev_star_table = None;
+        self.prev_tick_state = None;
         self.z80_fast_scroll = false;
         self.speed = 0.0;
         self.speed_resync = false;
@@ -383,7 +424,7 @@ impl Flight {
     /// Абсолютной матрицы ориентации игрока в оригинале нет: камера задаётся
     /// двумя угловыми скоростями (`HighAngleLR`/`HighAngleDU`), а координаты
     /// всех объектов ведутся уже в системе координат игрока. `CalcNewCrdObj_Pl`
-    /// каждый кадр поворачивает их на эти углы и сдвигает по `HighDeltaSpeed`,
+    /// на игровом такте поворачивает их на эти углы и сдвигает по `HighDeltaSpeed`,
     /// поэтому координаты слотов, `SunCrd` и `PlanetCrd` — это готовые
     /// координаты вида. Камера стоит в начале координат.
     pub fn sync_from_z80(&mut self, mem: &[u8]) {
@@ -438,21 +479,26 @@ impl Flight {
             self.view_dir = ViewDir::Forward;
         }
 
-        // Углы, звёзды и координаты объектов пересчитываются в игровом цикле
-        // Z80, а не на каждом кадре эмулятора. Изменение таблицы `byte_7A39`
-        // (`PrintStars`) — практический признак прохода обычной 3D-ветви.
-        // Снимок previous/current и интервал интерполяции привязаны к этому же
-        // такту: если обновлять их на каждом кадре 50 Гц, `alpha` почти всегда
-        // равен 1 и интерполяция не работает, а последний поворот применяется
-        // повторно к уже повёрнутым координатам — корабль смещается, а потом
-        // возвращается на место.
-        let mut table = [0u8; Z80_STARS_LEN];
-        table.copy_from_slice(&mem[Z80_STARS_TABLE..Z80_STARS_TABLE + Z80_STARS_LEN]);
-        let ticked = self.prev_star_table.is_some_and(|prev| prev != table);
-        self.prev_star_table = Some(table);
+        // Координаты и углы пересчитываются в игровом цикле Z80, а не на
+        // каждом кадре эмулятора. Признак шага — смена координат объектов или
+        // углов: крен не всегда двигает объекты (планета на оси Z), но звёзды
+        // должны поворачиваться. Таблица `byte_7A39` (`PrintStars`) обновляется
+        // чаще модели, и её использование как «такта» заставляло применять
+        // поворот камеры к уже повёрнутым координатам — планеты и корабли
+        // дёргались.
         if mem[Z80_STARS_FAST_SCROLL] == 1 {
             self.z80_fast_scroll = true;
         }
+
+        // Сцена ещё не собрана: для определения шага берём те же слоты Z80,
+        // откуда берутся тела (`Z80_OBJ_SLOT0`, планета/солнце, станция), и
+        // углы. Таблица звёзд не годится: она меняется чаще модели.
+        let state = tick_state(mem);
+        let ticked = self
+            .prev_tick_state
+            .as_ref()
+            .is_some_and(|prev| prev != &state);
+        self.prev_tick_state = Some(state);
         let prev_bodies_snapshot = self.bodies.clone();
 
         // Поворот за один игровой такт нужен и звёздам, и телам:
