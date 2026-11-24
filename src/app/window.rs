@@ -34,11 +34,12 @@ impl App<'_> {
         }
     }
 
-    /// Идёт ли анимация перехода (включая отсчёт гиперпрыжка). В это время
+    /// Идёт ли анимация перехода, а не только отсчёт гиперпрыжка. В это время
     /// игровой ввод, в том числе мышь, не должен влиять на игру.
     fn in_transition_animation(&self) -> bool {
         !self.machine.intro_seen
-            && (flight::z80_in_transition(&self.machine.mem) || self.flight.in_animation_mode())
+            && (flight::z80_in_transition_animation(&self.machine.mem)
+                || self.flight.in_animation_mode())
     }
 
     /// Спрятать курсор в полном экране после паузы; в обычном окне он всегда

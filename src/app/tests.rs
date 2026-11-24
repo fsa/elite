@@ -1634,8 +1634,9 @@ use crate::world::{
         assert_eq!(app.flight.view_dir, flight::ViewDir::Forward);
     }
 
-    /// Во время гиперпрыжка игровые клавиши не работают: вид Front View с
-    /// нативной анимацией открывается сам в момент перехода к тоннелю.
+    /// Отсчёт гиперпрыжка не блокирует клавиши: F1 открывает вид, а когда
+    /// счётчик доходит до нуля, приложение само включает передний вид с
+    /// анимацией. Уже после начала анимации игровые клавиши не работают.
     /// Кнопка ` действует и здесь — она показывает экран эмулятора вместо
     /// родного ролика.
     #[test]
@@ -1650,13 +1651,21 @@ use crate::world::{
         app.track_jump_countdown();
 
         app.key_event(KeyCode::F1, true, false);
+        app.open_pending_flight();
+        assert!(app.flight.active, "F1 не открыл вид во время отсчёта");
         assert!(
-            !app.flight.active,
-            "F1 не должен переключать экран во время анимации"
+            !app.flight.in_animation_mode(),
+            "отсчёт принят за анимацию"
         );
+
         app.machine.mem[flight::Z80_JUMP_COUNTDOWN] = 0;
         app.switch_to_flight_on_transition();
-        assert!(app.flight.active, "анимация не открыла вид сама");
+        app.flight.sync_transition_from_live(&app.machine.mem);
+        assert!(app.flight.active, "анимация не оставила вид открытым");
+        assert!(
+            app.flight.in_animation_mode(),
+            "тоннель не начался после обнуления счётчика"
+        );
         assert_eq!(
             app.flight.transition_kind(),
             Some(flight::TransitionKind::Hyperspace),
@@ -1725,8 +1734,8 @@ use crate::world::{
     }
 
     /// Если прыжок начался при открытом нативном виде, рендер не прячется, а
-    /// показывает нативную анимацию гиперперехода. В режиме анимации
-    /// доступен только передний вид.
+    /// показывает сначала отсчёт, затем анимацию гиперперехода. Отсчёт не
+    /// меняет выбран вид, а с началом тоннеля доступен только передний вид.
     #[test]
     fn flight_stays_active_during_jump_transition() {
         let opts = test_options();
@@ -1740,11 +1749,11 @@ use crate::world::{
         assert!(app.flight.active);
         assert_eq!(app.flight.view_dir, flight::ViewDir::Right);
 
-        // Начался прыжок: оригинал держит флаги перехода. Гиперпереход —
-        // режим анимации, поэтому отображается только передний вид.
+        // Начался отсчёт: флаги перехода уже взведены, но тоннеля ещё нет.
         app.machine.mem[flight::Z80_JUMP_DOCKING] = 1;
         app.machine.mem[flight::Z80_FLG_JUMP_DOCKING] = 1;
         app.machine.mem[flight::Z80_JUMP_COUNTDOWN] = 0x15;
+        app.track_jump_countdown();
         app.follow_flight_screen();
         assert!(app.flight.active, "вид закрылся на время прыжка");
         assert_eq!(
@@ -1752,12 +1761,32 @@ use crate::world::{
             Some(flight::TransitionKind::Hyperspace),
             "прыжок показан не как гиперпереход"
         );
-        // Синхронизация с памятью Z80 фиксирует передний вид в анимации.
         app.flight.sync_from_z80(&app.machine.mem);
+        assert_eq!(
+            app.flight.view_dir,
+            flight::ViewDir::Right,
+            "отсчёт сбросил выбранный вид"
+        );
+        assert!(!app.flight.in_animation_mode(), "отсчёт принят за анимацию");
+
+        // Пока идёт отсчёт, вид переключается и не сбрасывает переход.
+        app.key_event(KeyCode::F3, true, false);
+        assert_eq!(app.flight.view_dir, flight::ViewDir::Left);
+        assert_eq!(
+            app.flight.transition_kind(),
+            Some(flight::TransitionKind::Hyperspace),
+            "смена вида сбросила отсчёт"
+        );
+
+        // Обнуление счётчика начинает тоннель и возвращает передний вид.
+        app.machine.mem[flight::Z80_JUMP_COUNTDOWN] = 0;
+        app.switch_to_flight_on_transition();
+        app.flight.sync_transition_from_live(&app.machine.mem);
+        assert!(app.flight.in_animation_mode(), "тоннель не начался");
         assert_eq!(app.flight.view_dir, flight::ViewDir::Forward);
 
         // Переключение вида во время анимации не допускается и не сбрасывает её.
-        app.key_event(KeyCode::F3, true, false);
+        app.key_event(KeyCode::F2, true, false);
         assert_eq!(app.flight.view_dir, flight::ViewDir::Forward);
         assert_eq!(
             app.flight.transition_kind(),
@@ -1768,7 +1797,6 @@ use crate::world::{
         // Прыжок закончился — нативный вид остаётся активным (в переднем виде).
         app.machine.mem[flight::Z80_JUMP_DOCKING] = 0;
         app.machine.mem[flight::Z80_FLG_JUMP_DOCKING] = 0;
-        app.machine.mem[flight::Z80_JUMP_COUNTDOWN] = 0;
         app.follow_flight_screen();
         assert!(app.flight.active, "вид закрылся после прыжка");
         assert!(!app.flight.in_transition(), "переход не закончился");
@@ -3187,11 +3215,22 @@ use crate::world::{
         assert!(app.market.native, "рынок закрылся во время отсчёта");
         assert!(!app.flight.active, "вид F1 открылся до конца отсчёта");
 
+        // Отсчёт не мешает переключать нативные экраны вручную.
+        app.key_event(KeyCode::F7, true, false);
+        assert!(app.sysinfo.active, "F7 не открыл экран во время отсчёта");
+        assert!(!app.market.native, "рынок остался поверх нового экрана");
+        app.follow_native_screens();
+        assert!(app.sysinfo.active, "экран сам закрылся во время отсчёта");
+        app.key_event(KeyCode::F6, true, false);
+        assert!(app.hdmap.active, "F6 не открыл карту во время отсчёта");
+        assert!(!app.sysinfo.active, "прошлый экран остался под картой");
+
         // Счётчик обнулился — пора переключаться на анимацию гиперпрыжка.
         app.machine.mem[flight::Z80_JUMP_COUNTDOWN] = 0;
         app.switch_to_flight_on_transition();
         assert!(app.flight.active, "не открылся нативный вид F1");
         assert!(!app.market.native, "рынок остался поверх полёта");
+        assert!(!app.hdmap.active, "карта осталась поверх полёта");
         assert_eq!(
             app.flight.transition_kind(),
             Some(flight::TransitionKind::Hyperspace),

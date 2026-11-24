@@ -1761,6 +1761,27 @@ fn hyperspace_countdown_uses_live_memory_over_stale_scene_snapshot() {
     assert!(t.warp, "тоннель не начался после обнуления отсчёта");
 }
 
+/// Флаги перехода взводятся уже на отсчёте, но блокировать ввод и переключение
+/// экранов надо только когда началась сама анимация.
+#[test]
+fn countdown_is_not_transition_animation() {
+    let mut mem = vec![0u8; Z80_JUMP_COUNTDOWN + 1];
+    mem[Z80_JUMP_DOCKING] = 1;
+    mem[Z80_FLG_JUMP_DOCKING] = 1;
+    mem[Z80_JUMP_COUNTDOWN] = 0x15;
+    assert!(z80_in_transition(&mem));
+    assert!(
+        !z80_in_transition_animation(&mem),
+        "отсчёт принят за анимацию"
+    );
+
+    mem[Z80_JUMP_COUNTDOWN] = 0;
+    assert!(
+        z80_in_transition_animation(&mem),
+        "тоннель не распознан как анимация"
+    );
+}
+
 /// Оригинал создаёт новую систему перед вызовом `sub_9296`, а весь ролик
 /// кругов выполняется в его собственном цикле — до `PrintCompass` дело не
 /// доходит. Снимок на входе в ролик должен сразу дать нативному тоннелю новую

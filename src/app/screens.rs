@@ -837,7 +837,12 @@ impl App<'_> {
             };
             self.show_flight(dir);
         }
-        if self.flight.active && !self.flight.in_animation_mode() {
+        // Во время отсчёта Z80 ещё держит вид из кабины, а направление выбирает
+        // игрок: синхронизация с `WhatOnScreen` сбросила бы F2-F4 вперёд.
+        if self.flight.active
+            && !self.flight.in_animation_mode()
+            && !flight::z80_in_transition(&self.machine.mem)
+        {
             let dir = match self.machine.mem[flight::Z80_WHAT_ON_SCREEN] {
                 1 => flight::ViewDir::Back,
                 2 => flight::ViewDir::Left,

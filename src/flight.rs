@@ -112,8 +112,9 @@ mod view;
 // модуля полёта, поэтому не считаем их неиспользуемыми в обычной сборке.
 #[allow(unused_imports)]
 pub use self::memory::{
-    z80_in_cockpit, z80_in_transition, z80_is_docked, z80_player_dead, z80_radar_view,
-    z80_stop_rotation, Z80_COBRA_MK4, Z80_COMPASS_FLAG, Z80_CONTROL_KEY1, Z80_CONTROL_KEY2,
+    z80_in_cockpit, z80_in_transition, z80_in_transition_animation, z80_is_docked,
+    z80_player_dead, z80_radar_view, z80_stop_rotation, Z80_COBRA_MK4, Z80_COMPASS_FLAG,
+    Z80_CONTROL_KEY1, Z80_CONTROL_KEY2,
     Z80_FLG_SAVE_SCANNER, Z80_FLG_JUMP_DOCKING, Z80_FLAGS_SETUP, Z80_HIGH_ANGLE_DU,
     Z80_HIGH_ANGLE_LR, Z80_IND_DANGER, Z80_JUMP_COUNTDOWN, Z80_JUMP_DOCKING, Z80_LASER_MOUNTS,
     Z80_MAP_ROTATION, Z80_PLAYER_GAME_OVER, Z80_PRESS_KEY_SYMBOL, Z80_SCANNER_INVERT,
@@ -329,9 +330,10 @@ impl Flight {
     }
 
     /// Идёт ли режим анимации: вылет, гиперпереход или стыковка. В этом
-    /// режиме отображается только передний вид.
+    /// режиме отображается только передний вид. Отсчёт гиперпрыжка к анимации
+    /// не относится: до его окончания экраны переключаются обычным образом.
     pub fn in_animation_mode(&self) -> bool {
-        self.transition.kind().is_some()
+        self.transition.in_animation()
     }
 
     /// Переключить вид по сторонам (F1-F4 в нативном полёте): те же клавиши
@@ -460,6 +462,12 @@ impl Flight {
             if t.kind == TransitionKind::Hyperspace && t.warp && t.warp_initial_speed.is_none() {
                 t.warp_initial_speed = Some(self.speed);
             }
+        }
+        // Живая память может показать конец отсчёта раньше снимка сцены.
+        // Тоннель всегда передний, даже если во время отсчёта был выбран другой
+        // вид.
+        if self.in_animation_mode() {
+            self.view_dir = ViewDir::Forward;
         }
     }
 

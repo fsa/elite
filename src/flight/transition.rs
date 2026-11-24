@@ -129,6 +129,16 @@ impl TransitionState {
         self.current.is_some()
     }
 
+    /// Идёт ли уже сама анимация, а не ожидание отсчёта гиперпрыжка.
+    ///
+    /// Гиперпрыжок до обнуления счётчика показывает обычный полёт с цифрой,
+    /// и нативный вид в это время может переключаться. Вылет и стыковка
+    /// анимацию не откладывают.
+    pub(super) fn in_animation(&self) -> bool {
+        self.current
+            .is_some_and(|t| t.kind != TransitionKind::Hyperspace || t.warp)
+    }
+
     /// Какой переход сейчас идёт (для тестов и отладки).
     #[allow(dead_code)]
     pub(super) fn kind(&self) -> Option<TransitionKind> {

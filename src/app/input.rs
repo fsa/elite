@@ -759,13 +759,16 @@ impl App<'_> {
         }
 
         // В режиме анимации (вылет, гиперпереход, стыковка) не работают ни
-        // переключения экранов, ни органы управления. Переход сам открывает
-        // передний нативный вид; выйти в эмулятор можно только кнопкой `,
-        // обработанной выше. Системные комбинации (полный экран, скорость
-        // эмуляции) тоже обработаны выше и на игру не влияют.
+        // переключения экранов, ни органы управления. Отсчёт гиперпрыжка ещё
+        // не анимация: до обнуления счётчика экраны переключаются, а число
+        // показывается поверх каждого из них. Переход сам открывает передний
+        // нативный вид; выйти в эмулятор можно только кнопкой `, обработанной
+        // выше. Системные комбинации (полный экран, скорость эмуляции) тоже
+        // обработаны выше и на игру не влияют.
         if !self.machine.intro_seen
             && !self.menu
-            && (flight::z80_in_transition(&self.machine.mem) || self.flight.in_animation_mode())
+            && (flight::z80_in_transition_animation(&self.machine.mem)
+                || self.flight.in_animation_mode())
         {
             self.release_pressed(code);
             return;
@@ -1326,10 +1329,10 @@ impl App<'_> {
             // отфильтровывается в `forward_input`.
         }
         // В режиме анимации (вылет/прыжок/стыковка) эмулятор проигрывает
-        // анимацию и игра не реагирует на нажатие кнопок.
-        if flight::z80_in_transition(&self.machine.mem) || self.flight.in_animation_mode() {
-            // Во время отсчёта под картой клавиши прыжка уже переданы отдельно;
-            // остальной ввод в анимации не нужен.
+        // анимацию и игра не реагирует на нажатие кнопок. Во время отсчёта
+        // ввод живёт: клавиши экранов доходят до нативного слоя, а игре они
+        // всё равно не мешают — оригинал их в это время игнорирует.
+        if flight::z80_in_transition_animation(&self.machine.mem) || self.flight.in_animation_mode() {
             self.machine.release_all_keys();
             self.machine.release_joystick();
             return;
@@ -1363,8 +1366,9 @@ impl App<'_> {
     pub(super) fn forward_input(&mut self) {
         self.machine.release_all_keys();
         self.machine.release_joystick();
-        // В режиме анимации игра не реагирует на нажатие кнопок.
-        if flight::z80_in_transition(&self.machine.mem) || self.flight.in_animation_mode() {
+        // В режиме анимации игра не реагирует на нажатие кнопок; во время
+        // отсчёта гиперпрыжка ввод продолжает работать.
+        if flight::z80_in_transition_animation(&self.machine.mem) || self.flight.in_animation_mode() {
             self.pending_key = None;
             return;
         }
