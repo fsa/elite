@@ -103,8 +103,12 @@ impl TransitionState {
         if let Some(t) = &mut self.current {
             if t.kind == TransitionKind::Hyperspace {
                 t.countdown = mem.get(Z80_JUMP_COUNTDOWN).copied().unwrap_or(0);
-                if t.countdown == 0 {
-                    t.warp = true;
+                // Снимок сцены может ещё не содержать новый проход (в начале
+                // прыжка `PrintCompass` не вызывается), поэтому ненулевой
+                // отсчёт из живой памяти должен откатывать ложный тоннель.
+                t.warp = t.countdown == 0;
+                if !t.warp {
+                    t.warp_initial_speed = None;
                 }
             }
         }

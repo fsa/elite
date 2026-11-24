@@ -1704,6 +1704,62 @@ fn snapshot_marker_is_reached_in_live_flight() {
     assert!(m.game_snapshot_valid, "PrintCompass не достигнут в полёте");
 }
 
+/// В начале гиперпрыжка `PrintCompass` ещё не вызывается, поэтому снимок
+/// сцены может хранить старый `JumpCountdown == 0`, пока живая память уже
+/// ведёт отсчёт. На этом кадре тоннель начинать нельзя.
+#[test]
+fn hyperspace_scene_snapshot_lags_countdown_at_start() {
+    let mut m = launch_kladov();
+    m.mem[0xD082] = 0x46; // Pilot_Fuel
+    m.mem[0xD08D] = 1; // PilotGyperdrive
+    for key in [winit::keyboard::KeyCode::KeyG, winit::keyboard::KeyCode::KeyH] {
+        if let Some((row, bit)) = crate::keys::matrix_pos(key) {
+            m.keyboard[row] &= !(1 << bit);
+        }
+    }
+    let mut saw_countdown = false;
+    let mut saw_stale_snapshot = false;
+    for _ in 0..40 {
+        m.run_frame();
+        let live = m.mem[Z80_JUMP_COUNTDOWN];
+        let snapshot = m.game_snapshot[Z80_JUMP_COUNTDOWN];
+        saw_countdown |= m.mem[Z80_JUMP_DOCKING] == 2 && live > 0;
+        saw_stale_snapshot |= live > 0 && snapshot == 0;
+    }
+    assert!(saw_countdown, "гиперпрыжок не начался");
+    assert!(
+        saw_stale_snapshot,
+        "снимок сцены должен отставать от отсчёта в начале прыжка"
+    );
+}
+
+#[test]
+fn hyperspace_countdown_uses_live_memory_over_stale_scene_snapshot() {
+    let mut f = open();
+    let mut live = vec![0u8; Z80_JUMP_COUNTDOWN + 1];
+    let snapshot = vec![0u8; Z80_JUMP_COUNTDOWN + 1];
+    live[Z80_JUMP_DOCKING] = 2;
+    live[Z80_FLG_JUMP_DOCKING] = 1;
+    live[Z80_JUMP_COUNTDOWN] = 0x15;
+    // Снимок сцены ещё не содержит новый проход.
+    f.start_transition(false, &live);
+    f.sync_from_z80(&snapshot);
+    assert!(
+        f.transition.current.expect("переход пропал").warp,
+        "подготовка: снимок без отсчёта должен включать тоннель"
+    );
+
+    f.sync_transition_from_live(&live);
+    let t = f.transition.current.expect("переход пропал");
+    assert_eq!(t.countdown, 0x15, "отсчёт не взят из живой памяти");
+    assert!(!t.warp, "тоннель начался до конца отсчёта");
+
+    live[Z80_JUMP_COUNTDOWN] = 0;
+    f.sync_transition_from_live(&live);
+    let t = f.transition.current.expect("переход пропал");
+    assert!(t.warp, "тоннель не начался после обнуления отсчёта");
+}
+
 #[test]
 fn flight_ignores_partially_updated_game_pass() {
     let mut m = crate::machine::Spectrum::new(None);

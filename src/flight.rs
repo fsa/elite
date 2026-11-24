@@ -453,6 +453,27 @@ impl Flight {
         }
     }
 
+    /// Применить отсчёт и флаг тоннеля из переданной памяти.
+    fn apply_transition_sync(&mut self, mem: &[u8]) {
+        self.transition.sync(mem);
+        if let Some(t) = &mut self.transition.current {
+            if t.kind == TransitionKind::Hyperspace && t.warp && t.warp_initial_speed.is_none() {
+                t.warp_initial_speed = Some(self.speed);
+            }
+        }
+    }
+
+    /// Уточнить состояние перехода по живой памяти Z80.
+    ///
+    /// Снимок сцены берётся в конце прохода (`PrintCompass`), но в начале
+    /// гиперпрыжка этот маркер несколько кадров не достигается: игра ещё
+    /// печатает сообщение о прыжке. Поэтому снимок может временно хранить
+    /// `JumpCountdown == 0` из предыдущего состояния, и отсчёт надо брать из
+    /// живой памяти, иначе тоннель начнётся до конца отсчёта.
+    pub fn sync_transition_from_live(&mut self, live_mem: &[u8]) {
+        self.apply_transition_sync(live_mem);
+    }
+
     /// Синхронизировать рендер с данными из памяти Z80.
     ///
     /// Абсолютной матрицы ориентации игрока в оригинале нет: камера задаётся
@@ -499,13 +520,7 @@ impl Flight {
             self.view_dir = ViewDir::Forward;
         }
 
-        // Отсчёт гиперпрыжка ведёт Z80; имя цели читается там же.
-        self.transition.sync(mem);
-        if let Some(t) = &mut self.transition.current {
-            if t.kind == TransitionKind::Hyperspace && t.warp && t.warp_initial_speed.is_none() {
-                t.warp_initial_speed = Some(self.speed);
-            }
-        }
+        self.apply_transition_sync(mem);
 
         // Переход в режим анимации гиперперехода мог произойти на этом шаге
         // (например, отсчёт закончился и начался тоннель) — фиксируем вид.

@@ -111,6 +111,11 @@ impl App<'_> {
         // и прямой опрос памяти перемешал бы старые и новые координаты.
         self.flight.observe_live_fast_scroll(&self.machine.mem);
         self.flight.sync_from_z80(self.machine.game_state());
+        // Отсчёт гиперпрыжка в начале перехода может отсутствовать в снимке
+        // сцены (см. `sync_transition_from_live`), поэтому берём его из живой
+        // памяти после синхронизации остального состояния.
+        self.flight
+            .sync_transition_from_live(&self.machine.mem);
         // Повтор текста в этом кадре продлевает показ сообщения.
         self.flight.advance_messages(frames);
         self.flight.sync_game_msg(&mut self.machine.game_msg);
