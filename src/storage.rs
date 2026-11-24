@@ -71,6 +71,8 @@ pub struct LoadList {
     pub entries: Vec<Entry>,
     pub sel: usize,
     pub status: String,
+    /// Идёт подтверждение удаления выбранной записи (`Y`/`N`/`Esc`).
+    pub confirm_delete: bool,
 }
 
 /// Полноэкранный экран работы с сохранениями.

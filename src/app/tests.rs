@@ -2435,12 +2435,68 @@ use crate::world::{
             }],
             sel: 0,
             status: String::new(),
+            confirm_delete: false,
         }));
         app.key_event(KeyCode::Enter, true, false);
         app.key_event(KeyCode::Enter, false, false);
         assert!(app.save_screen.is_none(), "загрузка должна закрыть экран");
         assert!(app.machine.load_requested, "загрузка не запрошена");
         assert!(app.loading, "во время загрузки должна быть заглушка");
+    }
+
+    /// Удаление из таблицы LOAD сначала просит подтверждение: `N` и `Esc`
+    /// отменяют его, `Y` удаляет запись только после запроса.
+    #[test]
+    fn delete_save_asks_confirmation() {
+        let catalog =
+            std::env::temp_dir().join(format!("elite-delete-confirm-{}.bin", std::process::id()));
+        let _ = fs::remove_file(&catalog);
+        storage::set_test_catalog(Some(catalog.clone()));
+        let opts = test_options();
+        let mut app = App::new(boot(), &opts);
+        storage::save_to_catalog(&mut app.machine, "AAAA", "FIRST", save_layout_kladov()).unwrap();
+        storage::save_to_catalog(&mut app.machine, "BBBB", "SECOND", save_layout_kladov()).unwrap();
+        app.open_load_list();
+
+        fn state(app: &App<'_>) -> (bool, usize) {
+            match &app.save_screen {
+                Some(storage::SaveScreen::Load(list)) => (list.confirm_delete, list.sel),
+                _ => panic!("таблица загрузки не открыта"),
+            }
+        }
+        assert_eq!(state(&app), (false, 0));
+
+        app.key_event(KeyCode::Delete, true, false);
+        assert_eq!(
+            state(&app),
+            (true, 0),
+            "Delete должен только запросить подтверждение"
+        );
+        assert_eq!(storage::read_entries_from(&catalog).unwrap().len(), 2);
+
+        // Пока запрос открыт, выбор и загрузка не реагируют на клавиши.
+        app.key_event(KeyCode::ArrowDown, true, false);
+        app.key_event(KeyCode::Enter, true, false);
+        assert_eq!(state(&app), (true, 0));
+        assert!(matches!(app.save_screen, Some(storage::SaveScreen::Load(_))));
+        assert!(!app.machine.load_requested);
+
+        app.key_event(KeyCode::KeyN, true, false);
+        assert_eq!(state(&app), (false, 0), "N должен отменить подтверждение");
+        assert_eq!(storage::read_entries_from(&catalog).unwrap().len(), 2);
+
+        app.key_event(KeyCode::Delete, true, false);
+        app.key_event(KeyCode::Escape, true, false);
+        assert_eq!(state(&app), (false, 0), "Esc должен отменить подтверждение");
+        assert_eq!(storage::read_entries_from(&catalog).unwrap().len(), 2);
+
+        app.key_event(KeyCode::Delete, true, false);
+        app.key_event(KeyCode::KeyY, true, false);
+        assert_eq!(state(&app).0, false, "после удаления запрос должен закрыться");
+        assert_eq!(storage::read_entries_from(&catalog).unwrap().len(), 1);
+
+        storage::set_test_catalog(None);
+        let _ = fs::remove_file(&catalog);
     }
 
     /// Загрузка из меню с заставки доводит игру до станции, и после неё
@@ -2492,6 +2548,7 @@ use crate::world::{
             entries: vec![entry],
             sel: 0,
             status: String::new(),
+            confirm_delete: false,
         }));
         app.key_event(KeyCode::Enter, true, false);
         app.key_event(KeyCode::Enter, false, false);

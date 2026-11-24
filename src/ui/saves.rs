@@ -173,6 +173,51 @@ pub(crate) fn draw_save_prompt(frame: &mut Frame, prompt: &SavePrompt) {
     }
 }
 
+/// Подтверждение удаления поверх таблицы. Пока оно открыто, остальные
+/// клавиши не меняют выбор и не запускают загрузку.
+fn draw_delete_confirmation(frame: &mut Frame, list: &LoadList, c: i32, scale: usize) {
+    let entry = list.entries.get(list.sel);
+    let name = entry
+        .map(|e| truncate(&e.name, crate::storage::NAME_LEN))
+        .unwrap_or_default();
+    let comment = entry
+        .map(|e| truncate(&e.comment, crate::storage::COMMENT_LEN))
+        .unwrap_or_default();
+    let lines = [
+        "DELETE SAVE?".to_string(),
+        format!("NAME: {name}"),
+        format!("COMMENT: {comment}"),
+        "Y DELETE  N KEEP  ESC CANCEL".to_string(),
+    ];
+    let chars = lines
+        .iter()
+        .map(|line| line.chars().count())
+        .max()
+        .unwrap_or(1)
+        .max(1) as i32;
+    let w = (chars + 2) * c;
+    let h = (lines.len() as i32 + 2) * c;
+    let x = (frame.width as i32 - w).max(0) / 2;
+    let y = (frame.height as i32 - h).max(0) / 2;
+    let b = border(c);
+
+    frame.fill_rect(x, y, w as usize, h as usize, BG);
+    frame.fill_rect(x, y, w as usize, b as usize, FRAME);
+    frame.fill_rect(x, y + h - b, w as usize, b as usize, FRAME);
+    frame.fill_rect(x, y, b as usize, h as usize, FRAME);
+    frame.fill_rect(x + w - b, y, b as usize, h as usize, FRAME);
+    for (i, line) in lines.iter().enumerate() {
+        let color = if i == 0 {
+            WHITE
+        } else if i + 1 == lines.len() {
+            LABEL
+        } else {
+            FRAME
+        };
+        frame.draw_text(ZX_FONT, x + c, row_y(y + c, c, i), line, color, scale);
+    }
+}
+
 /// Таблица сохранений. Строки приходят уже отсортированными: свежие сверху.
 pub(crate) fn draw_load_list(frame: &mut Frame, list: &LoadList) {
     let c = cell(frame);
@@ -255,6 +300,42 @@ pub(crate) fn draw_load_list(frame: &mut Frame, list: &LoadList) {
             &truncate(&list.status, cols),
             LABEL,
             scale,
+        );
+    }
+    if list.confirm_delete {
+        draw_delete_confirmation(frame, list, c, scale);
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::storage::Entry;
+
+    #[test]
+    fn delete_confirmation_is_drawn_over_table() {
+        let mut frame = Frame::new(1280, 960);
+        let list = LoadList {
+            entries: vec![Entry {
+                name: "LAVE".to_string(),
+                comment: "Lave".to_string(),
+                saved_at: 0,
+                data: vec![0; crate::storage::COMMANDER_LEN],
+            }],
+            sel: 0,
+            status: String::new(),
+            confirm_delete: false,
+        };
+        draw_load_list(&mut frame, &list);
+        let plain = frame.pixels().to_vec();
+
+        let mut list = list;
+        list.confirm_delete = true;
+        draw_load_list(&mut frame, &list);
+        assert_ne!(
+            frame.pixels(),
+            plain.as_slice(),
+            "подтверждение должно менять кадр таблицы"
         );
     }
 }

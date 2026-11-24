@@ -413,6 +413,7 @@ impl<'a> App<'a> {
             entries,
             sel: 0,
             status,
+            confirm_delete: false,
         }));
         self.menu = true;
         self.menu_sel = 0;

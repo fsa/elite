@@ -1407,80 +1407,111 @@ impl App<'_> {
                     }
                 }
             },
-            Some(storage::SaveScreen::Load(mut list)) => match code {
-                Escape => self.close_save_screen(),
-                ArrowUp if !repeat && list.sel > 0 => {
-                    list.sel -= 1;
-                    list.status.clear();
+            Some(storage::SaveScreen::Load(mut list)) => {
+                let typed = typed.or_else(|| {
+                    if repeat {
+                        None
+                    } else {
+                        Self::physical_ascii(code)
+                    }
+                });
+                if list.confirm_delete {
+                    match typed {
+                        Some(c) if c.to_ascii_lowercase() == 'y' => {
+                            if let Some(entry) = list.entries.get(list.sel).cloned() {
+                                list.status = match storage::delete_entry(&entry) {
+                                    Ok(mut entries) => {
+                                        storage::sorted_for_table(&mut entries);
+                                        list.sel = list.sel.min(entries.len().saturating_sub(1));
+                                        list.entries = entries;
+                                        "DELETED".to_string()
+                                    }
+                                    Err(_) => "ERROR: CANNOT DELETE".to_string(),
+                                };
+                            }
+                            list.confirm_delete = false;
+                        }
+                        Some(c) if c.to_ascii_lowercase() == 'n' => {
+                            list.confirm_delete = false;
+                            list.status = "DELETE CANCELLED".to_string();
+                        }
+                        _ if code == Escape && !repeat => {
+                            list.confirm_delete = false;
+                            list.status = "DELETE CANCELLED".to_string();
+                        }
+                        _ => {}
+                    }
                     self.save_screen = Some(storage::SaveScreen::Load(list));
-                }
-                ArrowDown if !repeat && list.sel + 1 < list.entries.len() => {
-                    list.sel += 1;
-                    list.status.clear();
-                    self.save_screen = Some(storage::SaveScreen::Load(list));
-                }
-                Enter if !repeat => {
-                    if let Some(entry) = list.entries.get(list.sel).cloned() {
-                        let intro = self.machine.intro_seen;
-                        storage::load_entry(&mut self.machine, &entry);
-                        self.loading = true;
-                        self.close_save_screen();
-                        // Загрузка с заставки сразу показывает кадр Z80: хук
-                        // отведёт игру на станцию, не дожидаясь `Space`.
-                        if intro {
-                            self.splash_emulator = true;
+                } else {
+                    match code {
+                        Escape => self.close_save_screen(),
+                        ArrowUp if !repeat && list.sel > 0 => {
+                            list.sel -= 1;
+                            list.status.clear();
+                            self.save_screen = Some(storage::SaveScreen::Load(list));
+                        }
+                        ArrowDown if !repeat && list.sel + 1 < list.entries.len() => {
+                            list.sel += 1;
+                            list.status.clear();
+                            self.save_screen = Some(storage::SaveScreen::Load(list));
+                        }
+                        Enter if !repeat => {
+                            if let Some(entry) = list.entries.get(list.sel).cloned() {
+                                let intro = self.machine.intro_seen;
+                                storage::load_entry(&mut self.machine, &entry);
+                                self.loading = true;
+                                self.close_save_screen();
+                                // Загрузка с заставки сразу показывает кадр Z80: хук
+                                // отведёт игру на станцию, не дожидаясь `Space`.
+                                if intro {
+                                    self.splash_emulator = true;
+                                }
+                            }
+                        }
+                        KeyE if !repeat => {
+                            if let Some(entry) = list.entries.get(list.sel).cloned() {
+                                list.status = match storage::export_entry_dialog(&entry) {
+                                    Ok(Some(_)) => "EXPORTED".to_string(),
+                                    Ok(None) => "EXPORT CANCELLED".to_string(),
+                                    Err(_) => "ERROR: EXPORT FAILED".to_string(),
+                                };
+                            }
+                            self.save_screen = Some(storage::SaveScreen::Load(list));
+                        }
+                        KeyI if !repeat => {
+                            list.status = match storage::import_entry_dialog() {
+                                Ok(Some(entry)) => match storage::read_entries() {
+                                    Ok(mut entries) => {
+                                        storage::sorted_for_table(&mut entries);
+                                        list.sel = entries
+                                            .iter()
+                                            .position(|e| {
+                                                e.saved_at == entry.saved_at && e.name == entry.name
+                                            })
+                                            .unwrap_or(0);
+                                        list.entries = entries;
+                                        "IMPORTED".to_string()
+                                    }
+                                    Err(_) => "ERROR: CANNOT READ CATALOG".to_string(),
+                                },
+                                Ok(None) => "IMPORT CANCELLED".to_string(),
+                                Err(_) => "ERROR: IMPORT FAILED".to_string(),
+                            };
+                            self.save_screen = Some(storage::SaveScreen::Load(list));
+                        }
+                        Delete | Backspace if !repeat => {
+                            if list.entries.get(list.sel).is_some() {
+                                list.confirm_delete = true;
+                                list.status = "DELETE SAVE? Y/N".to_string();
+                            }
+                            self.save_screen = Some(storage::SaveScreen::Load(list));
+                        }
+                        _ => {
+                            self.save_screen = Some(storage::SaveScreen::Load(list));
                         }
                     }
                 }
-                KeyE if !repeat => {
-                    if let Some(entry) = list.entries.get(list.sel).cloned() {
-                        list.status = match storage::export_entry_dialog(&entry) {
-                            Ok(Some(_)) => "EXPORTED".to_string(),
-                            Ok(None) => "EXPORT CANCELLED".to_string(),
-                            Err(_) => "ERROR: EXPORT FAILED".to_string(),
-                        };
-                    }
-                    self.save_screen = Some(storage::SaveScreen::Load(list));
-                }
-                KeyI if !repeat => {
-                    list.status = match storage::import_entry_dialog() {
-                        Ok(Some(entry)) => match storage::read_entries() {
-                            Ok(mut entries) => {
-                                storage::sorted_for_table(&mut entries);
-                                list.sel = entries
-                                    .iter()
-                                    .position(|e| {
-                                        e.saved_at == entry.saved_at && e.name == entry.name
-                                    })
-                                    .unwrap_or(0);
-                                list.entries = entries;
-                                "IMPORTED".to_string()
-                            }
-                            Err(_) => "ERROR: CANNOT READ CATALOG".to_string(),
-                        },
-                        Ok(None) => "IMPORT CANCELLED".to_string(),
-                        Err(_) => "ERROR: IMPORT FAILED".to_string(),
-                    };
-                    self.save_screen = Some(storage::SaveScreen::Load(list));
-                }
-                Delete | Backspace if !repeat => {
-                    if let Some(entry) = list.entries.get(list.sel).cloned() {
-                        list.status = match storage::delete_entry(&entry) {
-                            Ok(mut entries) => {
-                                storage::sorted_for_table(&mut entries);
-                                list.sel = list.sel.min(entries.len().saturating_sub(1));
-                                list.entries = entries;
-                                "DELETED".to_string()
-                            }
-                            Err(_) => "ERROR: CANNOT DELETE".to_string(),
-                        };
-                    }
-                    self.save_screen = Some(storage::SaveScreen::Load(list));
-                }
-                _ => {
-                    self.save_screen = Some(storage::SaveScreen::Load(list));
-                }
-            },
+            }
             None => {}
         }
     }
