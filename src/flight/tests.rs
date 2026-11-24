@@ -16,7 +16,8 @@ use super::palette::{
 };
 use super::render::scene::{draw_star, draw_stars_view};
 use super::scene::{
-    BodyKind, BODY_SRC_MISSILE, BODY_SRC_PLANET, BODY_SRC_SLOT0, PLANET_RADIUS, SUN_RADIUS,
+    BodyKind, BODY_SRC_CORIOLIS, BODY_SRC_MISSILE, BODY_SRC_PLANET, BODY_SRC_SLOT0, PLANET_RADIUS,
+    SUN_RADIUS,
 };
 use super::stars::{
     star_count_for, Star, SPEED_MAX, STAR_ANGLE_LR_PER_UNIT, STAR_COUNT, STAR_COUNT_MAX,
@@ -96,13 +97,13 @@ fn body_interpolation_follows_camera_turn() {
         test_body(BODY_SRC_SLOT0, turn.apply(pos), turn.mul(&rot)),
         test_body(BODY_SRC_SLOT0 + 1, turn.apply(moved), turn.mul(&rot)),
     ];
-    f.last_camera_turn = turn;
-    f.tick_interval = 0.2;
+    f.ship_turn = turn;
+    f.ship_interval = 0.2;
 
     for &accum in &[0.0, 0.05, 0.1, 0.19] {
-        f.tick_accum = accum;
+        f.ship_accum = accum;
         let rendered = f.render_bodies();
-        let alpha = accum / f.tick_interval;
+        let alpha = accum / f.ship_interval;
         // Неподвижное тело не должно «уезжать» из-за поворота камеры.
         assert_vec_close(rendered[0].pos, turn.apply(pos));
         let axis = rendered[0].rot.apply([1.0, 0.0, 0.0]);
@@ -178,9 +179,9 @@ fn interpolation_spans_several_display_frames() {
     mem[Z80_OBJ_SLOT0] = mem[Z80_OBJ_SLOT0].wrapping_add(0x20);
     f.sync_from_z80(&mem);
     assert!(
-        (f.tick_interval - 9.0 / 50.0).abs() < 1e-6,
+        (f.ship_interval - 9.0 / 50.0).abs() < 1e-6,
         "интервал должен покрывать несколько кадров: {}",
-        f.tick_interval
+        f.ship_interval
     );
 
     // Сразу после такта alpha мал: корабль ещё не дошёл до нового положения.
@@ -228,18 +229,18 @@ fn planet_does_not_jitter_when_only_star_table_changes() {
 }
 
 #[test]
-fn sync_captures_camera_turn_only_on_game_tick() {
+fn sync_captures_camera_turn_only_on_ship_update() {
     let mut f = open();
     let mut mem = z80_mem_with_flight();
     f.sync_from_z80(&mem);
-    let axis = f.last_camera_turn.apply([1.0, 0.0, 0.0]);
+    let axis = f.ship_turn.apply([1.0, 0.0, 0.0]);
     assert_vec_close(axis, [1.0, 0.0, 0.0]);
 
-    // Крен вправо на 4 единицы: поворот должен попасть в `last_camera_turn`.
+    // Крен вправо на 4 единицы: поворот должен попасть в снимок кораблей.
     mem[Z80_HIGH_ANGLE_LR] = 4;
     game_tick(&mut mem);
     f.sync_from_z80(&mem);
-    let axis = f.last_camera_turn.apply([1.0, 0.0, 0.0]);
+    let axis = f.ship_turn.apply([1.0, 0.0, 0.0]);
     let angle = axis[1].atan2(axis[0]);
     let expected = 4.0 * STAR_ANGLE_LR_PER_UNIT;
     assert!(
@@ -247,11 +248,11 @@ fn sync_captures_camera_turn_only_on_game_tick() {
         "неверный поворот камеры: {angle} против {expected}"
     );
 
-    // Кадр без такта не меняет записанный поворот: одна только таблица звёзд
-    // обновляется чаще модели Z80.
+    // Кадр без обновления кораблей не меняет их записанный поворот: одна
+    // только таблица звёзд обновляется чаще модели Z80.
     mem[Z80_STARS_TABLE] = mem[Z80_STARS_TABLE].wrapping_add(1);
     f.sync_from_z80(&mem);
-    assert_vec_close(f.last_camera_turn.apply([1.0, 0.0, 0.0]), axis);
+    assert_vec_close(f.ship_turn.apply([1.0, 0.0, 0.0]), axis);
 }
 
 #[test]
@@ -260,7 +261,7 @@ fn coriolis_change_does_not_count_as_game_tick() {
     let mut mem = z80_mem_with_flight();
     f.sync_from_z80(&mem);
 
-    // Настоящий такт с креном: в `last_camera_turn` записан поворот камеры.
+    // Настоящий такт с креном: корабли получили поворот камеры.
     mem[Z80_HIGH_ANGLE_LR] = 8;
     game_tick(&mut mem);
     f.sync_from_z80(&mem);
@@ -283,6 +284,50 @@ fn coriolis_change_does_not_count_as_game_tick() {
         .expect("планета не прочитана")
         .pos;
     assert_vec_close(after, before);
+}
+
+#[test]
+fn ships_do_not_jitter_when_only_world_updates() {
+    let mut f = open();
+    let mut mem = z80_mem_with_flight();
+    f.sync_from_z80(&mem);
+
+    // Настоящий такт с тангажем: корабли и мир получили свой поворот.
+    mem[Z80_HIGH_ANGLE_DU] = 3;
+    game_tick(&mut mem);
+    mem[Z80_PLANET_CRD] = mem[Z80_PLANET_CRD].wrapping_add(1);
+    f.sync_from_z80(&mem);
+    f.tick(0.02);
+    let before = f.render_bodies();
+    let ship_before = before
+        .iter()
+        .find(|b| b.source == BODY_SRC_SLOT0)
+        .expect("корабль не прочитан")
+        .pos;
+    let station_before = before
+        .iter()
+        .find(|b| b.source == BODY_SRC_CORIOLIS)
+        .expect("станция не прочитана")
+        .pos;
+
+    // Следующий кадр обновил только солнце с планетой, angle изменился.
+    // Поворот камеры не должен заново сдвинуть корабль и станцию.
+    mem[Z80_HIGH_ANGLE_DU] = 6;
+    mem[Z80_SUN_CRD] = mem[Z80_SUN_CRD].wrapping_add(1);
+    f.sync_from_z80(&mem);
+    let after = f.render_bodies();
+    let ship_after = after
+        .iter()
+        .find(|b| b.source == BODY_SRC_SLOT0)
+        .expect("корабль не прочитан")
+        .pos;
+    let station_after = after
+        .iter()
+        .find(|b| b.source == BODY_SRC_CORIOLIS)
+        .expect("станция не прочитана")
+        .pos;
+    assert_vec_close(ship_after, ship_before);
+    assert_vec_close(station_after, station_before);
 }
 
 #[test]
@@ -1650,6 +1695,51 @@ fn launch_kladov() -> crate::machine::Spectrum {
         "координаты планеты не инициализированы"
     );
     m
+}
+
+#[test]
+fn flight_ignores_partially_updated_game_pass() {
+    let mut m = crate::machine::Spectrum::new(None);
+    let marker = 0x7471;
+    m.game_marker = Some(marker);
+    m.mem.copy_from_slice(&z80_mem_with_flight());
+    // Чем больше объектов, тем дольше проход и выше шанс, что граница кадра
+    // эмулятора придётся на середину обновления объектов.
+    for i in 0..6usize {
+        let base = Z80_OBJ_SLOT0 + i * Z80_SLOT_SIZE;
+        put_obj(&mut m.mem, base, "d_Viper");
+        let x = (1000 + i as u32 * 400).to_le_bytes();
+        m.mem[base..base + 3].copy_from_slice(&x[..3]);
+    }
+    // На входе в игру память ещё хранит полностью законченный проход.
+    m.note_pc(marker);
+    assert!(m.game_snapshot_valid);
+
+    let mut stable = open();
+    let mut live = open();
+    stable.sync_from_z80(m.game_state());
+    live.sync_from_z80(&m.mem);
+    let slot_x = |f: &Flight| {
+        f.bodies
+            .iter()
+            .find(|b| b.source == BODY_SRC_SLOT0)
+            .unwrap()
+            .pos[0]
+    };
+    let before = slot_x(&stable);
+
+    // В середине прохода Z80 успел записать только часть слотов. Прямой опрос
+    // памяти видит разорванное состояние, снимок — нет.
+    m.mem[Z80_OBJ_SLOT0] = m.mem[Z80_OBJ_SLOT0].wrapping_add(0x20);
+    stable.sync_from_z80(m.game_state());
+    live.sync_from_z80(&m.mem);
+    assert_eq!(slot_x(&stable), before, "снимок не защитил от разрыва прохода");
+    assert_ne!(slot_x(&live), before, "живая память должна была измениться");
+
+    // Следующий вход в `GameMain` публикует уже законченный проход.
+    m.note_pc(marker);
+    stable.sync_from_z80(m.game_state());
+    assert_ne!(slot_x(&stable), before, "новый проход не был прочитан");
 }
 
 #[test]

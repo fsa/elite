@@ -101,6 +101,7 @@ pub(super) const Z80_TEMP_LASER: usize = 0x70F0;
 ///
 /// Изменяется чаще, чем координаты объектов: используется только тестами как
 /// пример кадра, на котором игровая модель ещё не шагнула.
+#[cfg(test)]
 pub(super) const Z80_STARS_TABLE: usize = 0x7A39;
 /// `StarsFastScroll` — взводится на такт J-драйва, гасится в `PrintStars`.
 pub(super) const Z80_STARS_FAST_SCROLL: usize = 0x7EDD;

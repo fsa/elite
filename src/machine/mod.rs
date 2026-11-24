@@ -77,6 +77,13 @@ pub struct Spectrum {
     /// [`Spectrum::intro_seen`]. Так флаг «залипает» на заставке, хотя её
     /// цикл вызывает длинные рутины вне своего диапазона.
     pub game_marker: Option<u16>,
+    /// Снимок памяти на входе в `GameMain`. Граница кадра эмулятора может
+    /// пройти в середине прохода игры: тогда часть объектов уже обновлена, а
+    /// часть ещё нет. Нативный слой читает этот снимок, чтобы видеть всегда
+    /// законченный проход, а не случайную смесь двух проходов.
+    pub game_snapshot: Vec<u8>,
+    /// Был ли уже снимок на входе в `GameMain`.
+    pub game_snapshot_valid: bool,
     /// Игра сейчас на заставке (интро). Пока игра на заставке, нативные
     /// экраны (карта/закупка) не открываются — как и у оригинальных команд.
     pub intro_seen: bool,
@@ -175,6 +182,8 @@ impl Spectrum {
             dump_at: Vec::new(),
             intro_range: None,
             game_marker: None,
+            game_snapshot: vec![0; MEM_SIZE],
+            game_snapshot_valid: false,
             intro_seen: false,
             audio_rate: crate::audio::SAMPLE_RATE,
             beeper_edges: Vec::new(),
@@ -232,6 +241,7 @@ impl Spectrum {
         self.mem[0x4000..0x8000].copy_from_slice(&self.ram_banks[5]);
         self.mem[0x8000..0xC000].copy_from_slice(&self.ram_banks[2]);
         self.mem[0xC000..0x10000].copy_from_slice(&self.ram_banks[self.paged_bank]);
+        self.game_snapshot_valid = false;
     }
 
     /// Установить хук, запомнив банк для адресов из `0xC000..0x10000`.
@@ -284,15 +294,32 @@ impl Spectrum {
     pub fn note_pc(&mut self, pc: u16) {
         if self.game_marker == Some(pc) {
             self.intro_seen = false;
+            // Снимок делается до исполнения первой инструкции прохода: в
+            // памяти ещё полностью состояния предыдущего законченного
+            // `GameMain`, включая координаты объектов, которые Z80 обновит
+            // позже в этом же кадре.
+            self.game_snapshot.copy_from_slice(&self.mem);
+            self.game_snapshot_valid = true;
         } else if let Some((lo, hi)) = self.intro_range {
             if pc >= lo && pc <= hi {
                 self.intro_seen = true;
+                self.game_snapshot_valid = false;
             }
         }
     }
 
+    /// Состояние игры в последней точке `GameMain`, откуда его безопасно
+    /// читать нативному слою. До первого прохода — обычная память.
+    pub fn game_state(&self) -> &[u8] {
+        if self.game_snapshot_valid {
+            &self.game_snapshot
+        } else {
+            &self.mem
+        }
+    }
+
     /// Run one PAL frame's worth of instructions, raising a maskable
-    /// interrupt at the start of the frame (IM1 -> 0x0038).
+    /// interrupt at the start of the frame (у Кладова IM2 -> 0xFEFE).
     pub fn run_frame(&mut self) {
         self.run_frames(1);
     }

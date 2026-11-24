@@ -107,6 +107,27 @@ fn beeper_edges_become_audio() {
 }
 
 #[test]
+fn game_state_is_snapshot_taken_at_game_marker() {
+    let mut m = Spectrum::new(None);
+    m.game_marker = Some(0x7471);
+    m.mem[0x7000] = 0x11;
+    assert_eq!(m.game_state()[0x7000], 0x11, "до прохода нужна живая память");
+
+    m.note_pc(0x7471);
+    assert!(m.game_snapshot_valid);
+    m.mem[0x7000] = 0x22;
+    assert_eq!(m.game_state()[0x7000], 0x11, "снимок должен хранить вход в проход");
+
+    m.note_pc(0x7471);
+    assert_eq!(m.game_state()[0x7000], 0x22, "новый проход обновляет снимок");
+
+    m.intro_range = Some((0x739E, 0x73FD));
+    m.note_pc(0x73A0);
+    assert!(!m.game_snapshot_valid, "на заставке снимок недействителен");
+    assert_eq!(m.game_state()[0x7000], 0x22);
+}
+
+#[test]
 fn run_frames_advances_double_and_keeps_audio_rate() {
     let mut m = Spectrum::new(None);
     let prog = [

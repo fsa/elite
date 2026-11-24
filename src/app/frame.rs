@@ -105,7 +105,12 @@ impl App<'_> {
             // поворота корабля вместо того, чтобы лететь от игрока.
             flight::z80_stop_rotation(&mut self.machine.mem);
         }
-        self.flight.sync_from_z80(&self.machine.mem);
+        // Флаг J-драйва живёт меньше одного прохода игры, поэтому ловим его в
+        // живой памяти. Всё остальное берём из снимка на входе в `GameMain`:
+        // граница кадра эмулятора может пройти в середине обновления объектов,
+        // и прямой опрос памяти перемешал бы старые и новые координаты.
+        self.flight.observe_live_fast_scroll(&self.machine.mem);
+        self.flight.sync_from_z80(self.machine.game_state());
         // Повтор текста в этом кадре продлевает показ сообщения.
         self.flight.advance_messages(frames);
         self.flight.sync_game_msg(&mut self.machine.game_msg);
@@ -504,7 +509,9 @@ impl App<'_> {
                     let g = cockpit::panel_geometry(game_w, game_h);
                     self.flight.draw(&mut self.machine.hd, &g, ZX_FONT);
                     let values = {
-                        let mut values = cockpit::KLADOV_COCKPIT.read(&self.machine.mem);
+                        // Панель читает тот же снимок прохода, что и flight:
+                        // иначе индикаторы и 3D-сцена показывают разные моменты.
+                        let mut values = cockpit::KLADOV_COCKPIT.read(self.machine.game_state());
                         values.blink = (self.machine.frames / 16) % 2 == 0;
                         // В межпланетном пространстве мигают «стороны света»,
                         // внутри системы — только наложенные круги солнца и

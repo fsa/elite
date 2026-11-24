@@ -43,28 +43,31 @@ use crate::render3d::Rotation;
 use self::combat::Combat;
 use self::explosions::Explosions;
 use self::memory::{
-    Z80_HIGH_DELTA_SPEED, Z80_MEM_MIN, Z80_OBJ_MISSILE, Z80_OBJ_SLOT0, Z80_PLANET_CRD,
-    Z80_SPEED_GAUGE, Z80_STARS_FAST_SCROLL, Z80_SUN_CRD,
+    Z80_HIGH_DELTA_SPEED, Z80_MEM_MIN, Z80_OBJ_CORIOLIS, Z80_OBJ_MISSILE, Z80_OBJ_SLOT0,
+    Z80_PLANET_CRD, Z80_SPEED_GAUGE, Z80_STARS_FAST_SCROLL, Z80_SUN_CRD,
 };
 use self::messages::Messages;
 use self::palette::{planet_green, PLANET_COLOR};
-use self::scene::{Body, ShipTints};
+use self::scene::{
+    Body, ShipTints, BODY_SRC_CORIOLIS, BODY_SRC_MISSILE, BODY_SRC_PLANET, BODY_SRC_SUN,
+};
 use self::stars::{
     StarField, SPEED_MAX, STAR_ANGLE_DU_PER_UNIT, STAR_ANGLE_LR_PER_UNIT, STAR_COUNT,
 };
 
-/// Снимок координат, по которому различается шаг модели Z80.
+/// Снимок координат тел, по которому различаются их обновления в Z80.
 ///
-/// В него входят только тела, пересчитываемые в одном проходе `GameMain`
-/// (`CalcCrdSunPlanet` и слоты). Корабли, солнце и планета меняются на шаге
-/// модели, поэтому именно их смена и есть такт. Углы `HighAngleLR/DU` — это
-/// скорость на такт, а не сам такт: они меняются реже. Анимация Coriolis
-/// (`objCoriolis`) идёт со своим смещённым таймером, и её смена — ложный такт:
-/// на ней поворот камеры применялся повторно к уже повёрнутым координатам.
+/// Слоты и ракета (`MoveAllObjects`), станция (`CalcCrdCoriolis2`) и
+/// солнце/планета (`CalcCrdSunPlanet`) пересчитываются со своими таймерами.
+/// У каждой группы свой снимок: на кадре, где обновилось только солнце, нельзя
+/// заново применять поворот камеры к ещё не изменившимся кораблям. Углы
+/// `HighAngleLR/DU` — скорость на такт, а не сам такт; таблица звёзд меняется
+/// чаще модели.
 #[derive(PartialEq)]
 struct TickPositions {
     slots: [[u8; 9]; 6],
     missile: [u8; 9],
+    station: [u8; 9],
     sun: [u8; 9],
     planet: [u8; 9],
 }
@@ -77,6 +80,8 @@ fn tick_positions(mem: &[u8]) -> TickPositions {
     }
     let mut missile = [0u8; 9];
     missile.copy_from_slice(&mem[Z80_OBJ_MISSILE..Z80_OBJ_MISSILE + 9]);
+    let mut station = [0u8; 9];
+    station.copy_from_slice(&mem[Z80_OBJ_CORIOLIS..Z80_OBJ_CORIOLIS + 9]);
     let mut sun = [0u8; 9];
     sun.copy_from_slice(&mem[Z80_SUN_CRD..Z80_SUN_CRD + 9]);
     let mut planet = [0u8; 9];
@@ -84,6 +89,7 @@ fn tick_positions(mem: &[u8]) -> TickPositions {
     TickPositions {
         slots,
         missile,
+        station,
         sun,
         planet,
     }
@@ -166,21 +172,27 @@ pub struct Flight {
     bodies: Vec<Body>,
     /// Оттенки кораблей, привязанные к слотам Z80.
     ship_tints: ShipTints,
-    /// Положение/ориентация тел на предыдущем игровом такте Z80.
-    /// Используется для интерполяции между тактами, чтобы корабли не «прыгали»
-    /// при отрисовке 50 Гц.
+    /// Положение/ориентация кораблей на их предыдущем обновлении Z80.
+    /// Слоты, станция и солнце/планета пересчитываются со своими таймерами,
+    /// поэтому интерполируются отдельными снимками: иначе на кадре, где
+    /// обновилось только солнце, кораблю применяли поворот камеры и он
+    /// дёргался, хотя его координаты ещё не менялись.
     prev_bodies: Vec<Body>,
-    /// Поворот камеры, который Z80 выполнил над координатами объектов на
-    /// последнем игровом такте. Тела и звёзды поворачиваются одной матрицей
-    /// (`CalcNewCrdObj_Pl` / `sub_78B1`), поэтому прежние координаты надо
-    /// перевести в текущую систему игрока перед интерполяцией. Иначе поворот
-    /// камеры принимается за движение корабля, и тот «уезжает» с места, а
-    /// потом возвращается.
-    last_camera_turn: Rotation,
-    /// Время, прошедшее с последнего игрового такта Z80.
-    tick_accum: f32,
-    /// Длительность последнего интервала между игровыми тактами Z80.
-    tick_interval: f32,
+    /// То же для станции (`objCoriolis`).
+    prev_station_bodies: Vec<Body>,
+    /// То же для солнца и планеты.
+    prev_world_bodies: Vec<Body>,
+    /// Поворот камеры за последнее обновление каждой группы тел.
+    ship_turn: Rotation,
+    station_turn: Rotation,
+    world_turn: Rotation,
+    /// Время с последнего обновления каждой группы и его длительность.
+    ship_accum: f32,
+    ship_interval: f32,
+    station_accum: f32,
+    station_interval: f32,
+    world_accum: f32,
+    world_interval: f32,
     stars: StarField,
     planet_color: u32,
     /// Цвет системы на карте галактики — оттенок почти белой звезды.
@@ -216,9 +228,17 @@ impl Flight {
             bodies: Vec::new(),
             ship_tints: ShipTints::new(),
             prev_bodies: Vec::new(),
-            last_camera_turn: Rotation::identity(),
-            tick_accum: 0.0,
-            tick_interval: 1.0 / 5.5,
+            prev_station_bodies: Vec::new(),
+            prev_world_bodies: Vec::new(),
+            ship_turn: Rotation::identity(),
+            station_turn: Rotation::identity(),
+            world_turn: Rotation::identity(),
+            ship_accum: 0.0,
+            ship_interval: 1.0 / 5.5,
+            station_accum: 0.0,
+            station_interval: 1.0 / 5.5,
+            world_accum: 0.0,
+            world_interval: 1.0 / 5.5,
             stars: StarField::new(STAR_COUNT),
             planet_color: PLANET_COLOR,
             system_color: 0,
@@ -246,9 +266,17 @@ impl Flight {
         self.bodies.clear();
         self.ship_tints.reset();
         self.prev_bodies.clear();
-        self.last_camera_turn = Rotation::identity();
-        self.tick_accum = 0.0;
-        self.tick_interval = 1.0 / 5.5;
+        self.prev_station_bodies.clear();
+        self.prev_world_bodies.clear();
+        self.ship_turn = Rotation::identity();
+        self.station_turn = Rotation::identity();
+        self.world_turn = Rotation::identity();
+        self.ship_accum = 0.0;
+        self.ship_interval = 1.0 / 5.5;
+        self.station_accum = 0.0;
+        self.station_interval = 1.0 / 5.5;
+        self.world_accum = 0.0;
+        self.world_interval = 1.0 / 5.5;
         self.transition.reset();
         self.docking_blackout = false;
         self.combat.reset();
@@ -414,6 +442,17 @@ impl Flight {
         }
     }
 
+    /// Заметить короткий флаг J-драйва в живой памяти Z80.
+    ///
+    /// `StarsFastScroll` взводится внутри прохода игры и гасится в `PrintStars`
+    /// этого же прохода. Снимок на входе в `GameMain` его уже не содержит,
+    /// поэтому флаг надо ловить отдельно, пока эмулятор исполняет кадр.
+    pub fn observe_live_fast_scroll(&mut self, live_mem: &[u8]) {
+        if live_mem[Z80_STARS_FAST_SCROLL] == 1 {
+            self.z80_fast_scroll = true;
+        }
+    }
+
     /// Синхронизировать рендер с данными из памяти Z80.
     ///
     /// Абсолютной матрицы ориентации игрока в оригинале нет: камера задаётся
@@ -474,25 +513,54 @@ impl Flight {
             self.view_dir = ViewDir::Forward;
         }
 
-        // Координаты тел пересчитываются в игровом цикле Z80, а не на каждом
-        // кадре эмулятора. Признак шага — смена координат самих тел. Ни
-        // таблица звёзд (`byte_7A39`), ни анимация Coriolis, ни углы
-        // `HighAngleLR/DU` не годятся: все они меняются со своим таймером, и
+        // Тела пересчитываются в игровом цикле Z80, а не на каждом кадре
+        // эмулятора. Ни таблица звёзд (`byte_7A39`), ни углы `HighAngleLR/DU`
+        // не годятся как признак шага: они меняются со своим таймером, и
         // ложный такт повторно применяет поворот камеры к уже повёрнутым
-        // координатам — планеты и корабли начинают дёргаться.
+        // координатам. За счёт этого планеты, корабли и звёзды движутся плавно.
         if mem[Z80_STARS_FAST_SCROLL] == 1 {
             self.z80_fast_scroll = true;
         }
 
-        // Сцена ещё не собрана: для определения шага берём те же координаты
-        // Z80, откуда берутся тела (`Z80_OBJ_SLOT0`, солнце, планета).
+        // Слоты (`MoveAllObjects`), станция (`CalcCrdCoriolis2`) и солнце с
+        // планетой (`CalcCrdSunPlanet`) обновляются со своими таймерами и
+        // попадают в эмулятор на разные кадры. У каждой группы свой снимок:
+        // на кадре, где обновилось только солнце, нельзя заново поворачивать
+        // ещё не изменившиеся слоты — именно так корабли дрожали при тангаже.
         let positions = tick_positions(mem);
-        let ticked = self
-            .prev_tick_positions
-            .as_ref()
-            .is_some_and(|prev| prev != &positions);
+        let (ships_ticked, station_ticked, world_ticked) = match self.prev_tick_positions.as_ref()
+        {
+            Some(prev) => (
+                prev.slots != positions.slots || prev.missile != positions.missile,
+                prev.station != positions.station,
+                prev.sun != positions.sun || prev.planet != positions.planet,
+            ),
+            None => (false, false, false),
+        };
+        // Звёзды и эффекты по-прежнему привязаны к обновлению кораблей или
+        // солнца/планеты: смена только станции идёт со своим таймером и не
+        // должна менять их частоту. Для станции нужен лишь свой снимок.
+        let ticked = ships_ticked || world_ticked;
         self.prev_tick_positions = Some(positions);
-        let prev_bodies_snapshot = self.bodies.clone();
+
+        let prev_ships: Vec<Body> = self
+            .bodies
+            .iter()
+            .filter(|b| b.source > BODY_SRC_CORIOLIS && b.source <= BODY_SRC_MISSILE)
+            .cloned()
+            .collect();
+        let prev_station: Vec<Body> = self
+            .bodies
+            .iter()
+            .filter(|b| b.source == BODY_SRC_CORIOLIS)
+            .cloned()
+            .collect();
+        let prev_world: Vec<Body> = self
+            .bodies
+            .iter()
+            .filter(|b| b.source >= BODY_SRC_SUN)
+            .cloned()
+            .collect();
 
         // Поворот за один игровой такт нужен и звёздам, и телам:
         // `CalcNewCrdObj_Pl` переносит координаты объектов в новую систему
@@ -501,6 +569,11 @@ impl Flight {
         let pitch = -memory::read_signed8(mem[Z80_HIGH_ANGLE_DU]) * STAR_ANGLE_DU_PER_UNIT;
         let turn = Rotation::axis_angle([0.0, 0.0, 1.0], roll)
             .mul(&Rotation::axis_angle([1.0, 0.0, 0.0], pitch));
+        let group_turn = if self.game_over {
+            Rotation::identity()
+        } else {
+            turn
+        };
 
         if ticked {
             // J-драйв `PrintStars` проматывает звёзды тремя проходами
@@ -518,9 +591,7 @@ impl Flight {
                 // камера стоит. Обломки из слотов Z80 уносятся своей скоростью,
                 // а облака взрывов не поворачиваются и не летят на игрока.
                 // Шаг `CalcNewCrdObj_Pl` при `HighDeltaSpeed == 0` равен 2.
-                let delta_z = 2.0;
-                self.explosions.tick_death(delta_z);
-                self.last_camera_turn = Rotation::identity();
+                self.explosions.tick_death(2.0);
             } else {
                 // Каждый проход `sub_78B1` поворачивает поле, поэтому при
                 // J-драйве за такт набегает тройной поворот.
@@ -533,14 +604,26 @@ impl Flight {
                 // игроку на шаг `CalcNewCrdObj_Pl`.
                 let delta_z = 2.0 * (self.speed.round() + 1.0);
                 self.explosions.tick_world(&turn, delta_z);
-                // Тела поворачиваются один раз за такт (`CalcNewCrdObj_Pl`);
-                // тройной поворот звёзд относится только к `PrintStars`.
-                self.last_camera_turn = turn;
             }
             self.z80_fast_scroll = false;
-            self.prev_bodies = prev_bodies_snapshot;
-            self.tick_interval = self.tick_accum.max(1.0 / 60.0);
-            self.tick_accum = 0.0;
+        }
+        if ships_ticked {
+            self.ship_turn = group_turn;
+            self.ship_interval = self.ship_accum.max(1.0 / 60.0);
+            self.ship_accum = 0.0;
+            self.prev_bodies = prev_ships;
+        }
+        if station_ticked {
+            self.station_turn = group_turn;
+            self.station_interval = self.station_accum.max(1.0 / 60.0);
+            self.station_accum = 0.0;
+            self.prev_station_bodies = prev_station;
+        }
+        if world_ticked {
+            self.world_turn = group_turn;
+            self.world_interval = self.world_accum.max(1.0 / 60.0);
+            self.world_accum = 0.0;
+            self.prev_world_bodies = prev_world;
         }
 
         // Выстрел в оригинале виден только по нагреву лазера.
@@ -554,8 +637,29 @@ impl Flight {
             self.system_color,
             &mut self.ship_tints,
         );
-        if !ticked && self.prev_bodies.is_empty() {
-            self.prev_bodies = self.bodies.clone();
+        if self.prev_bodies.is_empty() {
+            self.prev_bodies = self
+                .bodies
+                .iter()
+                .filter(|b| b.source > BODY_SRC_CORIOLIS && b.source <= BODY_SRC_MISSILE)
+                .cloned()
+                .collect();
+        }
+        if self.prev_station_bodies.is_empty() {
+            self.prev_station_bodies = self
+                .bodies
+                .iter()
+                .filter(|b| b.source == BODY_SRC_CORIOLIS)
+                .cloned()
+                .collect();
+        }
+        if self.prev_world_bodies.is_empty() {
+            self.prev_world_bodies = self
+                .bodies
+                .iter()
+                .filter(|b| b.source >= BODY_SRC_SUN)
+                .cloned()
+                .collect();
         }
         self.combat.observe_shield(
             mem,
@@ -574,7 +678,9 @@ impl Flight {
     /// Мир не двигается — его координаты приходят из [`Self::sync_from_z80`].
     pub fn tick(&mut self, dt: f32) {
         let dt = dt.clamp(0.0, 0.1);
-        self.tick_accum += dt;
+        self.ship_accum += dt;
+        self.station_accum += dt;
+        self.world_accum += dt;
         self.combat.tick(dt);
         self.explosions.tick(dt);
         self.transition.tick(dt);
@@ -608,27 +714,44 @@ impl Flight {
         render::draw(self, frame, geom, font);
     }
 
-    /// Тела сцены для рендера с интерполяцией между игровыми тактами Z80.
+    /// Тела сцены для рендера с интерполяцией между обновлениями Z80.
     ///
-    /// Z80 обновляет координаты объектов (`ReCalcCrdObj`) на своём такте, а
-    /// рендер идёт с частотой кадра. Прежние координаты переводятся в текущую
-    /// систему игрока поворотом за последний такт, иначе при повороте камеры
-    /// корабль сначала рисуется смещённым, а потом возвращается на место.
-    /// Звёзды не интерполируются: они рисуются из живого поля, которое уже
-    /// обновляется по `dt`.
+    /// Слоты, станция и солнце/планета пересчитываются со своими таймерами,
+    /// поэтому у каждой группы свой previous-снимок, поворот и интервал.
+    /// Прежние координаты переводятся в текущую систему игрока поворотом за
+    /// последнее обновление этой же группы: иначе при повороте камеры тело
+    /// сначала рисуется смещённым, а потом возвращается на место. Звёзды не
+    /// интерполируются: они рисуются из живого поля, которое обновляется по
+    /// `dt`.
     pub(in crate::flight) fn render_bodies(&self) -> Vec<Body> {
-        let alpha = if self.tick_interval > 0.0 {
-            (self.tick_accum / self.tick_interval).clamp(0.0, 1.0)
-        } else {
-            1.0
+        let alpha = |accum: f32, interval: f32| {
+            if interval > 0.0 {
+                (accum / interval).clamp(0.0, 1.0)
+            } else {
+                1.0
+            }
         };
-        if alpha >= 0.999 || self.prev_bodies.is_empty() {
-            return self.bodies.clone();
-        }
+        let ship_alpha = alpha(self.ship_accum, self.ship_interval);
+        let station_alpha = alpha(self.station_accum, self.station_interval);
+        let world_alpha = alpha(self.world_accum, self.world_interval);
         self.bodies
             .iter()
             .map(|body| {
-                let Some(prev) = self.prev_bodies.iter().find(|p| p.source == body.source) else {
+                let (prev_bodies, turn, alpha) = match body.source {
+                    BODY_SRC_CORIOLIS => (
+                        &self.prev_station_bodies,
+                        &self.station_turn,
+                        station_alpha,
+                    ),
+                    BODY_SRC_SUN | BODY_SRC_PLANET => {
+                        (&self.prev_world_bodies, &self.world_turn, world_alpha)
+                    }
+                    _ => (&self.prev_bodies, &self.ship_turn, ship_alpha),
+                };
+                if alpha >= 0.999 || prev_bodies.is_empty() {
+                    return body.clone();
+                }
+                let Some(prev) = prev_bodies.iter().find(|p| p.source == body.source) else {
                     return body.clone();
                 };
                 // Другой тип, модель или оттенок в том же слоте — это уже
@@ -643,8 +766,8 @@ impl Flight {
                 // повернул камеру между ними. Переводим прежнюю позицию в
                 // текущую систему: иначе поворот камеры выглядит как движение
                 // корабля, и он сдвигается, а потом возвращается.
-                let prev_pos = self.last_camera_turn.apply(prev.pos);
-                let prev_rot = self.last_camera_turn.mul(&prev.rot);
+                let prev_pos = turn.apply(prev.pos);
+                let prev_rot = turn.mul(&prev.rot);
                 let mut out = body.clone();
                 for k in 0..3 {
                     out.pos[k] = prev_pos[k] + (body.pos[k] - prev_pos[k]) * alpha;
