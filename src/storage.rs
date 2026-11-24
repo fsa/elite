@@ -2,7 +2,7 @@
 //!
 //! Внутри приложения все сейвы лежат в одном файле `saves.bin` в стандартном
 //! пользовательском каталоге (`FSA/Elite`). Запись каталога имеет фиксированную
-//! длину: имя командира (10 байт), комментарий (10), штамп времени UTC (i64)
+//! длину: имя командира (10 байт), комментарий (24), штамп времени UTC (i64)
 //! и собственно 102 байта оригинального блока. Метаданные поэтому не меняют
 //! формат игры, а экспорт/импорт работают с теми же 102 байтами без конверта.
 
@@ -23,9 +23,12 @@ use crate::world;
 pub const COMMANDER_LEN: usize = 102;
 /// Имя пилота: 10 символов, одиннадцатый байт блока — завершающий ноль.
 pub const NAME_LEN: usize = 10;
-/// Комментарий к сохранению: 10 символов, как колонка COMMENT в таблице.
-/// Больше не влезло бы в экран 32x24 вместе с NAME и DATE.
-pub const COMMENT_LEN: usize = 10;
+/// Комментарий к сохранению: 24 печатных символа. Этого хватает, чтобы
+/// полностью записать отметку импорта `IMP d.m.Y H:i` (20 символов).
+pub const COMMENT_LEN: usize = 24;
+/// Дата и время в таблице и в отметке импорта: `d.m.Y H:i`.
+pub const DATE_TIME_LEN: usize = 16;
+const DATE_TIME_FORMAT: &str = "%d.%m.%Y %H:%M";
 
 const MAGIC: &[u8; 8] = b"FSAELITE";
 const VERSION: u32 = 1;
@@ -38,7 +41,7 @@ const RECORD_LEN: usize = NAME_LEN + COMMENT_LEN + TIME_LEN + COMMANDER_LEN;
 pub struct Entry {
     /// Имя командира, уже ограниченное 10 символами ZX-набора.
     pub name: String,
-    /// Комментарий длиной до 64 печатных ASCII-символов.
+    /// Комментарий длиной до 24 печатных ASCII-символов.
     pub comment: String,
     /// Штамп сохранения (для импорта — mtime исходного файла).
     pub saved_at: i64,
@@ -144,7 +147,7 @@ fn write_name_into_block(data: &mut [u8], name: &str) {
     data[NAME_LEN] = 0;
 }
 
-/// Привести комментарий к 64 печатным символам встроенного шрифта ZX.
+/// Привести комментарий к 24 печатным символам встроенного шрифта ZX.
 pub fn sanitize_comment(input: &str) -> String {
     input
         .chars()
@@ -167,16 +170,24 @@ pub fn typed_comment_char(c: char) -> Option<char> {
     (' '..='~').contains(&c).then_some(c)
 }
 
-/// Комментарий импорта: время импорта в 10 символах (`IMP ЧЧ:ММ`).
+/// Комментарий импорта: полные дата и время импорта (`IMP d.m.Y H:i`).
 pub fn format_import_comment() -> String {
-    format!("IMP {}", Utc::now().with_timezone(&Local).format("%H:%M"))
+    format!(
+        "IMP {}",
+        Utc::now()
+            .with_timezone(&Local)
+            .format(DATE_TIME_FORMAT)
+    )
 }
 
-/// Дата в таблице: `ГГ-ММ-ДД` — ровно 8 знакомест.
+/// Дата и время в таблице: `d.m.Y H:i` — ровно 16 знакомест.
 pub fn format_local_short(timestamp: i64) -> String {
     match DateTime::<Utc>::from_timestamp(timestamp, 0) {
-        Some(dt) => dt.with_timezone(&Local).format("%y-%m-%d").to_string(),
-        None => "-- -- --".to_string(),
+        Some(dt) => dt
+            .with_timezone(&Local)
+            .format(DATE_TIME_FORMAT)
+            .to_string(),
+        None => "--.--.---- --:--".to_string(),
     }
 }
 
@@ -504,6 +515,16 @@ mod tests {
     fn comment_is_limited_to_printable_ascii() {
         let input = format!("{}Ж", "X".repeat(COMMENT_LEN + 5));
         assert_eq!(sanitize_comment(&input), "X".repeat(COMMENT_LEN));
+    }
+
+    #[test]
+    fn comment_fits_import_mark_with_date_and_time() {
+        let mark = format_import_comment();
+        assert_eq!(mark.len(), 4 + DATE_TIME_LEN);
+        assert!(mark.len() <= COMMENT_LEN);
+        chrono::NaiveDateTime::parse_from_str(&mark[4..], DATE_TIME_FORMAT).unwrap();
+        assert_eq!(format_local_short(1_700_000_123).len(), DATE_TIME_LEN);
+        assert_eq!(format_local_short(i64::MAX).len(), DATE_TIME_LEN);
     }
 
     #[test]

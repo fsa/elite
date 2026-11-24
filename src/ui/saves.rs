@@ -4,9 +4,9 @@
 //! двухцветный заголовок, голубые подписи и подсветка выбранной строки.
 //! Таблица показывается только из каталога приложения; Z80 в это время заморожен.
 //!
-//! Раскладка считается в знакоместах 8x8: при любом масштабе окна HD-слой
-//! вмещает 32 колонки и 24 строки, как экран ZX Spectrum. Имя, комментарий
-//! и дата занимают 10 + 10 + 11 знакомест, поэтому помещаются в одной строке.
+//! Масштаб шрифта такой же, как на экране маркета: одна строка текста на
+//! 300 пикселей высоты HD-слоя. Это даёт достаточно колонок, чтобы показать
+//! `NAME`, `COMMENT` и полные дату с временем в одной строке таблицы.
 
 use crate::display::Frame;
 use crate::font::ZX_FONT;
@@ -22,12 +22,15 @@ const SELECT_BG: u32 = 0xFF00_5458;
 const PROMPT_TITLE: &str = "COMMANDER SAVE";
 const LIST_TITLE: &str = "COMMANDER LOAD";
 
-/// Масштаб в пикселях на знакоместо. На обычном окне HD-слой равен 256x192,
-/// поэтому это 1; в больших окнах текст остаётся целым числом пикселей.
+/// Масштаб в пикселях на знакоместо — как в маркете (`h / 300`), но ещё и с
+/// оглядкой на ширину: все три колонки таблицы должны помещаться в рамку.
 fn cell(frame: &Frame) -> i32 {
-    let by_height = frame.height / (24 * 8);
-    let by_width = frame.width / (32 * 8);
-    (by_height.min(by_width).max(1) * 8) as i32
+    use crate::storage::{COMMENT_LEN, DATE_TIME_LEN, NAME_LEN};
+
+    let by_height = (frame.height as f32 / 300.0).floor().max(1.0) as usize;
+    let row_chars = NAME_LEN + 1 + COMMENT_LEN + 1 + DATE_TIME_LEN + 2;
+    let by_width = (frame.width / (8 * row_chars)).max(1);
+    8 * by_height.min(by_width) as i32
 }
 
 /// Сколько символов влезает в строку с отступом от рамки.
@@ -178,12 +181,12 @@ pub(crate) fn draw_load_list(frame: &mut Frame, list: &LoadList) {
     let x = draw_base(frame, c, LIST_TITLE);
     let header_y = row_y(x, c, 2);
     let name_x = x;
-    let comment_x = x + 11 * c;
-    let date_x = x + 22 * c;
+    let comment_x = name_x + (crate::storage::NAME_LEN + 1) as i32 * c;
+    let date_x = comment_x + (crate::storage::COMMENT_LEN + 1) as i32 * c;
 
     frame.draw_text(ZX_FONT, name_x, header_y, "NAME", LABEL, scale);
     frame.draw_text(ZX_FONT, comment_x, header_y, "COMMENT", LABEL, scale);
-    frame.draw_text(ZX_FONT, date_x, header_y, "DATE", LABEL, scale);
+    frame.draw_text(ZX_FONT, date_x, header_y, "DATE & TIME", LABEL, scale);
 
     let first_row = row_y(header_y, c, 1);
     let total_rows = ((frame.height as i32 - 2 * border(c)).max(0) / c).max(1) as usize;
