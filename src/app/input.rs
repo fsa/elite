@@ -1423,6 +1423,7 @@ impl App<'_> {
                     if let Some(entry) = list.entries.get(list.sel).cloned() {
                         let intro = self.machine.intro_seen;
                         storage::load_entry(&mut self.machine, &entry);
+                        self.loading = true;
                         self.close_save_screen();
                         // Загрузка с заставки сразу показывает кадр Z80: хук
                         // отведёт игру на станцию, не дожидаясь `Space`.

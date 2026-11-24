@@ -168,6 +168,9 @@ struct App<'a> {
     /// Экран-заглушка `DOCKED`, который на станции заменяет ответ эмулятора
     /// на `G`/`H` и показывается примерно секунду.
     docked: docked::Docked,
+    /// Полноэкранная заглушка `LOADING` на время перехода загрузки в игру.
+    /// Без неё на старте с `--save` виден вращающийся корабль интро.
+    loading: bool,
     /// Нативный (альтернативный) показ экрана цен на станции (`K`).
     market: market::Market,
     /// После кадра эмулятора открыть нативный экран цен: сначала игра
@@ -284,6 +287,7 @@ impl<'a> App<'a> {
         // Хук стартовой загрузки уже поставлен: титр не нужен, сразу показываем
         // кадр эмулятора. Значение берём до перемещения `machine` в структуру.
         let splash_emulator = machine.load_requested;
+        let loading = machine.load_requested;
         let mut app = Self {
             state: GameState::default(),
             machine,
@@ -315,6 +319,7 @@ impl<'a> App<'a> {
             pending_station_native: None,
             pause_active: false,
             docked: docked::Docked::new(),
+            loading,
             market: market::Market::new(),
             pending_market: false,
             flight: flight::Flight::new(),
@@ -373,7 +378,7 @@ impl<'a> App<'a> {
     }
 
     /// Открыть приглашение сохранения: имя берём из текущего блока commander,
-    /// комментарий начинается пустым.
+    /// а комментарий подставляем из имени текущей планеты.
     pub(super) fn open_save_prompt(&mut self) {
         let name = {
             let layout = world::save_layout_kladov();
@@ -381,7 +386,7 @@ impl<'a> App<'a> {
         };
         self.save_screen = Some(storage::SaveScreen::Save(storage::SavePrompt {
             name,
-            comment: String::new(),
+            comment: storage::sanitize_comment(&self.state.system),
             field: storage::PromptField::Name,
             status: String::new(),
         }));

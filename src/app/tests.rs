@@ -2355,6 +2355,17 @@ use crate::world::{
         }
     }
 
+    /// Стартовая загрузка сразу включает заглушку вместо интро эмулятора.
+    #[test]
+    fn startup_save_shows_loading_overlay() {
+        let mut m = boot_kladov();
+        m.load_requested = true;
+        let opts = test_options();
+        let app = App::new(m, &opts);
+        assert!(app.loading, "стартовая загрузка должна показывать LOADING");
+        assert!(app.splash_emulator, "титр при загрузке не нужен");
+    }
+
     /// На заставке в меню паузы доступна только загрузка: сохранение отключено.
     #[test]
     fn intro_menu_allows_load_but_not_save() {
@@ -2429,6 +2440,7 @@ use crate::world::{
         app.key_event(KeyCode::Enter, false, false);
         assert!(app.save_screen.is_none(), "загрузка должна закрыть экран");
         assert!(app.machine.load_requested, "загрузка не запрошена");
+        assert!(app.loading, "во время загрузки должна быть заглушка");
     }
 
     /// Загрузка из меню с заставки доводит игру до станции, и после неё
@@ -2485,12 +2497,16 @@ use crate::world::{
         app.key_event(KeyCode::Enter, false, false);
         assert!(app.save_screen.is_none(), "загрузка должна закрыть экран");
         assert!(app.machine.load_requested, "загрузка не запрошена");
+        assert!(app.loading, "во время загрузки должна быть заглушка");
 
         // Даём игре дойти до станции.
         for _ in 0..900u64 {
             app.machine.release_all_keys();
             app.machine.run_frame();
         }
+        app.enter_native_station();
+        app.sync_loading_overlay();
+        assert!(!app.loading, "после загрузки заглушка должна исчезнуть");
         let _ = fs::remove_file(&path);
         assert!(!app.machine.intro_seen, "после загрузки осталась заставка");
         assert_eq!(app.machine.mem[0x7104], 0, "после загрузки не станция");
@@ -3003,17 +3019,20 @@ use crate::world::{
             "подготовка: станция не в нативном режиме"
         );
 
+        app.state.system = "Lave".to_string();
         app.key_event(KeyCode::ShiftRight, true, false);
-        assert!(
-            matches!(app.save_screen, Some(storage::SaveScreen::Save(_))),
-            "Right Shift не открыл приглашение сохранения"
-        );
-        // Подтверждаем имя и пустой комментарий — запись идёт в каталог.
+        let comment = match &app.save_screen {
+            Some(storage::SaveScreen::Save(prompt)) => prompt.comment.clone(),
+            _ => panic!("Right Shift не открыл приглашение сохранения"),
+        };
+        assert_eq!(comment, "Lave", "в комментарий не подставлена планета");
+        // Подтверждаем имя и подставленный комментарий — запись идёт в каталог.
         app.key_event(KeyCode::Enter, true, false);
         app.key_event(KeyCode::Enter, true, false);
         assert!(catalog.exists(), "Right Shift не создал запись в каталоге");
         let entries = storage::read_entries_from(&catalog).unwrap();
         assert_eq!(entries.len(), 1, "в каталоге не одна запись");
+        assert_eq!(entries[0].comment, "Lave", "планета не попала в запись");
         assert!(app.station_native, "Right Shift отдал управление эмулятору");
         assert!(!app.station_emulator, "Right Shift включил эмулятор");
         assert_eq!(app.pending_key, None, "Right Shift отправил клавишу в игру");

@@ -148,12 +148,31 @@ impl App<'_> {
         self.request_native_station(StationNativePending::Docked);
     }
 
+    /// Убрать заглушку загрузки, когда хук довёл игру до станции.
+    ///
+    /// `load_requested` снимается самим хуком, но до входа в `GameMain`
+    /// эмулятор ещё может показывать интро. Поэтому ждём, пока нативный режим
+    /// станции не возьмёт кадр под контроль. Если управление намеренно отдано
+    /// эмулятору или игра не на станции, заглушку снимаем сразу после хука.
+    pub(super) fn sync_loading_overlay(&mut self) {
+        if !self.loading || self.machine.load_requested {
+            return;
+        }
+        let settled = self.station_native
+            || self.station_emulator
+            || (!self.machine.intro_seen && !flight::z80_is_docked(&self.machine.mem));
+        if settled {
+            self.loading = false;
+        }
+    }
+
     /// Снять наложения, которые удерживают Z80 или перехватывают ввод.
     fn clear_handoff_overlays(&mut self) {
         self.exit_pause();
         self.menu = false;
         self.save_screen = None;
         self.input_char = None;
+        self.loading = false;
         self.save_editor_open = false;
         self.save_editor_editing = false;
         self.save_editor_input.clear();

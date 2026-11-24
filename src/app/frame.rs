@@ -291,6 +291,7 @@ impl App<'_> {
         let is_alt_screen = self.station_native
             || self.pending_station_native.is_some()
             || self.docked.is_active()
+            || self.loading
             || self.save_editor_open
             || !matches!(self.state.screen, Screen::Emulator(_));
 
@@ -327,10 +328,10 @@ impl App<'_> {
             self.machine.release_joystick();
             self.pending_key = None;
             self.play_frame_audio(false);
-        // Пока показана заглушка `DOCKED`, эмулятор продолжает работать, но
-        // не получает нажатий клавиш, а нативные экраны под заглушкой не
-        // меняются.
-        } else if self.docked.is_active() {
+        // Под заглушками `DOCKED`/`LOADING` эмулятор продолжает работать, но
+        // не получает нажатий клавиш, а нативные экраны под ними не меняются.
+        // Во время загрузки этот прогон нужен, чтобы Z80 дошёл до хука.
+        } else if self.docked.is_active() || self.loading {
             self.machine.release_all_keys();
             self.machine.release_joystick();
             self.pending_key = None;
@@ -481,6 +482,7 @@ impl App<'_> {
         }
         // Переход закончился — блокировка родного ролика больше не нужна.
         self.sync_emulator_transition_lock();
+        self.sync_loading_overlay();
 
         self.mouse_wheel_up = false;
         self.mouse_wheel_down = false;
@@ -494,9 +496,14 @@ impl App<'_> {
 
         self.advance_hdmap_cursor();
 
-        // Отрисовка зависит от текущего экрана. Заглушка `DOCKED` временно
-        // перекрывает нативный экран, который был открыт до неё.
-        if self.docked.is_active() {
+        // Отрисовка зависит от текущего экрана. Заглушки `LOADING` и `DOCKED`
+        // временно перекрывают экран, который был открыт до них.
+        if self.loading {
+            crate::ui::message::draw(&mut self.machine.hd, ZX_FONT, "LOADING");
+            if self.state.menu && self.save_screen.is_none() {
+                draw_pause_menu(&mut self.machine.hd, ZX_FONT, self.menu_sel, self.machine.intro_seen);
+            }
+        } else if self.docked.is_active() {
             self.docked.draw(&mut self.machine.hd, ZX_FONT);
             if self.state.menu && self.save_screen.is_none() {
                 draw_pause_menu(&mut self.machine.hd, ZX_FONT, self.menu_sel, self.machine.intro_seen);
@@ -698,7 +705,9 @@ impl App<'_> {
         // показывается вместо ZX-кадра; сырой эмуляторный экран — с наложением
         // HD-слоя поверх масштабированного ZX-кадра.
         match self.state.screen {
-            Screen::Emulator(_) if !self.station_native && !self.docked.is_active() => {
+            Screen::Emulator(_)
+                if !self.station_native && !self.docked.is_active() && !self.loading =>
+            {
                 blit_zx_frame(src, &mut out, ow, oh, l);
                 self.machine.hd.composite_onto(
                     &mut out,
