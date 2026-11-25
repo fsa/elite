@@ -225,8 +225,8 @@ pub(crate) fn draw_save_editor_fullscreen(
     let cash = crate::world::commander_cash_tenths(save_data, 0);
     let fuel = b(0x2E);
     let missiles = b(0x2F);
-    let rating = crate::rating::score(save_data);
-    let rating_name = crate::rating::name(crate::rating::tier(save_data));
+    let rating = crate::rating::label(save_data);
+    let score = crate::rating::score(save_data);
     let r2 = b(0x0E);
     let war = r2 & 0x80 != 0;
     let war_end = r2 & 0x40 != 0;
@@ -250,7 +250,7 @@ pub(crate) fn draw_save_editor_fullscreen(
     draw_field(out, &mut y, "FUEL 0.1LY", &format!("{}.{}", fuel / 10, fuel % 10), edit_sel == 2, scale);
     draw_field(out, &mut y, "MISSILES", &format!("{}", missiles), edit_sel == 3, scale);
     draw_field(out, &mut y, "LEGAL", &format!("{}", b(0x0B)), edit_sel == 4, scale);
-    draw_field(out, &mut y, "RATING", &format!("{} {}", rating, rating_name), edit_sel == 5, scale);
+    draw_field(out, &mut y, "RATING", &format!("{} (score {})", rating, score), edit_sel == 5, scale);
     draw_field(out, &mut y, "WAR FLAG", if war { "ON" } else { "OFF" }, edit_sel == 6, scale);
     draw_field(out, &mut y, "WAR END", if war_end { "ON" } else { "OFF" }, edit_sel == 7, scale);
     draw_field(out, &mut y, "RANK", &format!("{}", rank), edit_sel == 8, scale);
@@ -274,7 +274,7 @@ pub(crate) fn draw_save_editor_fullscreen(
         draw_text(out, out_w, out_h, left, y, "Enter: input number", GREY, GREY, scale);
         y += (8 * scale as i32) + 6;
     } else if edit_sel == 5 {
-        draw_text(out, out_w, out_h, left, y, "Left/Right: change rating", GREY, GREY, scale);
+        draw_text(out, out_w, out_h, left, y, "Left/Right: change score (R0..R1)", GREY, GREY, scale);
         y += (8 * scale as i32) + 6;
     } else if edit_sel == 6 || edit_sel == 7 {
         draw_text(out, out_w, out_h, left, y, "Left/Right: toggle", GREY, GREY, scale);
@@ -315,14 +315,14 @@ fn draw_save_summary(
 
     let name = summary_name(save_data);
     let legal = b(0x0B);
-    let rating = crate::rating::score(save_data);
-    let rating_name = crate::rating::name(crate::rating::tier(save_data));
+    let rating = crate::rating::label(save_data);
+    let score = crate::rating::score(save_data);
     let cash = crate::world::commander_cash_tenths(save_data, 0);
 
     let rows: [(usize, &str, String); 26] = [
         (0x00, "NAME", name),
         (0x0B, "LEGAL", format!("{legal} {}", legal_text(legal))),
-        (0x0C, "RATING", format!("{rating} {}", rating_name)),
+        (0x0C, "RATING", format!("{rating} (score {score})")),
         (0x0F, "SERVICE", hex_at(save_data, 0x0F, 5)),
         (
             0x12,

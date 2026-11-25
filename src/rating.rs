@@ -22,6 +22,21 @@ pub fn score(bytes: &[u8]) -> u32 {
     u16::from_le_bytes([byte(bytes, 0), byte(bytes, 1)]) as u32
 }
 
+/// Значение, с которым оригинал сравнивает пороги: `PilotRating2`, если оно
+/// ненулевое, иначе `PilotRating1`.
+///
+/// Именно это число, а не [`score`], определяет звание. В отладочной панели
+/// и редакторе сейва показывается оно, чтобы число и название рейтинга
+/// соответствовали одному и тому же правилу.
+pub fn source_value(bytes: &[u8]) -> u8 {
+    let r2 = byte(bytes, 2);
+    if r2 != 0 {
+        r2
+    } else {
+        byte(bytes, 1)
+    }
+}
+
 /// Индекс названия рейтинга, который печатает `Cmd_L_PilotInfo`.
 ///
 /// `0` — `Harmless`, `1` — `Mostly Harmless`, …, `8` — `Elite`.
@@ -29,19 +44,23 @@ pub fn tier(bytes: &[u8]) -> u8 {
     const R1_THRESHOLDS: [u8; 6] = [8, 16, 32, 64, 128, 255];
     const R2_THRESHOLDS: [u8; 4] = [2, 10, 25, 255];
 
-    let r2 = byte(bytes, 2);
-    if r2 == 0 {
-        let r1 = byte(bytes, 1);
+    let value = source_value(bytes);
+    if byte(bytes, 2) == 0 {
         R1_THRESHOLDS
             .iter()
-            .take_while(|&&threshold| r1 >= threshold)
+            .take_while(|&&threshold| value >= threshold)
             .count() as u8
     } else {
         5 + R2_THRESHOLDS
             .iter()
-            .take_while(|&&threshold| r2 >= threshold)
+            .take_while(|&&threshold| value >= threshold)
             .count() as u8
     }
+}
+
+/// Число и название рейтинга в том виде, в каком их показывает оригинал.
+pub fn label(bytes: &[u8]) -> String {
+    format!("{} {}", source_value(bytes), name(tier(bytes)))
 }
 
 /// Название рейтинга по индексу из [`tier`].
@@ -120,5 +139,18 @@ mod tests {
         assert_eq!(score(&[0xC8, 0x00, 0x00]), 200);
         assert_eq!(text(0xC8, 0x00, 0x00), "Harmless");
         assert_eq!(text(0xFF, 0x07, 0x00), "Harmless");
+    }
+
+    /// Отладочная панель и редактор сейва показывают то же число, которое
+    /// оригинал сравнивает с порогами, а не очки из `PilotRating0..1`.
+    #[test]
+    fn label_uses_the_same_byte_as_tier() {
+        assert_eq!(label(&[0xC8, 0x00, 0x00]), "0 Harmless");
+        assert_eq!(label(&[0xC8, 0x20, 0x00]), "32 Average");
+        assert_eq!(label(&[0x00, 0xFF, 0x00]), "255 Dangerous");
+        assert_eq!(source_value(&[0x00, 0xFF, 0x00]), 255);
+        assert_eq!(label(&[0xFF, 0xFF, 0x01]), "1 Competent");
+        assert_eq!(label(&[0xFF, 0xFF, 0x0A]), "10 Deadly");
+        assert_eq!(source_value(&[0xFF, 0xFF, 0x0A]), 10);
     }
 }
