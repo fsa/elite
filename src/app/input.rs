@@ -1459,6 +1459,15 @@ impl App<'_> {
                                 storage::load_entry(&mut self.machine, &entry);
                                 self.loading = true;
                                 self.close_save_screen();
+                                // Хук загрузки сработает только когда Z80 будет
+                                // исполняться. На станции надо снять нативный
+                                // захват и отложенный вход, иначе эмулятор останется
+                                // замороженным и заглушка не исчезнет.
+                                self.close_all_native();
+                                self.cancel_pending_station();
+                                self.station_native = false;
+                                self.station_emulator = false;
+                                self.flight_emulator = false;
                                 // Загрузка с заставки сразу показывает кадр Z80: хук
                                 // отведёт игру на станцию, не дожидаясь `Space`.
                                 if intro {

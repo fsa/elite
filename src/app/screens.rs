@@ -16,7 +16,7 @@ use crate::world;
 impl App<'_> {
     /// Закрыть все нативные экраны и отложенные переходы. Используется при
     /// передаче управления эмулятору и при входе в нативный режим станции.
-    fn close_all_native(&mut self) {
+    pub(super) fn close_all_native(&mut self) {
         self.close_hdmap();
         self.shop.close();
         self.close_status();
@@ -121,6 +121,12 @@ impl App<'_> {
     /// управление ещё не передано эмулятору явно. Заморозка откладывается на
     /// один кадр: эмулятор должен получить `L`.
     pub(super) fn maybe_enter_native_station(&mut self) {
+        // Пока идёт загрузка, Z80 должен беспрепятственно дойти до хука.
+        // Заморозка станции вернётся после снятия заглушки.
+        if self.loading {
+            self.cancel_pending_station();
+            return;
+        }
         if !flight::z80_is_docked(&self.machine.mem) {
             self.station_native = false;
             self.station_emulator = false;
@@ -148,20 +154,17 @@ impl App<'_> {
         self.request_native_station(StationNativePending::Docked);
     }
 
-    /// Убрать заглушку загрузки, когда хук довёл игру до станции.
+    /// Убрать заглушку загрузки, когда хук вывел игру из заставки.
     ///
     /// `load_requested` снимается самим хуком, но до входа в `GameMain`
-    /// эмулятор ещё может показывать интро. Поэтому ждём, пока нативный режим
-    /// станции не возьмёт кадр под контроль. Если управление намеренно отдано
-    /// эмулятору или игра не на станции, заглушку снимаем сразу после хука.
+    /// эмулятор ещё может показывать интро. Хук загрузки сразу направляет Z80
+    /// на станцию, поэтому достаточно дождаться сброса `intro_seen`; нативный
+    /// режим станции включится следующим кадром, уже без заглушки.
     pub(super) fn sync_loading_overlay(&mut self) {
         if !self.loading || self.machine.load_requested {
             return;
         }
-        let settled = self.station_native
-            || self.station_emulator
-            || (!self.machine.intro_seen && !flight::z80_is_docked(&self.machine.mem));
-        if settled {
+        if !self.machine.intro_seen {
             self.loading = false;
         }
     }

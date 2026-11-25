@@ -2587,6 +2587,91 @@ use crate::world::{
         );
     }
 
+    /// Повторная загрузка из нативного режима станции: заглушка должна сняться,
+    /// а Z80 — дойти до хука, не оставаясь замороженным под `LOADING`.
+    #[test]
+    fn repeated_load_from_native_station_clears_loading() {
+        let base = env!("CARGO_MANIFEST_DIR");
+        let dir = format!("{base}/tmp");
+        fs::create_dir_all(&dir).unwrap();
+        let path = format!("{dir}/app_reload_native.zxelite");
+        let (intro, game) = scene_markers();
+        let mut src = boot_kladov();
+        src.intro_range = intro;
+        src.game_marker = game;
+        for f in 0..900u64 {
+            src.release_all_keys();
+            if f >= 30 && f % 16 < 6 {
+                src.set_key(7, 0, true); // SPACE
+            }
+            src.run_frame();
+        }
+        assert_eq!(src.mem[0x7104], 0, "подготовка: не на станции");
+        native::commander_save(&mut src, &path, save_layout_kladov()).unwrap();
+        let entry = storage::entry_from_save_file(std::path::Path::new(&path)).unwrap();
+
+        let mut m = boot_kladov();
+        m.intro_range = intro;
+        m.game_marker = game;
+        let opts = test_options();
+        let mut app = App::new(m, &opts);
+        let list = || storage::SaveScreen::Load(storage::LoadList {
+            entries: vec![entry.clone()],
+            sel: 0,
+            status: String::new(),
+            confirm_delete: false,
+        });
+
+        // Первая загрузка с заставки и возврат в нативный режим станции.
+        app.save_screen = Some(list());
+        app.key_event(KeyCode::Enter, true, false);
+        app.key_event(KeyCode::Enter, false, false);
+        for _ in 0..900u64 {
+            app.machine.release_all_keys();
+            app.machine.run_frame();
+            app.sync_loading_overlay();
+        }
+        assert!(!app.loading, "первая загрузка оставила заглушку");
+        assert!(!app.machine.intro_seen, "после загрузки осталась заставка");
+        assert_eq!(app.machine.mem[0x7104], 0, "после загрузки не станция");
+        app.enter_native_station();
+        assert!(app.station_native, "подготовка: нет нативной станции");
+
+        // Повторная загрузка уже из нативного режима.
+        app.save_screen = Some(list());
+        app.key_event(KeyCode::Enter, true, false);
+        app.key_event(KeyCode::Enter, false, false);
+        assert!(app.loading, "повторная загрузка не показала заглушку");
+        assert!(
+            !app.station_native,
+            "нативный захват снят — Z80 не дойдёт до хука"
+        );
+        assert!(app.pending_station_native.is_none());
+        // Начало кадра под заглушкой не должно снова заморозить Z80.
+        app.maybe_enter_native_station();
+        assert!(app.pending_station_native.is_none());
+
+        for _ in 0..900u64 {
+            app.machine.release_all_keys();
+            app.machine.run_frame();
+            app.maybe_enter_native_station();
+            app.sync_loading_overlay();
+        }
+        assert!(
+            !app.machine.load_requested,
+            "хук повторной загрузки не сработал"
+        );
+        assert!(!app.loading, "заглушка повторной загрузки не снялась");
+        app.maybe_enter_native_station();
+        assert!(app.pending_station_native.is_some());
+        app.machine.release_all_keys();
+        app.machine.run_frame();
+        app.finish_pending_station_native();
+        assert!(app.station_native, "нативная станция не вернулась");
+
+        let _ = fs::remove_file(&path);
+    }
+
 
     #[test]
     fn pause_menu_selection_and_actions() {
