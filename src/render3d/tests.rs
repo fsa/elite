@@ -157,6 +157,82 @@ fn sidewinder_base_rectangle_is_engine() {
     );
 }
 
+/// Ромб в основании Asp Mk II — двигатель: он заливается сиянием, а задняя
+/// грань вокруг него остаётся обычным корпусом. Рёбра ромба входят и в эту
+/// грань, и в грань 11, поэтому вырез в контуре сохраняется.
+#[test]
+fn asp_base_rhombus_is_engine() {
+    let ship = shipdata::find("d_ASP").expect("модель Asp Mk II не найдена");
+    assert_eq!(ship.face_style(12), FaceStyle::EngineGlow);
+
+    let mut f = Frame::new(400, 400);
+    f.clear(0xFFFF_0000);
+    let screen = Screen {
+        cx: 200.0,
+        cy: 200.0,
+        k: 1000.0,
+        bx: 0.0,
+        by: 0.0,
+    };
+    draw_ship_tinted(
+        &mut f,
+        ship,
+        &Rotation::identity(),
+        [0.0, 0.0, 512.0],
+        &screen,
+        SHIP_COLOR,
+        None,
+    );
+
+    let c = f.pixels()[196 * 400 + 200];
+    let (r, g, b) = ((c >> 16) & 0xFF, (c >> 8) & 0xFF, c & 0xFF);
+    assert!(
+        (c >> 24) == 0xFF && b > g + 10 && g > r + 10 && b > 50,
+        "двигатель не светится: {c:08X}"
+    );
+    assert_eq!(
+        f.pixels()[180 * 400 + 200],
+        SHIP_FACE_COLOR,
+        "задняя грань вокруг ромба должна остаться корпусом"
+    );
+}
+
+/// Два треугольника в основании Krait — двигатели: они заливаются сиянием,
+/// а рёбра остаются в задних гранях 4/5, поэтому видимость каркаса не меняется.
+#[test]
+fn krait_base_triangles_are_engines() {
+    let ship = shipdata::find("d_Krait").expect("модель Krait не найдена");
+    assert_eq!(ship.face_style(6), FaceStyle::EngineGlow);
+    assert_eq!(ship.face_style(7), FaceStyle::EngineGlow);
+
+    let mut f = Frame::new(400, 400);
+    f.clear(0xFFFF_0000);
+    let screen = Screen {
+        cx: 200.0,
+        cy: 200.0,
+        k: 1000.0,
+        bx: 0.0,
+        by: 0.0,
+    };
+    draw_ship_tinted(
+        &mut f,
+        ship,
+        &Rotation::identity(),
+        [0.0, 0.0, 512.0],
+        &screen,
+        SHIP_COLOR,
+        None,
+    );
+
+    let is_glow = |x: usize, y: usize| {
+        let c = f.pixels()[y * 400 + x];
+        let (r, g, b) = ((c >> 16) & 0xFF, (c >> 8) & 0xFF, c & 0xFF);
+        (c >> 24) == 0xFF && b > g + 10 && g > r + 10 && b > 50
+    };
+    assert!(is_glow(148, 200), "левый двигатель не светится");
+    assert!(is_glow(252, 200), "правый двигатель не светится");
+}
+
 /// Двигатель — тёмная грань с маленькой яркой сердцевиной, а не однотонное
 /// светящееся пятно. Ядро всегда ярче грани, поэтому читается как работа
 /// сопла даже на тёмном фоне.

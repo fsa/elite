@@ -2,7 +2,7 @@
 //!
 //! Модель из таблицы `AdrDataShips` версии Кладова.
 
-use super::{Edge, Face, Ship, Stats, Vertex};
+use super::{Edge, Face, FaceStyle, Ship, Stats, Vertex};
 
 pub(super) static SHIP_D_KRAIT: Ship = Ship {
     name: "d_Krait",
@@ -51,12 +51,14 @@ pub(super) static SHIP_D_KRAIT: Ship = Ship {
         Edge { lod: 0x6, v: [10, 8], faces: 0x0 },
         Edge { lod: 0x9, v: [9, 7], faces: 0x33 },
         Edge { lod: 0x6, v: [9, 8], faces: 0x33 },
-        Edge { lod: 0x8, v: [15, 11], faces: 0x44 },
-        Edge { lod: 0x8, v: [15, 12], faces: 0x44 },
-        Edge { lod: 0x7, v: [12, 11], faces: 0x44 },
-        Edge { lod: 0x7, v: [13, 14], faces: 0x55 },
-        Edge { lod: 0x8, v: [13, 16], faces: 0x55 },
-        Edge { lod: 0x8, v: [14, 16], faces: 0x55 },
+        // Модификация модели: треугольники двигателей в основании входят
+        // и в задние грани 4/5, и в отдельные грани 6/7 со свечением.
+        Edge { lod: 0x8, v: [15, 11], faces: 0x64 },
+        Edge { lod: 0x8, v: [15, 12], faces: 0x64 },
+        Edge { lod: 0x7, v: [12, 11], faces: 0x64 },
+        Edge { lod: 0x7, v: [13, 14], faces: 0x75 },
+        Edge { lod: 0x8, v: [13, 16], faces: 0x75 },
+        Edge { lod: 0x8, v: [14, 16], faces: 0x75 },
     ],
     faces: &[
         Face { nx: 3, ny: 24, nz: 3, flags: 0x1f },
@@ -65,6 +67,9 @@ pub(super) static SHIP_D_KRAIT: Ship = Ship {
         Face { nx: -3, ny: 24, nz: 3, flags: 0x9e },
         Face { nx: 38, ny: 0, nz: -77, flags: 0x3f },
         Face { nx: -38, ny: 0, nz: -77, flags: 0xbe },
+        // Модификация модели: треугольники двигателей в основании.
+        Face { nx: 38, ny: 0, nz: -77, flags: 0x3f },
+        Face { nx: -38, ny: 0, nz: -77, flags: 0xbe },
     ],
-    face_styles: &[],
+    face_styles: &[(6, FaceStyle::EngineGlow), (7, FaceStyle::EngineGlow)],
 };

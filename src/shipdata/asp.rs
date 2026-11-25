@@ -2,7 +2,7 @@
 //!
 //! Модель из таблицы `AdrDataShips` версии Кладова.
 
-use super::{Edge, Face, Ship, Stats, Vertex};
+use super::{Edge, Face, FaceStyle, Ship, Stats, Vertex};
 
 pub(super) static SHIP_D_ASP: Ship = Ship {
     name: "d_ASP",
@@ -62,10 +62,12 @@ pub(super) static SHIP_D_ASP: Ship = Ship {
         Edge { lod: 0x11, v: [6, 4], faces: 0xa8 },
         Edge { lod: 0x11, v: [7, 5], faces: 0x97 },
         Edge { lod: 0xb, v: [18, 17], faces: 0x40 },
-        Edge { lod: 0xb, v: [15, 13], faces: 0xbb },
-        Edge { lod: 0x9, v: [15, 14], faces: 0xbb },
-        Edge { lod: 0x8, v: [14, 16], faces: 0xbb },
-        Edge { lod: 0x9, v: [13, 16], faces: 0xbb },
+        // Модификация модели: ромб двигателя в основании входит и в заднюю
+        // грань 11, и в отдельную грань 12 со свечением.
+        Edge { lod: 0xb, v: [15, 13], faces: 0xcb },
+        Edge { lod: 0x9, v: [15, 14], faces: 0xcb },
+        Edge { lod: 0x8, v: [14, 16], faces: 0xcb },
+        Edge { lod: 0x9, v: [13, 16], faces: 0xcb },
     ],
     faces: &[
         Face { nx: 0, ny: -35, nz: 5, flags: 0x5f },
@@ -80,6 +82,8 @@ pub(super) static SHIP_D_ASP: Ship = Ship {
         Face { nx: 80, ny: 46, nz: 50, flags: 0x1f },
         Face { nx: -80, ny: 46, nz: 50, flags: 0x9e },
         Face { nx: 0, ny: 0, nz: -90, flags: 0x3f },
+        // Модификация модели: ромб двигателя в основании.
+        Face { nx: 0, ny: 0, nz: -90, flags: 0x3f },
     ],
-    face_styles: &[],
+    face_styles: &[(12, FaceStyle::EngineGlow)],
 };
