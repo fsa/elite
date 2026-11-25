@@ -17,7 +17,7 @@ pub const BACKGROUND: u32 = 0xFF00_0000;
 pub const COMPASS_PLANET: u32 = 0xFF00_D700;
 /// Синеватый металлический круг станции на компасе.
 /// Цвет намеренно не из палитры ZX: станция должна читаться отдельно от тел.
-pub const COMPASS_STATION: u32 = 0xFF74_94BE;
+pub const COMPASS_STATION: u32 = 0xFF4A_A8_FF;
 /// Белый круг солнца на компасе.
 pub const COMPASS_SUN: u32 = FRAME_COLOR;
 /// Цвет длинных клеток у Cobra Mk III — красный (ZX paper 2).
