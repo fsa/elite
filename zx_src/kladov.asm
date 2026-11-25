@@ -463,6 +463,9 @@ loc_5E65:				; CODE XREF: LaunchDocking-3591j
 ; =============== S U B	R O U T	I N E =======================================
 
 ; вызывается при увеличении 3го	байта рейтинга
+; При PilotTargonWar==0 и неактивных миссиях сбрасывает биты 0..3 PilotExtWeapon
+; (оставляя 0xD0), PilotRating2/PilotTargonWar в 0x81; готовит сообщение 0xC9.
+; При активной войне — только decrement PilotRating2, если сброшен его бит 0.
 
 sub_5E78:				; CODE XREF: sub_B24E:loc_B258p
 		ld	a, (PilotTargonWar) ; =#81 при сбросе миссий
@@ -4238,6 +4241,7 @@ loc_70CB:				; CODE XREF: FastSetAtrInViewScr+1Fj
 
 ; ---------------------------------------------------------------------------
 byte_70DC:	db 5Eh			; DATA XREF: ProgressMissionWaro
+					; накопитель хода войны для ProgressMissionWar
 		db 43h
 		db 0FCh
 		db 0FFh
@@ -4641,6 +4645,7 @@ sub_7265:				; CODE XREF: PrnCocpit_Ifn+38p
 ; =============== S U B	R O U T	I N E =======================================
 
 
+; При вылете с активной первой миссией отметить её «в полёте» для эффекта новы
 sub_726C:				; CODE XREF: LaunchDocking+90p
 		ld	a, (PilotMission1)
 		and	a
@@ -4654,6 +4659,8 @@ sub_726C:				; CODE XREF: LaunchDocking+90p
 ; =============== S U B	R O U T	I N E =======================================
 
 
+; Разбор состояния PilotMission3 при стыковке:
+; 1/2 - выдать 3ю миссию, 5 - завершить, 6 - захват таргонами, 4 - система таргонов в войне
 GoMission3:				; CODE XREF: sub_5FA1+3p
 
 ; FUNCTION CHUNK AT D0DD SIZE 00000003 BYTES
@@ -4919,6 +4926,8 @@ loc_735D:				; CODE XREF: ScanKeyInPause:loc_735Dj
 ; =============== S U B	R O U T	I N E =======================================
 
 ; определение возможности сбора	минеральной жизни
+; Нужны PilotMineralLife==0, расстояние >=#38, главная диагональ и >=2 минералов
+; в трюме; при сборе в PilotMineralLife пишется количество минералов.
 
 sub_7370:				; CODE XREF: CollisionWithObj+1CCAp
 		ld	a, (PilotMineralLife) ;	<>0 в трюме есть минеральная жизнь
@@ -6993,6 +7002,7 @@ DestroyObj:				; CODE XREF: FireLaser+CEp
 		and	a
 		jr	z, loc_7DDD
 
+; Уничтожение ASP 2й миссии: Mission2 1 -> 3 (цель уничтожена)
 loc_7DD1:
 		cp	3
 		jr	z, loc_7DDD
@@ -7229,6 +7239,7 @@ Use_J_Drive:				; CODE XREF: sub_728D:loc_74B6p
 		or	l
 		ret	nz
 
+; При прыжке/вылете из системы mission-объект 2й миссии сбрасывается
 loc_7EFB:				; CODE XREF: Use_J_Drive+11j
 		ld	a, (J_Drive_Ready4)
 		and	a
@@ -7308,7 +7319,7 @@ SetTargonStation:			; CODE XREF: sub_5FD5:loc_6028p
 					; CallFunctionObj_1:Set3_4Targonsp
 		call	TestTargonStation ; определение	возможности установки станции таргонов в межпланетном пространстве для последней подмиссии в войне с таргонами
 					; Вх:  ---
-					; Вых: cy =1 станция установлена
+					; Вых: z=1 станция может быть установлена
 					;      hl,bc,a - не определены
 		jp	nz, IntRnd_A
 		ld	hl, objCoriolis
@@ -7361,6 +7372,8 @@ loc_7F9D:				; CODE XREF: sub_7F81+4j sub_7F81+Cj
 ; =============== S U B	R O U T	I N E =======================================
 
 
+; Условие сдачи первой миссии: бит 5, война, ранг <#84 и пилот вне зоны боев
+; Вых: z=1 - миссию сдавать нельзя
 sub_7FA1:				; CODE XREF: sub_E87E+39p
 		bit	5, (hl)
 		ret	z
@@ -13677,6 +13690,8 @@ loc_9B37:				; CODE XREF: PrintMissiles+18j
 ; =============== S U B	R O U T	I N E =======================================
 
 ; Увеличение/уменьшение	прогресса таргонов, и выдача сообщения о войне
+; При захвате следующей системы пишет в CargoFound указатель 0xF082;
+; при откате прогресса до нуля устанавливает PilotTargonWar=0x7F.
 ; Вх:  ---
 ; Вых: hl,a - не определены
 
@@ -14064,6 +14079,8 @@ sub_9CAF:				; CODE XREF: sub_728D+13Cp
 
 ; ---------------------------------------------------------------------------
 Mission2:	db 0			; DATA XREF: DestroyObj+6r
+					; 1 - ASP 2й миссии создан, 2 - цель уходит от боя,
+					; 3 - цель уничтожена; 0 - миссии нет (сброс в Use_J_Drive)
 					; DestroyObj+12w ...
 nMissileObj:	db 0			; DATA XREF: MoveAllObjects+36r
 					; ReactionObject+119r ...
@@ -15166,6 +15183,7 @@ loc_A2CE:				; CODE XREF: ReactionObject+9j
 		jr	c, loc_A2D2
 		ld	a, c
 
+; ASP 2й миссии при типе цели >=#50 и Mission2==2 уходит от боя: 2 -> 1
 loc_A2D2:				; CODE XREF: ReactionObject+Fj
 		ld	b, a
 		ld	a, (CloakingDeviceOn)
@@ -18994,6 +19012,7 @@ loc_B4F8:				; CODE XREF: CollisionWithObj+1Cj
 		jr	AddFoundCargo2
 ; ---------------------------------------------------------------------------
 
+; Столкновение с ASP 2й миссии: Mission2 3 -> 2 (цель снова уходит от боя)
 loc_B548:				; CODE XREF: CollisionWithObj+67j
 		ld	a, (Mission2)
 		sub	3
@@ -20162,6 +20181,8 @@ loc_BBB3:				; CODE XREF: SetShip4Intro+41j
 ; ---------------------------------------------------------------------------
 ; START	OF FUNCTION CHUNK FOR CallFunctionObj_1
 
+; Создание ASP для 2й миссии: Mission2==0, случай <#1E и
+; (PilotExtWeapon & 0x42)==0x02; иначе обычный выбор корабля.
 SetRndShip:				; CODE XREF: CallFunctionObj_1+8j
 		ld	a, (cargoSlaves)
 		ld	c, a
@@ -24874,6 +24895,8 @@ PilotRating2:	db 0			; DATA XREF: sub_5E78:loc_5E9Cr
 					; 7,=1 война была или идёт
 					; 6,=1 война закончилать
 					; 3-1 -	ранг (=текущая стадия войны)
+					; бит 0 отдельно проверяется в GoMissionWar/sub_5E78:
+					; без него предложение участвовать в войне не выдаётся
 JumpCounter:	dw 0
 PilotNumGalaxy:	db 0			; DATA XREF: ReCalcCrdObj_coriolis+19r
 					; TestPilotInZoneWar:loc_D67Dr	...
@@ -24909,6 +24932,8 @@ PilotFrontLaser:db 1			; DATA XREF: RAM:72E9r	RAM:72F1w ...
 PilotLeftLaser:	db 0			; DATA XREF: RAM:72EEr	RAM:72F6w
 		db 0
 PilotMission1:	db 0			; DATA XREF: sub_5E78+9r
+					; 0 - миссия не взята, 1 - десант в трюме
+					; ставится в GoMission1 (покупка товаров) или после гиперпрыжка (sub_DCE9)
 					; FastSetAtrInViewScrr	...
 Pilot_Fuel:	db 46h			; DATA XREF: sub_9B83o	sub_D822+1Er ...
 PilotMissiles:	db 3			; DATA XREF: sub_5EC5+3o
@@ -24920,6 +24945,8 @@ PilotECMSystem:	db 0			; DATA XREF: LaunchDocking+3Eo
 PilotAlienComputer:db 0			; DATA XREF: sub_5EC5+28r sub_8AA3+7o	...
 					; 0,=1 есть Alien Computer
 PilotMineralLife:db 0			; DATA XREF: sub_6FFB+5w sub_7370r ...
+					; собирается sub_7370, гибнет в sub_D5B4
+					; обнуляется при сдаче первой миссии (Cmd_3_SellProducrs)
 					; <>0 в	трюме есть минеральная жизнь
 					; =#FF минеральная жизнь померла
 PilotFuelScoops:db 0			; DATA XREF: CollisionWithObj+4Fr
@@ -24939,6 +24966,7 @@ PilotTargonWar:	db 0			; DATA XREF: sub_5E78r	sub_5E78+18r ...
 					; 6-0, чем больше число	тем дальше от левого края карты	захват планет таргонами
 					;
 					; =#01 война закончена
+					; ProgressMissionWar меняет прогресс/сообщение, GoMissionWar — стадии войны
 PilotGalaxyData0:db 4Ah			; DATA XREF: sub_79F9+22o sub_D857o ...
 		db 5Ah
 byte_D092:	db 48h			; DATA XREF: RAM:DF11o
@@ -24978,6 +25006,7 @@ PilotMission3:	db 0			; DATA XREF: ReCalcCrdObj_coriolis+1Er
 					; GoMission3r ...
 					; =#06 при стыковке будет захват таргонами (вроде нереальная ситуация)
 					; =#04 в системе со танцией таргонов во	время войны
+					; 1/2 - выдача/выполнение 3й миссии, 5 - её завершение, 6 - захват таргонами
 PilotExtWeapon:	db 0			; DATA XREF: sub_5EC5+Dr
 					; Use_Y_Cloacking+13o ...
 					; 7,=1 - ECM Jammer
@@ -24988,10 +25017,13 @@ PilotExtWeapon:	db 0			; DATA XREF: sub_5EC5+Dr
 					; 2 =1 - третья	миссия выполнена
 					; 1 =1 - второя	миссия выполнена
 					; 0 =1 - первая	миссия выполнена
+					; биты 0/1/2 одновременно - «уже выдано/выполнено» при выдаче после гиперпрыжка
 PilotDataOfSun:	db 0F0h, 52h, 5, 33h, 98h, 7, 0B6h, 0FAh, 8Bh
 					; DATA XREF: UseEscapePod:loc_9C71w
 					; UseEscapePod+5Bw
 PilotMission1_1:db 0			; DATA XREF: sub_726C+7w sub_728D+182w ...
+					; выставляется sub_726C при вылете с активной 1й миссией
+					; сбрасывается после заставки; вне 102-байтового блока сохранения
 Pilot_CrdXTarget:db 14h			; DATA XREF: sub_5FD5+37w InitGame+11w ...
 Pilot_CrdYTarget:db 0ADh		; DATA XREF: CalcDistanceToCursor+1o
 					; InitGame+17w	...
@@ -25006,6 +25038,8 @@ DestDeviceCargo:db 2			; DATA XREF: sub_D1E9+30o
 CashBonus:	db 0Ch			; DATA XREF: IncBattleRating2+1Co
 		db 0E2h
 CargoFound:	db 0Bh			; DATA XREF: ReCalcCrdObj_coriolis+73w
+					; u16 LE: указатель сообщения о находке/войне, по умолчанию 000Bh
+					; вне 102-байтового блока сохранения
 		db 0
 RatingRightOn:	db 6
 		db 65h
@@ -25116,6 +25150,7 @@ loc_D114:				; CODE XREF: sub_D148+3j
 ; ---------------------------------------------------------------------------
 ; START	OF FUNCTION CHUNK FOR GoMission3
 
+; Выдача 3й миссии: N обнуляет PilotMission3, Y ставит бит 7 PilotExtWeapon и состояние 3
 loc_D123:				; CODE XREF: GoMission3:GiveMission3j
 		ld	de, 581Fh
 		ld	hl, 405h
@@ -25160,6 +25195,7 @@ sub_D148:				; CODE XREF: sub_D14D+13j sub_E87E+54p
 ; =============== S U B	R O U T	I N E =======================================
 
 
+; Завершение 3й миссии: сброс PilotMission3 и установка бита 3 PilotExtWeapon
 sub_D14D:				; CODE XREF: GoMission3:EndMission3j
 		call	sub_B25C
 		nop
@@ -26541,6 +26577,8 @@ loc_D6D4:				; CODE XREF: sub_D6AA+34j
 ; =============== S U B	R O U T	I N E =======================================
 
 ; Выдача миссии/подмиссии: Война с таргонами, если доступно
+; В зоне оккупации ставит PilotMission3=4; в зоне военных действий предлагает
+; вступить в войну (PilotRating2, бит 0 и ранг) или напоминает о текущем ранге.
 ; Вх:  ---
 ; Вых: hl,de,bc,a - не определены
 
@@ -28214,6 +28252,9 @@ loc_DE6A:				; DATA XREF: sub_5E1A+Dw
 ; ---------------------------------------------------------------------------
 ; START	OF FUNCTION CHUNK FOR sub_DCE9
 
+; Выдача очередной «стандартной» миссии после гиперпрыжка: проверяется
+; (PilotRating2 & PilotExtWeapon), первый unset бит 0/1/2 даёт миссию 1/2/3;
+; все три установлены — захват пиратами.
 loc_DE6F:				; CODE XREF: sub_DCE9+14Ej
 		and	(hl)
 		rrca
@@ -30103,6 +30144,8 @@ sub_E6A3:				; CODE XREF: PrintSmallCursOnMap+22Ep
 ; =============== S U B	R O U T	I N E =======================================
 
 
+; Покупка товаров: перед обычным меню проверяется выдача первой миссии
+; (GoMission1), а при уже занятом трюме (бит 5) проверка пропускается
 Cmd_2_BuyProducts:			; CODE XREF: RAM:FunctionKernelj
 
 ; FUNCTION CHUNK AT E707 SIZE 00000009 BYTES
@@ -30545,6 +30588,8 @@ byte_E8AB:	db 0			; DATA XREF: sub_E776+4w sub_E776+1Dw	...
 word_E8AC:	dw 0			; DATA XREF: sub_E776w	sub_E776+24r ...
 ; ---------------------------------------------------------------------------
 
+; Продажа товаров: сдача первой миссии идёт через sub_7FA1 и обнуляет
+; PilotMineralLife, снимает бит 5 и даёт 100 камней в трюм
 Cmd_3_SellProducrs:			; CODE XREF: RAM:D003j
 		ld	a, (PilotMission1)
 		and	a
@@ -31740,6 +31785,8 @@ loc_EED8:				; CODE XREF: sub_EECE+6j
 ;	=0 минеральная жизнь померла
 ;	   нет минеральной жизни
 
+; После вылета/прилёта обновляет PilotMission3: 4 в системе таргонов в войне,
+; иначе 0; попутно проверяет гибель минеральной жизни
 SetVars4War:				; CODE XREF: sub_5FD5+6Bj
 					; InitSpeedAngle+3p
 		ld	a, (PilotNumGalaxy)
@@ -31898,6 +31945,8 @@ loc_EF79:				; CODE XREF: sub_EF48+3Bj
 		db    3
 ; ---------------------------------------------------------------------------
 
+; Экран капитана (WhatOnScreen=0x0B): отсюда же печатается ранг войны.
+; Ближайший нативный аналог — F9 (src/status/mod.rs).
 Cmd_L_PilotInfo:			; CODE XREF: j_Cmd_L_PilotInfoj
 					; RAM:E9FDj ...
 		ld	a, 0Bh
@@ -35155,8 +35204,9 @@ loc_FCD1:				; CODE XREF: sub_FCBA+14j
 ; =============== S U B	R O U T	I N E =======================================
 
 ; определение возможности установки станции таргонов в межпланетном пространстве для последней подмиссии в войне с таргонами
+; Нужны сброшенный бит 6 PilotRating2, зона боев и координаты Y=5Ch, X=03h
 ; Вх:  ---
-; Вых: cy =1 станция установлена
+; Вых: z=1 станция может быть установлена
 ;      hl,bc,a - не определены
 
 TestTargonStation:			; CODE XREF: SetTargonStationp
@@ -35229,6 +35279,9 @@ loc_FD1B:				; CODE XREF: sub_FD02+13j
 ; =============== S U B	R O U T	I N E =======================================
 
 
+; Проверка условия выдачи первой миссии (десант в обмен на минералы)
+; Вх:  ---
+; Вых: cy=1 - предложить миссию, cy=0 - не предлагать
 GoMission1:				; CODE XREF: Cmd_2_BuyProducts+Dp
 		ld	a, (PilotMission1)
 		and	a
