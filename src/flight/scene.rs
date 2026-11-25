@@ -4,7 +4,7 @@
 //! модуль только превращает слоты `SlotObj`, координаты солнца и планеты в
 //! список [`Body`], готовый для рендера.
 
-use crate::render3d::{Rotation, ShipTint};
+use crate::render3d::{ENGINE_IDLE, Rotation, ShipTint};
 use crate::shipdata::{self, Ship};
 
 use super::memory::{
@@ -177,6 +177,9 @@ pub(super) struct Body {
     pub(super) color: u32,
     /// Оттенок корпуса и рёбер у кораблей, их обломков и выпавшего груза.
     pub(super) tint: Option<ShipTint>,
+    /// Интенсивность свечения двигателя: из приращения скорости слота Z80,
+    /// [`ENGINE_IDLE`] для объектов без такого показателя.
+    pub(super) engine: f32,
 }
 
 /// Собрать сцену из текущего состояния памяти игры.
@@ -356,6 +359,10 @@ fn push_z80_slot(
             _ => CYAN,
         },
         tint,
+        engine: match kind {
+            BodyKind::Ship => memory::z80_slot_engine(mem, base),
+            _ => ENGINE_IDLE,
+        },
     });
 }
 
@@ -385,6 +392,7 @@ fn push_z80_celestial(
         radius,
         color,
         tint: None,
+        engine: ENGINE_IDLE,
     });
 }
 

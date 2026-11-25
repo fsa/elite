@@ -6,7 +6,7 @@ use crate::shipdata::{self, Edge, Face, FaceStyle, Ship, Vertex};
 use super::faces::{engine_core_color, face_color};
 use super::{
     FLAME_COLOR, Rotation, SHIP_COLOR, SHIP_FACE_COLOR, SHIP_TINT_COUNT, Screen, ShipTint,
-    draw_ship_tinted,
+    draw_ship_tinted, draw_ship_tinted_with_engine,
 };
 
 /// Вход в станцию — чёрная поверхность, а не дыра, сквозь которую виден фон.
@@ -239,7 +239,7 @@ fn krait_base_triangles_are_engines() {
 #[test]
 fn engine_glow_has_small_bright_core() {
     let base = face_color(FaceStyle::EngineGlow, None, 0.0);
-    let core = engine_core_color(0.0);
+    let core = engine_core_color(0.0, 1.0);
     let blue = |c: u32| c & 0xFF;
     assert!(
         blue(core) > blue(base) + 80,
@@ -256,7 +256,7 @@ fn engine_glow_has_small_bright_core() {
         bx: 0.0,
         by: 0.0,
     };
-    draw_ship_tinted(
+    draw_ship_tinted_with_engine(
         &mut f,
         ship,
         &Rotation::identity(),
@@ -264,6 +264,7 @@ fn engine_glow_has_small_bright_core() {
         &screen,
         SHIP_COLOR,
         None,
+        1.0,
     );
     let is_core = |c: u32| {
         let (r, g, b) = ((c >> 16) & 0xFF, (c >> 8) & 0xFF, c & 0xFF);

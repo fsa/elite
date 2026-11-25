@@ -1,14 +1,14 @@
 //! Тесты экрана полёта и его подсистем.
 
 use super::*;
-use crate::render3d::{Rotation, Screen};
+use crate::render3d::{ENGINE_IDLE, Rotation, Screen};
 
 use super::explosions::EXPLOSION_TIME;
 use super::memory::{
     read_signed24, read_signed8, Z80_DAMAGE_FRONT_SHIELD, Z80_IN_FREE_SPACE, Z80_LASER_MOUNTS,
     Z80_OBJ_CORIOLIS, Z80_OBJ_MISSILE, Z80_OBJ_SLOT0, Z80_OENERG_DESTROYED, Z80_PLANET_CRD,
-    Z80_SHIELD_FRONT, Z80_SHIELD_REAR, Z80_SLOT_OADRDATA, Z80_SLOT_OENERG, Z80_SLOT_SIZE,
-    Z80_STARS_TABLE, Z80_SUN_CRD, Z80_TEMP_LASER,
+    Z80_SHIELD_FRONT, Z80_SHIELD_REAR, Z80_SLOT_OACCEL, Z80_SLOT_OADRDATA, Z80_SLOT_OENERG,
+    Z80_SLOT_SIZE, Z80_STARS_TABLE, Z80_SUN_CRD, Z80_TEMP_LASER,
 };
 use super::messages::{countdown_number, view_label, BOTTOM_MSG_TTL};
 use super::palette::{
@@ -66,6 +66,7 @@ fn test_body(source: u8, pos: [f32; 3], rot: Rotation) -> Body {
         radius: 10.0,
         color: 0,
         tint: None,
+        engine: ENGINE_IDLE,
     }
 }
 
@@ -76,6 +77,23 @@ fn assert_vec_close(a: [f32; 3], b: [f32; 3]) {
             "векторы не совпали: {a:?} против {b:?}"
         );
     }
+}
+
+#[test]
+fn engine_comes_from_slot_acceleration_not_speed() {
+    let mut mem = vec![0u8; Z80_OBJ_SLOT0 + Z80_SLOT_SIZE];
+    let base = Z80_OBJ_SLOT0;
+    // Высокая скорость при нулевом приращении — полёт по инерции, двигатель
+    // не работает. Само поле скорости здесь специально не читается.
+    mem[base + 0x1B] = 31;
+    mem[base + Z80_SLOT_OACCEL] = 0;
+    assert_eq!(memory::z80_slot_engine(&mem, base), 0.0);
+
+    mem[base + Z80_SLOT_OACCEL] = 0x0A;
+    assert!(
+        memory::z80_slot_engine(&mem, base) > 0.9,
+        "активное приращение должно включать двигатель"
+    );
 }
 
 #[test]

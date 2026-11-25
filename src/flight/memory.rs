@@ -115,6 +115,12 @@ pub(super) const Z80_OBJ_SLOT0: usize = 0x606F;
 pub(super) const Z80_SLOT_SIZE: usize = 0x27;
 /// Слот ракеты (`objMissile`).
 pub(super) const Z80_OBJ_MISSILE: usize = 0x6159;
+/// `seed up` в слоте (`SlotObj+0x1C`): приращение скорости за игровой такт.
+///
+/// В оригинале это команда движения AI, а не булевый флаг двигателя, но это
+/// ближайший пер-корабельный признак работающего двигателя: нулевое значение
+/// означает полёт по инерции, ненулевое — активное ускорение или торможение.
+pub(super) const Z80_SLOT_OACCEL: usize = 0x1C;
 /// `oEnerg` в слоте: 0 — слот пуст.
 pub(super) const Z80_SLOT_OENERG: usize = 0x22;
 /// `oEnerg` уничтоженного объекта: `FireLaser` пишет `0xFF` перед
@@ -130,6 +136,23 @@ pub(super) const Z80_PLANET_CRD: usize = 0x7110;
 /// Находится ли корабль вне планетной системы (`InFreeSpace <> 0`).
 pub fn z80_in_free_space(mem: &[u8]) -> bool {
     mem.get(Z80_IN_FREE_SPACE).copied().unwrap_or(0) != 0
+}
+
+/// Интенсивность двигателя NPC по приращению скорости в слоте.
+///
+/// `0` соответствует полёту по инерции: двигатель не работает, хотя сам
+/// объект может двигаться. Любое ненулевое приращение считается работающим
+/// двигателем; масштаб грубый, так как AI пишет в поле и `1`, и `0xFF`.
+pub(super) fn z80_slot_engine(mem: &[u8], base: usize) -> f32 {
+    let Some(&accel) = mem.get(base + Z80_SLOT_OACCEL) else {
+        return 0.0;
+    };
+    let step = (accel as i8).unsigned_abs() as f32;
+    if step == 0.0 {
+        0.0
+    } else {
+        (step / 10.0).clamp(0.35, 1.0)
+    }
 }
 
 /// Вид радара, который включён в эмуляторе.

@@ -55,8 +55,9 @@ fn engine_glow_color(phase: f32) -> u32 {
 
 /// Маленькая, но яркая сердцевина сопла. Мерцает быстрее грани и не гаснет
 /// полностью: тёмная грань остаётся фоном, а «работа» двигателя видна по ядру.
-pub(super) fn engine_core_color(phase: f32) -> u32 {
-    let pulse = 0.75 + 0.20 * (phase * 1.7).sin();
+pub(super) fn engine_core_color(phase: f32, engine: f32) -> u32 {
+    let level = 0.55 + 0.45 * engine.clamp(0.0, 1.0);
+    let pulse = (0.75 + 0.20 * (phase * 1.7).sin()) * level;
     let (r, g, b) = super::ENGINE_CORE_BASE;
     let ch = |v: f32| ((v * pulse).clamp(0.0, 1.0) * 255.0) as u32;
     0xFF00_0000 | (ch(r) << 16) | (ch(g) << 8) | ch(b)
@@ -74,6 +75,7 @@ fn fill_engine_core(
     shape: &FaceShape,
     scr: &[(f32, f32, f32)],
     glow_phase: f32,
+    engine: f32,
 ) {
     let mut vs: Vec<usize> = shape.edges.iter().flat_map(|&(a, b)| [a, b]).collect();
     vs.sort_unstable();
@@ -100,7 +102,7 @@ fn fill_engine_core(
     let cy = sy / vs.len() as f32;
     let span = (shape.x1 - shape.x0).min(shape.y1 - shape.y0);
     let r = (span * CORE_RADIUS_RATIO).max(0.75);
-    let color = engine_core_color(glow_phase);
+    let color = engine_core_color(glow_phase, engine);
     let w = frame.width as i32;
     let h = frame.height as i32;
     let y_lo = ((cy - r - 0.5).ceil() as i32).max(0);
@@ -251,13 +253,15 @@ pub(super) fn face_color(style: FaceStyle, tint: Option<ShipTint>, glow_phase: f
 /// они должны перекрывать корпус, оказавшийся позади них на экране. У грани
 /// двигателя поверх основной заливки рисуется маленькая яркая сердцевина.
 /// `glow_phase` — фаза [0, 2π) для пульсации [`FaceStyle::EngineGlow`],
-/// `tint` — оттенок корабля или `None` для нейтрального металла.
+/// `tint` — оттенок корабля или `None` для нейтрального металла,
+/// `engine` — интенсивность сердцевины двигателя.
 pub(super) fn fill_faces(
     frame: &mut Frame,
     shapes: &[FaceShape],
     scr: &[(f32, f32, f32)],
     glow_phase: f32,
     tint: Option<ShipTint>,
+    engine: f32,
 ) {
     let w = frame.width as i32;
     let h = frame.height as i32;
@@ -305,7 +309,7 @@ pub(super) fn fill_faces(
             }
         }
         if shape.style == FaceStyle::EngineGlow {
-            fill_engine_core(frame, shape, scr, glow_phase);
+            fill_engine_core(frame, shape, scr, glow_phase, engine);
         }
     }
 }

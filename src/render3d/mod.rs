@@ -121,6 +121,10 @@ const ENGINE_CORE_BASE: (f32, f32, f32) = (0.45, 0.85, 1.0);
 /// Скорость изменения фазы сияния, рад/с: около 4,8 цикла в секунду.
 const ENGINE_GLOW_SPEED: f32 = 30.0;
 
+/// Интенсивность двигателя, когда игровой показатель тяги недоступен:
+/// заставка, объекты без слота и рендер без привязки к состоянию.
+pub const ENGINE_IDLE: f32 = 0.5;
+
 fn engine_glow_phase() -> f32 {
     static START: OnceLock<Instant> = OnceLock::new();
     START.get_or_init(Instant::now).elapsed().as_secs_f32() * ENGINE_GLOW_SPEED
@@ -302,13 +306,7 @@ pub fn face_visibility(ship: &Ship, rot: &Rotation, pos: [f32; 3]) -> Vec<bool> 
 
 /// Нарисовать объект с лёгким цветным оттенком корпуса.
 ///
-/// Оттенок применяется к рёбрам и ко всем граням, кроме двигателей. `None`
-/// оставляет фиксированный металлический цвет (модели без `tintable`).
-/// `pos` — положение начала координат модели в системе камеры (X вправо,
-/// Y вверх, Z вглубь экрана). `rot` — ориентация модели относительно камеры.
-/// `screen` — перспективная проекция. `color` — цвет рёбер.
-/// Объекты целиком за камерой или пересекающие её ближнюю плоскость
-/// не рисуются.
+/// Вариант без явной тяги: сердцевина двигателя получает [`ENGINE_IDLE`].
 pub fn draw_ship_tinted(
     frame: &mut Frame,
     ship: &Ship,
@@ -317,6 +315,30 @@ pub fn draw_ship_tinted(
     screen: &Screen,
     color: u32,
     tint: Option<ShipTint>,
+) {
+    draw_ship_tinted_with_engine(frame, ship, rot, pos, screen, color, tint, ENGINE_IDLE);
+}
+
+/// Нарисовать объект с заданной интенсивностью двигателя.
+///
+/// Оттенок применяется к рёбрам и ко всем граням, кроме двигателей. `None`
+/// оставляет фиксированный металлический цвет (модели без `tintable`).
+/// `engine` — интенсивность в диапазоне `0..=1`: от тлеющего сопла до яркой
+/// сердцевины при работе двигателя; неизвестное значение равно [`ENGINE_IDLE`].
+/// `pos` — положение начала координат модели в системе камеры (X вправо,
+/// Y вверх, Z вглубь экрана). `rot` — ориентация модели относительно камеры.
+/// `screen` — перспективная проекция. `color` — цвет рёбер.
+/// Объекты целиком за камерой или пересекающие её ближнюю плоскость
+/// не рисуются.
+pub fn draw_ship_tinted_with_engine(
+    frame: &mut Frame,
+    ship: &Ship,
+    rot: &Rotation,
+    pos: [f32; 3],
+    screen: &Screen,
+    color: u32,
+    tint: Option<ShipTint>,
+    engine: f32,
 ) {
     if ship.vertices.is_empty() || pos[2] <= NEAR {
         return;
@@ -341,7 +363,7 @@ pub fn draw_ship_tinted(
     let shapes = face_shapes(ship, &scr, &vis);
     let glow_phase = engine_glow_phase();
     // Сначала непрозрачные грани, затем рёбра поверх них.
-    fill_faces(frame, &shapes, &scr, glow_phase, tint);
+    fill_faces(frame, &shapes, &scr, glow_phase, tint, engine);
     let occl = occluders(&shapes);
     let edge_color = tint.map_or(color, |t| t.apply(color));
     for e in ship.edges {
