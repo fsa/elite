@@ -459,19 +459,17 @@ impl App<'_> {
                             true
                         }
                         5 => {
-                            // RATING: меняем только числовую часть, флаги/ранг в R2 сохраняем.
+                            // RATING: очки лежат в PilotRating0..1. PilotRating2
+                            // оригинал использует отдельно и здесь не трогаем.
                             let r0 = base + 0x0C;
                             let r1 = base + 0x0D;
-                            let r2 = base + 0x0E;
-                            if r2 < self.machine.mem.len() {
-                                let r0v = self.machine.mem[r0] as u32;
-                                let r1v = self.machine.mem[r1] as u32;
-                                let r2v = self.machine.mem[r2] as u32;
-                                let rating = r0v | (r1v << 8) | ((r2v & 0x31) << 16);
-                                let nv = (rating as i64 + delta as i64 * 256).clamp(0, 0x31_FF_FF) as u32;
-                                self.machine.mem[r0] = (nv & 0xFF) as u8;
-                                self.machine.mem[r1] = ((nv >> 8) & 0xFF) as u8;
-                                self.machine.mem[r2] = (r2v as u8 & 0xCE) | (((nv >> 16) as u8) & 0x31);
+                            if r1 < self.machine.mem.len() {
+                                let rating = u16::from_le_bytes([
+                                    self.machine.mem[r0],
+                                    self.machine.mem[r1],
+                                ]) as i64;
+                                let nv = (rating + delta as i64 * 256).clamp(0, 0xFFFF) as u16;
+                                self.machine.mem[r0..=r1].copy_from_slice(&nv.to_le_bytes());
                             }
                             true
                         }

@@ -8,7 +8,7 @@ fn fake_mem() -> Vec<u8> {
     // Имя: «KRYTEN» и хвостовые пробелы, как в блоке `PilotName`.
     m[0xD054..0xD054 + 11].copy_from_slice(b"KRYTEN    \0");
     m[0xD05F] = 0; // PilotLegalStatus: чист
-    m[0xD060..0xD063].copy_from_slice(&[0xC8, 0x00, 0x00]); // рейтинг 200
+    m[0xD060..0xD063].copy_from_slice(&[0xC8, 0x00, 0x00]); // 200 очков в R0, R1/R2 нулевые
     m[0xD065] = 2; // номер галактики (0-based)
     m[0xD066..0xD068].copy_from_slice(&1u16.to_le_bytes()); // cash2
     m[0xD068..0xD06A].copy_from_slice(&2345u16.to_le_bytes()); // cash1
@@ -48,7 +48,8 @@ fn open_reads_commander_fields() {
     assert_eq!(status.info.fuel, 70);
     assert_eq!(status.fuel_text(), "7.0 Light Years");
     assert_eq!(status.legal_text(), "Clean");
-    assert_eq!(status.rating_text(), "Competent");
+    // 200 очков лежат в младшем байте: оригинал всё ещё печатает Harmless.
+    assert_eq!(status.rating_text(), "Harmless");
 }
 
 /// Список оборудования — в порядке `Cmd_L_PilotInfo`: шесть флагов,
@@ -139,11 +140,11 @@ fn legal_status_names_follow_the_game() {
     }
 }
 
-/// Пороги рейтинга — из таблиц `byte_F0AE`/`byte_F0B4`.
+/// При нулевом `PilotRating2` пороги берутся из `byte_F0AE` и сравниваются
+/// с `PilotRating1`. Младший байт в звание не входит.
 #[test]
-fn rating_names_follow_the_game_tables() {
-    let mut status = opened();
-    for (rating, name) in [
+fn rating_names_follow_byte_f0ae() {
+    for (r1, name) in [
         (0, "Harmless"),
         (7, "Harmless"),
         (8, "Mostly Harmless"),
@@ -152,31 +153,36 @@ fn rating_names_follow_the_game_tables() {
         (32, "Average"),
         (64, "Above Average"),
         (128, "Competent"),
-        (511, "Competent"),
-        (512, "Dangerous"),
-        (2559, "Dangerous"),
-        (2560, "Deadly"),
-        (6399, "Deadly"),
-        (6400, "Elite"),
-        (0xFFFF_FF, "Elite"),
+        (254, "Competent"),
+        (255, "Dangerous"),
     ] {
-        status.info.rating = rating;
-        assert_eq!(status.rating_text(), name, "rating={rating}");
+        let mut mem = fake_mem();
+        mem[0xD061] = r1; // PilotRating1
+        let mut status = Status::new();
+        status.open(&mem, KLADOV_STATUS);
+        assert_eq!(status.rating_text(), name, "R1={r1}");
     }
 }
 
-/// Флаги войны/ранга в `PilotRating2` не должны влиять на числовой рейтинг.
+/// При ненулевом `PilotRating2` пороги берутся из `byte_F0B4` и сравниваются
+/// с ним самим, как в `Cmd_L_PilotInfo`.
 #[test]
-fn rating_ignores_war_and_rank_flags() {
-    let mut mem = fake_mem();
-    // PilotRating0=0, PilotRating1=0, PilotRating2 has war/rank flags set.
-    mem[0xD054 + 12] = 0x00;
-    mem[0xD054 + 13] = 0x00;
-    mem[0xD054 + 14] = 0xCF; // bits 7,6,3-1 and bit 0 set
-    let mut status = Status::new();
-    status.open(&mem, KLADOV_STATUS);
-    assert_eq!(status.info.rating, 0x0001_0000);
-    assert_eq!(status.rating_text(), "Elite");
+fn rating_names_follow_byte_f0b4() {
+    for (r2, name) in [
+        (1, "Competent"),
+        (2, "Dangerous"),
+        (9, "Dangerous"),
+        (10, "Deadly"),
+        (24, "Deadly"),
+        (25, "Elite"),
+    ] {
+        let mut mem = fake_mem();
+        mem[0xD061] = 0xFF; // R1 больше не влияет на выбор названия
+        mem[0xD062] = r2; // PilotRating2
+        let mut status = Status::new();
+        status.open(&mem, KLADOV_STATUS);
+        assert_eq!(status.rating_text(), name, "R2={r2}");
+    }
 }
 
 /// Повреждённый блок командира не должен ломать экран: имя обрезается по

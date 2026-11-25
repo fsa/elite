@@ -11,6 +11,7 @@
 //! - `keys` — раскладка клавиш ZX/Kempston;
 //! - `headless` — прогон без окна и отладочные дампы;
 //! - `storage` — сохранение/загрузка командира;
+//! - `rating` — боевой рейтинг и его название по правилам оригинала;
 //! - `ui` — меню паузы и показ кадра;
 //! - `app` — окно, ввод, нативные экраны и кадр;
 //! - `audio`, `machine`, `z80`, `native` — звук и эмуляция;
@@ -35,6 +36,7 @@ mod hdmap;
 mod keys;
 mod machine;
 mod native;
+mod rating;
 mod render3d;
 mod sfx;
 mod shipdata;

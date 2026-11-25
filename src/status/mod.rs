@@ -7,12 +7,13 @@
 //! Показываются поля оригинала (`Cmd_L_PilotInfo` в версии Кладова):
 //! имя командира, текущая и целевая системы гиперпрыжка, деньги, топливо,
 //! правовой статус (`PilotLegalStatus`: `0` — чист, `< 0x32` — нарушитель,
-//! дальше — беглец), боевой рейтинг (`PilotRating0..2`, пороги
-//! `8/16/32/64/128/512/2560/6400` — как в таблицах `byte_F0AE`/`byte_F0B4`)
-//! и установленное оборудование — в том же порядке, что печатает оригинал.
+//! дальше — беглец), боевой рейтинг (индекс названия из `PilotRating1` или
+//! `PilotRating2`, как в `Cmd_L_PilotInfo`; см. [`crate::rating`]) и
+//! установленное оборудование — в том же порядке, что печатает оригинал.
 
 use crate::display::Frame;
 use crate::galaxy::{self, GalaxyLayout};
+use crate::rating;
 
 mod draw;
 #[cfg(test)]
@@ -96,9 +97,9 @@ struct Info {
     fuel: u8,
     /// `PilotLegalStatus`.
     legal: u8,
-    /// Боевой рейтинг: `PilotRating0..1` и счётчик из `PilotRating2`
-    /// без флагов войны/ранга (биты 7,6,3-1).
-    rating: u32,
+    /// Индекс названия боевого рейтинга, выбранный по правилам
+    /// `Cmd_L_PilotInfo` (см. [`crate::rating`]).
+    rating: u8,
     /// Установленное оборудование в порядке оригинала.
     equipment: Vec<String>,
 }
@@ -142,7 +143,7 @@ impl Status {
                 + u16::from_le_bytes([mem[p + OFF_CASH1], mem[p + OFF_CASH1 + 1]]) as u32,
             fuel: mem[p + OFF_FUEL],
             legal: mem[p + OFF_LEGAL],
-            rating: commander_rating(&mem[p + OFF_RATING..p + OFF_RATING + 3]),
+            rating: rating::tier(&mem[p + OFF_RATING..p + OFF_RATING + 3]),
             equipment: read_equipment(&mem[p..]),
         };
         self.active = true;
@@ -177,19 +178,9 @@ impl Status {
         }
     }
 
-    /// Название боевого рейтинга по таблицам `byte_F0AE`/`byte_F0B4`.
+    /// Название боевого рейтинга, как его печатает `Cmd_L_PilotInfo`.
     fn rating_text(&self) -> &'static str {
-        match self.info.rating {
-            0..=7 => "Harmless",
-            8..=15 => "Mostly Harmless",
-            16..=31 => "Poor",
-            32..=63 => "Average",
-            64..=127 => "Above Average",
-            128..=511 => "Competent",
-            512..=2559 => "Dangerous",
-            2560..=6399 => "Deadly",
-            _ => "Elite",
-        }
+        rating::name(self.info.rating)
     }
 }
 
@@ -197,18 +188,6 @@ impl Default for Status {
     fn default() -> Self {
         Status::new()
     }
-}
-
-/// Числовая часть боевого рейтинга командира из `PilotRating0..2`.
-///
-/// `PilotRating2` совмещает счётчик и флаги: бит 7 — война была/идёт,
-/// бит 6 — война закончилась, биты 3-1 — ранг. Эти биты не входят в
-/// числовой рейтинг и маскируются при отображении.
-fn commander_rating(bytes: &[u8]) -> u32 {
-    let r0 = bytes.first().copied().unwrap_or(0) as u32;
-    let r1 = bytes.get(1).copied().unwrap_or(0) as u32;
-    let r2 = bytes.get(2).copied().unwrap_or(0) as u32;
-    r0 | (r1 << 8) | ((r2 & 0x31) << 16)
 }
 
 /// Список установленного оборудования в порядке `Cmd_L_PilotInfo`:
