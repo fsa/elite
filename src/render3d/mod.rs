@@ -113,9 +113,12 @@ pub const FLAME_COLOR: u32 = 0xFFF0_7020;
 /// Цвет сияния двигателя.
 const ENGINE_GLOW_BASE: (f32, f32, f32) = (0.20, 0.80, 1.0);
 
+/// Скорость изменения фазы сияния, рад/с: около 4 циклов в секунду.
+const ENGINE_GLOW_SPEED: f32 = 24.0;
+
 fn engine_glow_phase() -> f32 {
     static START: OnceLock<Instant> = OnceLock::new();
-    START.get_or_init(Instant::now).elapsed().as_secs_f32() * 4.0
+    START.get_or_init(Instant::now).elapsed().as_secs_f32() * ENGINE_GLOW_SPEED
 }
 
 /// Радиус, в который должна вписываться модель на заставке (в «пикселях ZX»).
