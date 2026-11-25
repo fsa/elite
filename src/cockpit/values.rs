@@ -340,6 +340,10 @@ impl CockpitValues {
     /// Оба символа `E`/`S` на титульном экране горят: их атрибуты сохранены
     /// в `DataCocpit` белыми (`E` — ECM, `S` — станция рядом).
     ///
+    /// Единственное отличие от ZX-экрана — компас: вместо пустого кольца в
+    /// его центре стоит залитый круг станции. Экран витрины не привязан к
+    /// координатам полёта, поэтому станция показывается прямо по носу корабля.
+    ///
     /// Набор постоянный, поэтому панель на заставке не мерцает.
     pub fn for_splash() -> Self {
         CockpitValues {
@@ -362,9 +366,14 @@ impl CockpitValues {
                 Indicator::Gauge(0xA0),      // 4
             ],
             danger: Danger::Off,
-            compass: Compass::hidden(),
+            compass: Compass::centered(),
             compass_planet: CompassCircle::hidden(),
-            compass_station: CompassCircle::hidden(),
+            compass_station: CompassCircle {
+                x: 0,
+                y: 0,
+                behind: false,
+                visible: true,
+            },
             compass_sun: CompassCircle::hidden(),
             in_free_space: false,
             compass_blink_phase: true,

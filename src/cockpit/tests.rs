@@ -1154,7 +1154,8 @@ fn cockpit_draws_radar_with_contacts() {
     );
 }
 
-/// Заставка показывает те же показания, что и титульный экран ZX.
+/// Заставка показывает те же показания, что и титульный экран ZX, кроме
+/// компаса: там на витрине в центре рисуется станция.
 #[test]
 fn splash_values_match_zx_title_screen() {
     let a = CockpitValues::for_splash();
@@ -1190,9 +1191,16 @@ fn splash_values_match_zx_title_screen() {
         Danger::Off,
         "на титульном экране ZX индикатор опасности не горит"
     );
-    assert!(
-        !a.compass.visible,
-        "на титульном экране ZX нарисовано только кольцо компаса"
+    assert_eq!(a.compass, Compass::centered());
+    assert_eq!(
+        a.compass_station,
+        CompassCircle {
+            x: 0,
+            y: 0,
+            behind: false,
+            visible: true,
+        },
+        "на заставке станция должна быть в центре компаса и впереди"
     );
     assert_eq!(a.radar, RadarContacts::empty());
     assert!(
@@ -1204,6 +1212,14 @@ fn splash_values_match_zx_title_screen() {
     let g = panel_geometry(1280, 960);
     let mut f = Frame::new(1280, 960);
     Cockpit::new().draw(&mut f, &font(), CockpitStyle::COBRA_MK3, &a);
+    let compass = g.compass_cell();
+    let cx = compass.x + compass.w / 2;
+    let cy = compass.y + compass.h / 2;
+    assert_eq!(
+        f.pixels()[cy as usize * 1280 + cx as usize],
+        COMPASS_STATION,
+        "в центре компаса заставки нет залитого круга станции"
+    );
     let lit = |cell: Rect| {
         let mut n = 0;
         for y in cell.y..cell.y + cell.h {
