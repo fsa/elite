@@ -43,7 +43,8 @@ pub(super) fn draw(f: &mut Flight, frame: &mut Frame, geom: &CockpitGeom, font: 
     let s = ((frame.width / 256).min(view_h / 128)).max(1) as i32;
     let cx = w as f32 / 2.0;
     let cy = view_bottom as f32 / 2.0;
-    let focal = (view_bottom as f32 * 1.15).max(200.0);
+    // Фокус как в Z80: смещение (x/z)*256 при центре (128,64) и высоте вида 128.
+    let focal = (view_bottom as f32 * 2.0).max(200.0);
     let screen = Screen {
         cx,
         cy,
