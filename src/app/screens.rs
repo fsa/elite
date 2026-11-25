@@ -19,6 +19,7 @@ impl App<'_> {
     pub(super) fn close_all_native(&mut self) {
         self.close_hdmap();
         self.shop.close();
+        self.close_inventory();
         self.close_status();
         self.close_sysinfo();
         self.close_market();
@@ -271,6 +272,7 @@ impl App<'_> {
         }
         self.sync_hdmap_target();
         self.shop.close();
+        self.close_inventory();
         self.close_status();
         self.close_sysinfo();
         self.close_market();
@@ -323,6 +325,7 @@ impl App<'_> {
             self.shop.resize(gw, gh);
         }
         self.close_hdmap();
+        self.close_inventory();
         self.close_status();
         self.close_sysinfo();
         self.close_market();
@@ -356,6 +359,7 @@ impl App<'_> {
     pub(super) fn open_status(&mut self) {
         self.close_hdmap();
         self.shop.close();
+        self.close_inventory();
         self.flight.close();
         self.close_sysinfo();
         self.close_market();
@@ -378,6 +382,7 @@ impl App<'_> {
     /// выхода эмулятора из заставки. Обычный `close_status()` сбросил бы
     /// запрос вместе с экраном.
     pub(super) fn close_intro_screens(&mut self) {
+        self.inventory.close();
         self.status.close();
         self.sysinfo.close();
     }
@@ -387,6 +392,38 @@ impl App<'_> {
     pub(super) fn close_status(&mut self) {
         self.status.close();
         self.pending_status = false;
+        self.pending_key = None;
+    }
+
+    /// Открыть нативный экран инвентаря (Enter). На станции и в нативном
+    /// полёте экран показывается сразу по живым данным: Z80 не переводится на
+    /// экран `0x0C`, поэтому симуляция и заморозка станции не нарушаются. Из
+    /// режима эмулятора экран открывается только когда оригинал уже дошёл до
+    /// своего инвентаря (см. `App::emulator_screen_key`).
+    pub(super) fn open_inventory(&mut self) {
+        self.close_hdmap();
+        self.shop.close();
+        self.flight.close();
+        self.close_status();
+        self.close_sysinfo();
+        self.close_market();
+        if !self.machine.intro_seen {
+            self.inventory
+                .open(&self.machine.mem, status::KLADOV_STATUS.pilot);
+        }
+        self.menu = false;
+        self.pending_key = None;
+        self.pending_shop = false;
+        self.pending_flight = None;
+        self.pending_launch = false;
+        self.native_screen_opened();
+    }
+
+    /// Закрыть нативный экран инвентаря при переходе на другую страницу.
+    /// Экранную переменную Z80 не трогаем: нативный экран — только надстройка
+    /// над текущим состоянием оригинала.
+    pub(super) fn close_inventory(&mut self) {
+        self.inventory.close();
         self.pending_key = None;
     }
 
@@ -421,6 +458,7 @@ impl App<'_> {
         if !self.status.active {
             self.close_hdmap();
             self.shop.close();
+            self.close_inventory();
             self.flight.close();
             self.close_sysinfo();
             self.close_market();
@@ -455,6 +493,7 @@ impl App<'_> {
         } else {
             self.close_hdmap();
             self.shop.close();
+            self.close_inventory();
             self.flight.close();
             self.close_status();
             self.close_market();
@@ -479,6 +518,7 @@ impl App<'_> {
             self.machine.mem[flight::Z80_WHAT_ON_SCREEN] == flight::Z80_SCREEN_INFO_PLANET;
         self.close_hdmap();
         self.shop.close();
+        self.close_inventory();
         self.close_status();
         self.flight.close();
         self.close_market();
@@ -503,6 +543,7 @@ impl App<'_> {
         self.sysinfo_from_map = false;
         self.close_hdmap();
         self.shop.close();
+        self.close_inventory();
         self.flight.close();
         self.close_status();
         self.close_market();
@@ -617,8 +658,8 @@ impl App<'_> {
     }
 
     /// Следить за экранными режимами Z80 под нативными экранами без
-    /// собственного интерактива (F7/F8/F9). Когда оригинал уходит с экрана,
-    /// нативная надстройка закрывается; пока режим тот же — остаётся.
+    /// собственного интерактива (Enter, F7/F8/F9). Когда оригинал уходит с
+    /// экрана, нативная надстройка закрывается; пока режим тот же — остаётся.
     pub(super) fn follow_native_screens(&mut self) {
         // Пока эмулятор обрабатывает `L`, его экранная переменная ещё может
         // смениться; закрывать только что открытый нативный экран нельзя.
@@ -653,6 +694,9 @@ impl App<'_> {
             return;
         }
         let screen = self.machine.mem[flight::Z80_WHAT_ON_SCREEN];
+        if self.inventory.is_active() && screen != flight::Z80_SCREEN_INVENTORY {
+            self.close_inventory();
+        }
         if self.status.active
             && !self.pending_status
             && screen != flight::Z80_SCREEN_PILOT_INFO
@@ -678,6 +722,7 @@ impl App<'_> {
     pub(super) fn open_market(&mut self) {
         self.close_hdmap();
         self.shop.close();
+        self.close_inventory();
         self.flight.close();
         self.close_status();
         self.close_sysinfo();
@@ -731,6 +776,7 @@ impl App<'_> {
     fn close_flight_overlays(&mut self) {
         self.close_hdmap();
         self.shop.close();
+        self.close_inventory();
         self.close_status();
         self.close_sysinfo();
         self.close_market();

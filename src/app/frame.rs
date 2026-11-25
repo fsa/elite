@@ -93,6 +93,7 @@ impl App<'_> {
         // в режиме кабины и продолжает симуляцию. В этом случае не закрываем
         // нативный полёт по экрану Z80.
         let info_overlay = self.hdmap.active
+            || self.inventory.is_active()
             || self.status.active
             || self.sysinfo.active
             || self.market.native
@@ -389,6 +390,33 @@ impl App<'_> {
                         self.machine.release_joystick();
                     }
                 }
+                Screen::Inventory => {
+                    if !self.state.menu {
+                        // Из эмулятора экран открывается, только когда оригинал
+                        // уже на своём инвентаре; перед заморозкой станции он
+                        // должен получить `Enter`.
+                        if self.pending_station_native.is_some() {
+                            self.forward_input();
+                        } else {
+                            self.apply_input();
+                        }
+                        if z80_frames > 0 {
+                            self.machine.run_frames(z80_frames);
+                            emulator_ran = true;
+                            self.switch_to_flight_on_transition();
+                            self.follow_native_screens();
+                            if self.machine.save_requested {
+                                self.machine.save_requested = false;
+                                self.open_save_prompt();
+                            }
+                            self.sync_flight_after_frames(z80_frames);
+                            self.play_frame_audio(true);
+                        }
+                    } else {
+                        self.machine.release_all_keys();
+                        self.machine.release_joystick();
+                    }
+                }
                 Screen::PilotStatus | Screen::PlanetInfo | Screen::Market => {
                     if !self.state.menu {
                         self.apply_input();
@@ -580,6 +608,21 @@ impl App<'_> {
                     self.draw_jump_countdown();
                     if self.state.menu && self.save_screen.is_none() {
                         draw_pause_menu(&mut self.machine.hd, ZX_FONT, self.menu_sel, self.machine.intro_seen);
+                    }
+                }
+                Screen::Inventory => {
+                    self.inventory
+                        .open(&self.machine.mem, crate::status::KLADOV_STATUS.pilot);
+                    self.inventory.draw(&mut self.machine.hd, ZX_FONT);
+                    self.draw_danger_half();
+                    self.draw_jump_countdown();
+                    if self.state.menu && self.save_screen.is_none() {
+                        draw_pause_menu(
+                            &mut self.machine.hd,
+                            ZX_FONT,
+                            self.menu_sel,
+                            self.machine.intro_seen,
+                        );
                     }
                 }
                 Screen::PilotStatus => {

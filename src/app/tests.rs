@@ -933,6 +933,131 @@ use crate::world::{
         assert_eq!(app.pending_key, None, "F9 в полёте не должен отдавать L эмулятору");
     }
 
+    /// Enter из нативного режима станции открывает инвентарь: данные берутся
+    /// из блока командира, эмулятор заморожен, клавиша в него не уходит.
+    #[test]
+    fn enter_opens_inventory_on_native_station() {
+        let opts = test_options();
+        let mut m = boot();
+        let (intro, game) = scene_markers();
+        m.intro_range = intro;
+        m.game_marker = game;
+        for _ in 0..30 {
+            m.run_frame();
+        }
+        native::start_game(&mut m, save_layout_kladov());
+        for _ in 0..5000 {
+            m.run_frame();
+            if !m.intro_seen {
+                break;
+            }
+        }
+        assert!(!m.intro_seen, "подготовка: игра не запустилась");
+        let mut app = App::new(m, &opts);
+        assert!(app.station_native, "подготовка: нативная станция не включилась");
+
+        let pilot = crate::status::KLADOV_STATUS.pilot as usize;
+        let cash = commander_cash_tenths(&app.machine.mem, pilot);
+        let fuel = app.machine.mem[pilot + 46];
+        app.key_event(KeyCode::Enter, true, false);
+        assert!(app.inventory.is_active(), "Enter не открыл инвентарь");
+        assert_eq!(app.inventory.cash_tenths(), cash, "деньги не из памяти игры");
+        assert_eq!(app.inventory.fuel(), fuel, "топливо не из памяти игры");
+        app.sync_state();
+        assert_eq!(app.game_state().screen, Screen::Inventory);
+        assert_eq!(app.pending_key, None, "Enter ушёл в замороженный эмулятор");
+        let (row, bit) = matrix_pos(KeyCode::Enter).expect("Enter в матрице");
+        app.apply_input();
+        assert_ne!(app.machine.keyboard[row] & (1 << bit), 0, "Enter дошёл до Z80");
+
+        // Повторное Enter не закрывает экран и не уходит в Z80.
+        app.key_event(KeyCode::Enter, true, false);
+        assert!(app.inventory.is_active(), "повторный Enter закрыл инвентарь");
+        assert_eq!(app.pending_key, None);
+
+        // Экран закрывается только переходом на другую страницу.
+        app.key_event(KeyCode::F6, true, false);
+        assert!(!app.inventory.is_active(), "переход на карту не закрыл инвентарь");
+        assert!(app.hdmap.active, "F6 не открыл карту");
+    }
+
+    /// В полёте Enter показывает инвентарь поверх симуляции: Z80 остаётся в
+    /// кабине, а нативный вид закрывается, пока открыт информационный экран.
+    #[test]
+    fn enter_opens_inventory_in_flight() {
+        let opts = test_options();
+        let mut app = App::new(boot(), &opts);
+        app.machine.intro_seen = false;
+        app.machine.mem[flight::Z80_IND_DANGER] = 1;
+        app.machine.mem[flight::Z80_WHAT_ON_SCREEN] = 0;
+        app.machine.mem[flight::Z80_JUMP_DOCKING] = 0;
+        app.machine.mem[flight::Z80_FLG_JUMP_DOCKING] = 0;
+        app.sync_state();
+
+        app.key_event(KeyCode::F1, true, false);
+        assert!(app.flight.active, "подготовка: нативный полёт не открылся");
+        app.key_event(KeyCode::Enter, true, false);
+        assert!(app.inventory.is_active(), "Enter не открыл инвентарь в полёте");
+        assert!(!app.flight.active, "нативный вид остался под инвентарём");
+        assert_eq!(app.machine.mem[flight::Z80_WHAT_ON_SCREEN], 0, "экран Z80 изменён");
+        assert_eq!(app.pending_key, None, "Enter дошёл до эмулятора");
+        app.sync_state();
+        assert_eq!(app.game_state().screen, Screen::Inventory);
+
+        app.key_event(KeyCode::Enter, true, false);
+        assert!(app.inventory.is_active(), "повторный Enter закрыл инвентарь");
+        assert_eq!(app.pending_key, None);
+
+        // Переход на другую страницу закрывает инвентарь и в полёте.
+        app.key_event(KeyCode::F6, true, false);
+        assert!(!app.inventory.is_active(), "переход на карту не закрыл инвентарь");
+        assert!(app.hdmap.active, "F6 не открыл карту");
+    }
+
+    /// На экране эмулятора инвентарь открывается по тому же правилу, что и
+    /// другие оригинальные экраны: первое нажатие уходит в игру, повторное
+    /// поднимает нативный экран. Следующие нажатия Enter надстройку не снимают.
+    #[test]
+    fn enter_repeats_inventory_handoff_from_emulator() {
+        let opts = test_options();
+        let mut app = App::new(boot(), &opts);
+        app.machine.intro_seen = false;
+        app.machine.mem[flight::Z80_IND_DANGER] = 0;
+        app.machine.mem[flight::Z80_WHAT_ON_SCREEN] = 0;
+        app.sync_state();
+        app.handoff_to_emulator();
+        assert!(app.station_emulator, "подготовка: эмулятор не включён");
+        let (row, bit) = matrix_pos(KeyCode::Enter).expect("Enter в матрице");
+
+        app.key_event(KeyCode::Enter, true, false);
+        assert!(!app.inventory.is_active(), "Enter сразу открыл нативный экран");
+        app.apply_input();
+        assert_eq!(app.machine.keyboard[row] & (1 << bit), 0, "Enter не дошёл до Z80");
+        app.key_event(KeyCode::Enter, false, false);
+
+        app.machine.mem[flight::Z80_WHAT_ON_SCREEN] = flight::Z80_SCREEN_INVENTORY;
+        app.sync_state();
+        app.key_event(KeyCode::Enter, true, false);
+        assert!(app.inventory.is_active(), "повторный Enter не открыл инвентарь");
+        assert!(app.pending_station_native.is_some(), "станция не замораживается");
+        app.apply_input();
+        assert_ne!(
+            app.machine.keyboard[row] & (1 << bit),
+            0,
+            "Enter ушёл в игру при открытии нативного экрана"
+        );
+        app.key_event(KeyCode::Enter, false, false);
+
+        app.key_event(KeyCode::Enter, true, false);
+        assert!(app.inventory.is_active(), "Enter снял нативный экран");
+        app.apply_input();
+        assert_ne!(
+            app.machine.keyboard[row] & (1 << bit),
+            0,
+            "Enter ушёл в игру поверх нативного экрана"
+        );
+    }
+
     /// F1 включает нативный экран полёта и одновременно отдаёт игре клавишу 1.
     /// F1-4 под полётом — это клавиши 1-4 оригинала (виды), а `1` возвращает
     /// ZX-кадр; Esc открывает меню паузы.

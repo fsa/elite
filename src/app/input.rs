@@ -129,9 +129,10 @@ impl App<'_> {
     /// которые теперь открывают нативные экраны. Возвращает `true`, если
     /// клавиша обработана и её нельзя передавать дальше.
     ///
-    /// `G`/`H` показывают нативный экран `DOCKED`, `Backquote` — единственный
-    /// выход в эмулятор без игровой клавиши. Цифры `1`–`3` в модальном окне
-    /// крепления лазера остаются управлением самого экрана закупки.
+    /// `G`/`H` показывают нативный экран `DOCKED`, `Enter` открывает инвентарь,
+    /// `Backquote` — единственный выход в эмулятор без игровой клавиши. Цифры
+    /// `1`–`3` в модальном окне крепления лазера остаются управлением самого
+    /// экрана закупки.
     fn station_native_command(&mut self, code: KeyCode) -> bool {
         if self.shop.mount_open()
             && matches!(code, KeyCode::Digit1 | KeyCode::Digit2 | KeyCode::Digit3)
@@ -166,6 +167,11 @@ impl App<'_> {
             KeyCode::KeyL => {
                 if !self.status.active {
                     self.open_status();
+                }
+            }
+            KeyCode::Enter if !self.hdmap.active && !self.shop.active => {
+                if !self.inventory.is_active() {
+                    self.open_inventory();
                 }
             }
             KeyCode::ControlLeft => {
@@ -212,6 +218,13 @@ impl App<'_> {
                     self.open_status();
                 }
             }
+            // Под картой Enter подтверждает ближайшую планету, а на закупке —
+            // покупку: эти экраны обрабатывают его сами ниже.
+            KeyCode::Enter if !self.hdmap.active && !self.shop.active => {
+                if !self.inventory.is_active() {
+                    self.open_inventory();
+                }
+            }
             _ => return false,
         }
         self.release_pressed(code);
@@ -223,8 +236,9 @@ impl App<'_> {
     ///
     /// Первое нажатие уходит в игру: оригинал сам переходит на свой экран.
     /// Повторное — когда игра уже показывает этот экран — забираем себе и
-    /// открываем нативный экран. Ещё одно нажатие снимает нативную надстройку
-    /// и снова отдаёт клавишу игре, чтобы она сама ушла со своего экрана.
+    /// открываем нативный экран. Ещё одно нажатие снимает надстройку и снова
+    /// отдаёт клавишу игре, чтобы она сама ушла со своего экрана. Исключение —
+    /// инвентарь: `Enter` его не закрывает, только переход на другую страницу.
     /// Fn-клавиши открывают натив сразу и обрабатываются отдельно.
     ///
     /// Возвращает `true`, если клавиша поглощена нативным экраном.
@@ -247,6 +261,11 @@ impl App<'_> {
             KeyCode::KeyK if self.market.native => {
                 self.close_market();
                 return false;
+            }
+            KeyCode::Enter if screen == Some(OriginalScreen::Inventory) => {
+                if !self.inventory.is_active() {
+                    self.open_inventory();
+                }
             }
             KeyCode::KeyL if screen == Some(OriginalScreen::CommanderStatus) => self.open_status(),
             KeyCode::KeyP if screen == Some(OriginalScreen::PlanetInfo) => self.open_planet_info(),
@@ -857,6 +876,41 @@ impl App<'_> {
             && self.flight_info_command(code)
         {
             return;
+        }
+        // Пока открыт инвентарь, посторонние клавиши не должны управлять
+        // замороженной станцией или кораблём под наложением. Переходы на другие
+        // нативные экраны остаются доступными, а Esc работает здесь же.
+        if self.inventory.is_active() && !self.machine.intro_seen {
+            if self.menu {
+                self.menu_key(code);
+                return;
+            }
+            let switch_screen = function_game_key(code).is_some()
+                || matches!(
+                    code,
+                    KeyCode::F5
+                        | KeyCode::F6
+                        | KeyCode::F7
+                        | KeyCode::F8
+                        | KeyCode::F9
+                        | KeyCode::Digit1
+                        | KeyCode::Digit2
+                        | KeyCode::Digit3
+                        | KeyCode::Digit4
+                        | KeyCode::KeyI
+                        | KeyCode::KeyO
+                        | KeyCode::KeyP
+                        | KeyCode::KeyK
+                        | KeyCode::KeyL
+                );
+            if !switch_screen {
+                if code == KeyCode::Escape && !repeat {
+                    self.menu = true;
+                    self.menu_sel = 0;
+                }
+                self.release_pressed(code);
+                return;
+            }
         }
         // F6 открывает нативную карту в галактическом масштабе (`I` открывает
         // то же самое, `O` — детальный фрагмент). Повторное нажатие не закрывает
@@ -1679,6 +1733,7 @@ impl App<'_> {
         in_flight
             && !self.hdmap.active
             && !self.shop.active
+            && !self.inventory.is_active()
             && !self.status.active
             && !self.sysinfo.active
             && !self.market.native

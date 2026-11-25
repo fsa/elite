@@ -23,6 +23,8 @@ pub const Z80_SCREEN_INFO_PLANET: u8 = 9;
 pub const Z80_SCREEN_MARKET: u8 = 0x0A;
 /// `WhatOnScreen` для экрана пилота (`Cmd_L_PilotInfo`, клавиша `L`).
 pub const Z80_SCREEN_PILOT_INFO: u8 = 0x0B;
+/// `WhatOnScreen` для инвентаря (клавиша `Enter`).
+pub const Z80_SCREEN_INVENTORY: u8 = 0x0C;
 /// `InFreeSpace`: `<>0` — корабль вне планетной системы (межпланетное
 /// пространство, в том числе после перехвата таргонами).
 ///

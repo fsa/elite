@@ -138,6 +138,8 @@ pub enum Screen {
     GalacticMap,
     /// Нативный экран закупки оборудования (F5).
     EquipShop,
+    /// Нативный экран инвентаря (Enter), альтернатива экрану `0x0C`.
+    Inventory,
     /// Нативный экран статуса командира (F9), альтернатива экрану `L`.
     PilotStatus,
     /// Нативный экран информации о планете (F7), альтернатива экрану `P`.
@@ -175,6 +177,7 @@ impl Screen {
             Self::Flight => Some(OriginalScreen::FrontView),
             Self::GalacticMap => Some(OriginalScreen::LocalChart),
             Self::EquipShop => Some(OriginalScreen::EquipShip),
+            Self::Inventory => Some(OriginalScreen::Inventory),
             Self::PilotStatus => Some(OriginalScreen::CommanderStatus),
             Self::PlanetInfo => Some(OriginalScreen::PlanetInfo),
             Self::Market => Some(OriginalScreen::MarketPrices),

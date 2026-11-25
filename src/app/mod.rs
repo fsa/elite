@@ -26,6 +26,7 @@ use crate::docked;
 use crate::equip;
 use crate::flight;
 use crate::hdmap;
+use crate::inventory;
 use crate::machine::Spectrum;
 use crate::market;
 use crate::sfx;
@@ -136,6 +137,8 @@ struct App<'a> {
     /// настенным часам, а не по кадрам Z80: в паузе эмулятор стоит, а фаза
     /// должна продолжать мигать, и её частота не должна зависеть от FPS.
     visual_phase_start: Instant,
+    /// Нативный экран инвентаря (Enter) — альтернатива экрану `0x0C`.
+    inventory: inventory::Inventory,
     /// Нативный экран статуса пилота (F9) — альтернатива экрану `L`.
     status: status::Status,
     /// После кадра эмулятора открыть нативный экран статуса: сначала игра
@@ -308,6 +311,7 @@ impl<'a> App<'a> {
             radar_view,
             compass_view: cockpit::CompassView::Pointer,
             visual_phase_start: Instant::now(),
+            inventory: inventory::Inventory::new(),
             status: status::Status::new(),
             pending_status: false,
             start_requested: false,
@@ -474,6 +478,7 @@ impl<'a> App<'a> {
         // Показывается ли нативная альтернатива экранов эмулятора (те же
         // режимы Z80, но отрисованные нативно). Это зеркалирует условия,
         // по которым кадр выбирает, что рисовать.
+        let show_inventory = self.inventory.is_active() && !intro;
         let show_status = self.status.active && !intro;
         let show_sysinfo = self.sysinfo.active && !intro;
         let show_market = self.market.native && !intro;
@@ -484,6 +489,8 @@ impl<'a> App<'a> {
             Screen::GalacticMap
         } else if self.shop.active {
             Screen::EquipShop
+        } else if show_inventory {
+            Screen::Inventory
         } else if show_status {
             Screen::PilotStatus
         } else if show_sysinfo {
