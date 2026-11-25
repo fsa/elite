@@ -2,7 +2,7 @@
 //!
 //! Модель из таблицы `AdrDataShips` версии Кладова.
 
-use super::{Edge, Face, Ship, Stats, Vertex};
+use super::{Edge, Face, FaceStyle, Ship, Stats, Vertex};
 
 pub(super) static SHIP_D_VIPER: Ship = Ship {
     name: "d_Viper",
@@ -48,12 +48,14 @@ pub(super) static SHIP_D_VIPER: Ship = Ship {
         Edge { lod: 0x1e, v: [6, 5], faces: 0x50 },
         Edge { lod: 0x1e, v: [6, 4], faces: 0x30 },
         Edge { lod: 0x1e, v: [5, 3], faces: 0x40 },
-        Edge { lod: 0x13, v: [12, 9], faces: 0x0 },
-        Edge { lod: 0x13, v: [13, 9], faces: 0x0 },
-        Edge { lod: 0x13, v: [11, 10], faces: 0x0 },
-        Edge { lod: 0x13, v: [14, 10], faces: 0x0 },
-        Edge { lod: 0x10, v: [14, 11], faces: 0x0 },
-        Edge { lod: 0x10, v: [13, 12], faces: 0x0 },
+        // Модификация модели: треугольники двигателей в основании входят
+        // и в заднюю грань 0, и в отдельные грани 7/8 со свечением.
+        Edge { lod: 0x13, v: [12, 9], faces: 0x70 },
+        Edge { lod: 0x13, v: [13, 9], faces: 0x70 },
+        Edge { lod: 0x13, v: [11, 10], faces: 0x80 },
+        Edge { lod: 0x13, v: [14, 10], faces: 0x80 },
+        Edge { lod: 0x10, v: [14, 11], faces: 0x80 },
+        Edge { lod: 0x10, v: [13, 12], faces: 0x70 },
     ],
     faces: &[
         Face { nx: 0, ny: 0, nz: -48, flags: 0x3f },
@@ -63,6 +65,9 @@ pub(super) static SHIP_D_VIPER: Ship = Ship {
         Face { nx: 22, ny: -33, nz: 11, flags: 0x5e },
         Face { nx: 0, ny: -32, nz: 0, flags: 0x5f },
         Face { nx: 0, ny: 32, nz: 0, flags: 0x1e },
+        // Модификация модели: треугольники двигателей в основании.
+        Face { nx: 0, ny: 0, nz: -48, flags: 0x3f },
+        Face { nx: 0, ny: 0, nz: -48, flags: 0x3f },
     ],
-    face_styles: &[],
+    face_styles: &[(7, FaceStyle::EngineGlow), (8, FaceStyle::EngineGlow)],
 };

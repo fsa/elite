@@ -78,6 +78,45 @@ fn ship_debris_is_filled_with_hull_color() {
     }
 }
 
+/// Два треугольника в основании Viper — двигатели: они заливаются сиянием,
+/// а не цветом корпуса. Вид сзади задан единичным поворотом: нормаль `-Z`
+/// обращена к камере, объект стоит на `+Z`.
+#[test]
+fn viper_base_triangles_are_engines() {
+    let ship = shipdata::find("d_Viper").expect("модель Viper не найдена");
+    assert_eq!(ship.face_style(7), FaceStyle::EngineGlow);
+    assert_eq!(ship.face_style(8), FaceStyle::EngineGlow);
+
+    let mut f = Frame::new(400, 400);
+    f.clear(0xFFFF_0000); // контрастный фон: непрозрачность заливки видна сразу
+    let screen = Screen {
+        cx: 200.0,
+        cy: 200.0,
+        k: 1000.0,
+        bx: 0.0,
+        by: 0.0,
+    };
+    draw_ship_tinted(
+        &mut f,
+        ship,
+        &Rotation::identity(),
+        [0.0, 0.0, 512.0],
+        &screen,
+        SHIP_COLOR,
+        None,
+    );
+
+    // Цвет сияния пульсирует, но всегда остаётся сине-голубым; корпус и фон
+    // таким не станут. Точки лежат внутри левого и правого треугольников.
+    let is_glow = |x: usize, y: usize| {
+        let c = f.pixels()[y * 400 + x];
+        let (r, g, b) = ((c >> 16) & 0xFF, (c >> 8) & 0xFF, c & 0xFF);
+        (c >> 24) == 0xFF && b > g + 10 && g > r + 10 && b > 50
+    };
+    assert!(is_glow(166, 200), "левый двигатель не светится");
+    assert!(is_glow(234, 200), "правый двигатель не светится");
+}
+
 /// Оперение ракеты — отдельные грани, а не прозрачные рёбра чужих граней.
 /// Два противоположных пера лежат в одной плоскости, поэтому проверяем
 /// заливку с обеих сторон этой плоскости.
