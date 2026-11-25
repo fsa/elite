@@ -2,7 +2,7 @@
 //!
 //! Модель из таблицы `AdrDataShips` версии Кладова.
 
-use super::{Edge, Face, Ship, Stats, Vertex};
+use super::{Edge, Face, FaceStyle, Ship, Stats, Vertex};
 
 pub(super) static SHIP_DSIDEWINDERH: Ship = Ship {
     name: "dSidewinderH",
@@ -40,10 +40,12 @@ pub(super) static SHIP_DSIDEWINDERH: Ship = Ship {
         Edge { lod: 0x1f, v: [5, 2], faces: 0x30 },
         Edge { lod: 0x1f, v: [4, 3], faces: 0x10 },
         Edge { lod: 0x1f, v: [5, 3], faces: 0x40 },
-        Edge { lod: 0xf, v: [7, 6], faces: 0x0 },
-        Edge { lod: 0xb, v: [9, 6], faces: 0x0 },
-        Edge { lod: 0xb, v: [8, 7], faces: 0x0 },
-        Edge { lod: 0xb, v: [9, 8], faces: 0x0 },
+        // Модификация модели: прямоугольник двигателя в основании входит
+        // и в заднюю грань 0, и в отдельную грань 7 со свечением.
+        Edge { lod: 0xf, v: [7, 6], faces: 0x70 },
+        Edge { lod: 0xb, v: [9, 6], faces: 0x70 },
+        Edge { lod: 0xb, v: [8, 7], faces: 0x70 },
+        Edge { lod: 0xb, v: [9, 8], faces: 0x70 },
     ],
     faces: &[
         Face { nx: 0, ny: 0, nz: -112, flags: 0x3f },
@@ -53,6 +55,8 @@ pub(super) static SHIP_DSIDEWINDERH: Ship = Ship {
         Face { nx: -12, ny: -47, nz: 6, flags: 0xde },
         Face { nx: 0, ny: -32, nz: 8, flags: 0x5f },
         Face { nx: 0, ny: 32, nz: 8, flags: 0x1e },
+        // Модификация модели: прямоугольник двигателя в основании.
+        Face { nx: 0, ny: 0, nz: -112, flags: 0x3f },
     ],
-    face_styles: &[],
+    face_styles: &[(7, FaceStyle::EngineGlow)],
 };

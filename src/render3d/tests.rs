@@ -117,6 +117,46 @@ fn viper_base_triangles_are_engines() {
     assert!(is_glow(234, 200), "правый двигатель не светится");
 }
 
+/// Прямоугольник в основании Sidewinder — двигатель: он заливается сиянием,
+/// а задняя грань вокруг него остаётся обычным корпусом. Контур выреза
+/// сохраняется: рёбра принадлежат и задней грани, и грани двигателя.
+#[test]
+fn sidewinder_base_rectangle_is_engine() {
+    let ship = shipdata::find("dSidewinderH").expect("модель Sidewinder не найдена");
+    assert_eq!(ship.face_style(7), FaceStyle::EngineGlow);
+
+    let mut f = Frame::new(400, 400);
+    f.clear(0xFFFF_0000);
+    let screen = Screen {
+        cx: 200.0,
+        cy: 200.0,
+        k: 1000.0,
+        bx: 0.0,
+        by: 0.0,
+    };
+    draw_ship_tinted(
+        &mut f,
+        ship,
+        &Rotation::identity(),
+        [0.0, 0.0, 512.0],
+        &screen,
+        SHIP_COLOR,
+        None,
+    );
+
+    let c = f.pixels()[200 * 400 + 200];
+    let (r, g, b) = ((c >> 16) & 0xFF, (c >> 8) & 0xFF, c & 0xFF);
+    assert!(
+        (c >> 24) == 0xFF && b > g + 10 && g > r + 10 && b > 50,
+        "двигатель не светится: {c:08X}"
+    );
+    assert_eq!(
+        f.pixels()[175 * 400 + 200],
+        SHIP_FACE_COLOR,
+        "задняя грань вокруг двигателя должна остаться корпусом"
+    );
+}
+
 /// Оперение ракеты — отдельные грани, а не прозрачные рёбра чужих граней.
 /// Два противоположных пера лежат в одной плоскости, поэтому проверяем
 /// заливку с обеих сторон этой плоскости.
