@@ -46,11 +46,78 @@ fn prune_spurs(edges: &mut Vec<(usize, usize)>) {
 }
 
 fn engine_glow_color(phase: f32) -> u32 {
-    // Пульсация яркости: мягкое мерцание, не «мигание».
-    let pulse = 0.72 + 0.28 * phase.sin();
+    // Пульсация яркости: быстрое, но плавное мерцание, не «мигание».
+    let pulse = 0.60 + 0.25 * phase.sin();
     let (r, g, b) = super::ENGINE_GLOW_BASE;
     let ch = |v: f32| ((v * pulse).clamp(0.0, 1.0) * 255.0) as u32;
     0xFF00_0000 | (ch(r) << 16) | (ch(g) << 8) | ch(b)
+}
+
+/// Маленькая, но яркая сердцевина сопла. Мерцает быстрее грани и не гаснет
+/// полностью: тёмная грань остаётся фоном, а «работа» двигателя видна по ядру.
+pub(super) fn engine_core_color(phase: f32) -> u32 {
+    let pulse = 0.75 + 0.20 * (phase * 1.7).sin();
+    let (r, g, b) = super::ENGINE_CORE_BASE;
+    let ch = |v: f32| ((v * pulse).clamp(0.0, 1.0) * 255.0) as u32;
+    0xFF00_0000 | (ch(r) << 16) | (ch(g) << 8) | ch(b)
+}
+
+/// Какая доля поперечника грани приходится на горячую сердцевину.
+const CORE_RADIUS_RATIO: f32 = 0.20;
+
+/// Залить маленький ромб в центре грани двигателя.
+///
+/// Сердцевина рисуется сразу после своей грани: более близкие поверхности
+/// всё равно перекроют её при общей сортировке граней от дальней к ближней.
+fn fill_engine_core(
+    frame: &mut Frame,
+    shape: &FaceShape,
+    scr: &[(f32, f32, f32)],
+    glow_phase: f32,
+) {
+    let mut vs: Vec<usize> = shape.edges.iter().flat_map(|&(a, b)| [a, b]).collect();
+    vs.sort_unstable();
+    vs.dedup();
+    // Сердцевина имеет смысл только для простого замкнутого контура.
+    if !(3..=6).contains(&vs.len())
+        || !vs.iter().all(|&v| {
+            shape
+                .edges
+                .iter()
+                .filter(|&&(a, b)| a == v || b == v)
+                .count()
+                == 2
+        })
+    {
+        return;
+    }
+    let (mut sx, mut sy) = (0.0f32, 0.0f32);
+    for &i in &vs {
+        sx += scr[i].0;
+        sy += scr[i].1;
+    }
+    let cx = sx / vs.len() as f32;
+    let cy = sy / vs.len() as f32;
+    let span = (shape.x1 - shape.x0).min(shape.y1 - shape.y0);
+    let r = (span * CORE_RADIUS_RATIO).max(0.75);
+    let color = engine_core_color(glow_phase);
+    let w = frame.width as i32;
+    let h = frame.height as i32;
+    let y_lo = ((cy - r - 0.5).ceil() as i32).max(0);
+    let y_hi = ((cy + r - 0.5).ceil() as i32 - 1).min(h - 1);
+    for y in y_lo..=y_hi {
+        let yc = y as f32 + 0.5;
+        let dy = (yc - cy).abs();
+        if dy > r {
+            continue;
+        }
+        let half = r - dy;
+        let x_lo = ((cx - half - 0.5).ceil() as i32).max(0);
+        let x_hi = ((cx + half - 0.5).ceil() as i32 - 1).min(w - 1);
+        if x_lo <= x_hi {
+            frame.hline(x_lo, y, (x_hi - x_lo + 1) as usize, color);
+        }
+    }
 }
 
 /// Убрать внутренние диагонали, разбивающие грань на подтреугольники.
@@ -181,7 +248,8 @@ pub(super) fn face_color(style: FaceStyle, tint: Option<ShipTint>, glow_phase: f
 /// Каждый контур заполняется построчно по правилу «чёт-нечёт»: это корректно
 /// и для нескольких петель (вырезы двигателей), и для невыпуклых граней.
 /// Грани идут от дальней к ближней: у выделенных поверхностей свой цвет, и
-/// они должны перекрывать корпус, оказавшийся позади них на экране.
+/// они должны перекрывать корпус, оказавшийся позади них на экране. У грани
+/// двигателя поверх основной заливки рисуется маленькая яркая сердцевина.
 /// `glow_phase` — фаза [0, 2π) для пульсации [`FaceStyle::EngineGlow`],
 /// `tint` — оттенок корабля или `None` для нейтрального металла.
 pub(super) fn fill_faces(
@@ -235,6 +303,9 @@ pub(super) fn fill_faces(
                     frame.hline(x_lo, y, (x_hi - x_lo + 1) as usize, color);
                 }
             }
+        }
+        if shape.style == FaceStyle::EngineGlow {
+            fill_engine_core(frame, shape, scr, glow_phase);
         }
     }
 }

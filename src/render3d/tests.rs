@@ -3,7 +3,7 @@
 use crate::display::Frame;
 use crate::shipdata::{self, Edge, Face, FaceStyle, Ship, Vertex};
 
-use super::faces::face_color;
+use super::faces::{engine_core_color, face_color};
 use super::{
     FLAME_COLOR, Rotation, SHIP_COLOR, SHIP_FACE_COLOR, SHIP_TINT_COUNT, Screen, ShipTint,
     draw_ship_tinted,
@@ -155,6 +155,50 @@ fn sidewinder_base_rectangle_is_engine() {
         SHIP_FACE_COLOR,
         "задняя грань вокруг двигателя должна остаться корпусом"
     );
+}
+
+/// Двигатель — тёмная грань с маленькой яркой сердцевиной, а не однотонное
+/// светящееся пятно. Ядро всегда ярче грани, поэтому читается как работа
+/// сопла даже на тёмном фоне.
+#[test]
+fn engine_glow_has_small_bright_core() {
+    let base = face_color(FaceStyle::EngineGlow, None, 0.0);
+    let core = engine_core_color(0.0);
+    let blue = |c: u32| c & 0xFF;
+    assert!(
+        blue(core) > blue(base) + 80,
+        "сердцевина должна быть заметно ярче грани: {core:08X} vs {base:08X}"
+    );
+
+    let ship = shipdata::find("d_Viper").expect("модель Viper не найдена");
+    let mut f = Frame::new(400, 400);
+    f.clear(0xFFFF_0000);
+    let screen = Screen {
+        cx: 200.0,
+        cy: 200.0,
+        k: 1000.0,
+        bx: 0.0,
+        by: 0.0,
+    };
+    draw_ship_tinted(
+        &mut f,
+        ship,
+        &Rotation::identity(),
+        [0.0, 0.0, 512.0],
+        &screen,
+        SHIP_COLOR,
+        None,
+    );
+    let is_core = |c: u32| {
+        let (r, g, b) = ((c >> 16) & 0xFF, (c >> 8) & 0xFF, c & 0xFF);
+        // грань даёт не больше 108 в синем канале, ядро — не меньше 140;
+        // белые рёбра тоже яркие, но у них все каналы равны
+        b > 130 && b > g + 10 && g > r + 10
+    };
+    let bright = (180..=220).any(|y| {
+        (140..=260).any(|x| is_core(f.pixels()[y * 400 + x]))
+    });
+    assert!(bright, "яркая сердцевина двигателя не отрисовалась");
 }
 
 /// Оперение ракеты — отдельные грани, а не прозрачные рёбра чужих граней.
