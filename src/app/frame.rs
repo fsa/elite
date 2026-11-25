@@ -627,7 +627,8 @@ impl App<'_> {
                 }
                 Screen::PilotStatus => {
                     self.status.open(&self.machine.mem, crate::status::KLADOV_STATUS);
-                    self.status.draw(&mut self.machine.hd, ZX_FONT);
+                    self.status
+                        .draw(&mut self.machine.hd, ZX_FONT, &self.state.missions);
                     self.draw_danger_half();
                     self.draw_jump_countdown();
                     if self.state.menu && self.save_screen.is_none() {

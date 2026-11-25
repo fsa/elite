@@ -48,7 +48,13 @@ pub(super) fn layout(w: u32, h: u32) -> Layout {
 }
 
 /// Нарисовать экран во весь слой.
-pub(super) fn draw(status: &Status, info: &Info, f: &mut Frame, font: &[u8]) {
+pub(super) fn draw(
+    status: &Status,
+    info: &Info,
+    missions: &MissionInfo,
+    f: &mut Frame,
+    font: &[u8],
+) {
     let l = layout(f.width as u32, f.height as u32);
     let ts = l.text;
     f.clear(BG);
@@ -82,6 +88,13 @@ pub(super) fn draw(status: &Status, info: &Info, f: &mut Frame, font: &[u8]) {
     row(f, y, "Legal Status", status.legal_text());
     y += row_h;
     row(f, y, "Rating", status.rating_text());
+
+    // Состояние миссий — продолжение снимка, пришедшего из `GameState`.
+    y += row_h;
+    for (label, value) in status.mission_rows(missions) {
+        row(f, y, label, &value);
+        y += row_h;
+    }
 
     // Блок оборудования: пустая строка, белый заголовок и белый список —
     // как в `Cmd_L_PilotInfo` (сразу после рейтинга).

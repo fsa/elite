@@ -2,7 +2,8 @@
 //!
 //! Оформление — просто белая рамка вокруг всего экрана. Данные читаются из
 //! живого блока командира (`PilotName`); экран ничего не меняет и служит
-//! только для просмотра.
+//! только для просмотра. Строки миссий приходят через [`MissionInfo`] из
+//! централизованного состояния, а не из памяти эмулятора.
 //!
 //! Показываются поля оригинала (`Cmd_L_PilotInfo` в версии Кладова):
 //! имя командира, текущая и целевая системы гиперпрыжка, деньги, топливо,
@@ -10,10 +11,12 @@
 //! дальше — беглец), боевой рейтинг (индекс названия из `PilotRating1` или
 //! `PilotRating2`, как в `Cmd_L_PilotInfo`; см. [`crate::rating`]) и
 //! установленное оборудование — в том же порядке, что печатает оригинал.
+//! После рейтинга добавлены строки состояния миссий.
 
 use crate::display::Frame;
 use crate::galaxy::{self, GalaxyLayout};
 use crate::rating;
+use crate::state::MissionInfo;
 
 mod draw;
 #[cfg(test)]
@@ -154,9 +157,56 @@ impl Status {
         self.active = false;
     }
 
-    /// Нарисовать экран во весь слой.
-    pub fn draw(&self, f: &mut Frame, font: &[u8]) {
-        draw::draw(self, &self.info, f, font);
+    /// Нарисовать экран во весь слой. Миссии приходят из снимка состояния.
+    pub fn draw(&self, f: &mut Frame, font: &[u8], missions: &MissionInfo) {
+        draw::draw(self, &self.info, missions, f, font);
+    }
+
+    /// Строки миссий под рейтингом. Значения — только чтение полей снимка:
+    /// бит 5 `PilotExtWeapon` означает пассажиров в трюме, бит 0 — выданную
+    /// первую миссию, бит 3 — завершённую третью.
+    fn mission_rows(&self, m: &MissionInfo) -> [(&'static str, String); 2] {
+        let first = if m.ext_weapon & 0x20 != 0 {
+            "passengers aboard"
+        } else if m.mission1 != 0 || m.mission1_in_flight != 0 {
+            "awaiting delivery"
+        } else if m.ext_weapon & 1 != 0 {
+            "completed"
+        } else {
+            "none"
+        };
+        let second = match m.mission2 {
+            0 => "none",
+            1 => "active",
+            2 => "escaping",
+            3 => "destroyed",
+            _ => "unknown",
+        };
+        let third = if m.ext_weapon & 0x08 != 0 {
+            "completed"
+        } else {
+            match m.mission3 {
+                0 => "none",
+                1 => "offered",
+                3 => "active",
+                4 => "war zone",
+                _ => "unknown",
+            }
+        };
+        let war = if m.targon_war & 0x80 != 0 {
+            format!("active, rank {}", (m.rating2 >> 1) & 7)
+        } else if m.targon_war == 0x01 {
+            "ended".to_string()
+        } else {
+            "none".to_string()
+        };
+        [
+            (
+                "Missions",
+                format!("1: {first}; 2: {second}; 3: {third}"),
+            ),
+            ("Thargon War", war),
+        ]
     }
 
     /// Строка денег для экрана (`100.0 Cr`).

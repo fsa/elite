@@ -102,14 +102,14 @@ fn equipment_block_is_white_after_blank_line() {
     status.open(&mem, KLADOV_STATUS);
     let font = vec![0xFFu8; 0x300];
     let mut f = Frame::new(1024, 768);
-    status.draw(&mut f, &font);
+    status.draw(&mut f, &font, &MissionInfo::default());
 
     let l = draw::layout(1024, 768);
     let x = l.margin + l.frame + 8 * l.text as i32;
     let row_h = l.line + l.line / 2;
-    let blank_y = l.first_row_y + 6 * row_h;
-    let heading_y = l.first_row_y + 7 * row_h;
-    let item_y = l.first_row_y + 8 * row_h;
+    let blank_y = l.first_row_y + 9 * row_h;
+    let heading_y = l.first_row_y + 10 * row_h;
+    let item_y = l.first_row_y + 11 * row_h;
     let width = f.width as usize;
     let px = |x: i32, y: i32| f.pixels()[y as usize * width + x as usize];
     // Строка между рейтингом и заголовком пустая.
@@ -214,11 +214,11 @@ fn frame_matches_cockpit_geometry() {
         assert_eq!(l.margin, main.x, "{w}x{h}: левая рамка кокпита");
         assert_eq!(l.margin, main.y, "{w}x{h}: верхняя рамка кокпита");
         assert_eq!(main.w, w as i32 - 2 * l.margin, "{w}x{h}: ширина рамки");
-        // Шесть полей, пустая строка, заголовок и 12 строк оборудования
-        // не заходят за нижнюю рамку.
+        // Шесть полей, две строки миссий, пустая строка, заголовок и 12 строк
+        // оборудования не заходят за нижнюю рамку.
         let row_h = l.line + l.line / 2;
         assert!(
-            l.first_row_y + 19 * row_h + l.line < h as i32 - l.margin - l.frame,
+            l.first_row_y + 21 * row_h + l.line < h as i32 - l.margin - l.frame,
             "{w}x{h}: содержимое выходит за рамку"
         );
     }
@@ -231,7 +231,7 @@ fn draw_fills_layer_and_centers_title() {
     let status = opened();
     let font = vec![0xFFu8; 0x300];
     let mut f = Frame::new(1024, 768);
-    status.draw(&mut f, &font);
+    status.draw(&mut f, &font, &MissionInfo::default());
     assert!(f.pixels().iter().all(|&p| p != 0), "layer not opaque");
 
     let l = draw::layout(1024, 768);
@@ -262,9 +262,48 @@ fn draw_fills_layer_and_centers_title() {
     assert!(lit > 500, "текста слишком мало: {lit}");
     if let Ok(path) = std::env::var("ELITE_DUMP_STATUS") {
         let mut g = Frame::new(1024, 768);
-        status.draw(&mut g, crate::font::ZX_FONT);
+        status.draw(&mut g, crate::font::ZX_FONT, &MissionInfo::default());
         crate::headless::write_ppm(&path, g.pixels(), 1024, 768);
     }
+}
+
+/// Строки миссий — только чтение полей снимка: пассажиры, ASP, Jammer и ранг.
+#[test]
+fn mission_rows_show_active_states() {
+    let status = opened();
+    let m = MissionInfo {
+        mission1_in_flight: 1,
+        mission2: 1,
+        mission3: 3,
+        ext_weapon: 0x20,
+        mineral_life: 3,
+        targon_war: 0x82,
+        rating2: 0x87,
+        war_progress: 0x10,
+        cargo_found: 0xF082,
+        ..Default::default()
+    };
+    let rows = status.mission_rows(&m);
+    assert_eq!(rows[0].1, "1: passengers aboard; 2: active; 3: active");
+    assert_eq!(rows[1].1, "active, rank 3");
+}
+
+/// Завершённые миссии и конец войны распознаются по битам и значениям полей.
+#[test]
+fn mission_rows_show_completed_states() {
+    let status = opened();
+    let m = MissionInfo {
+        mission2: 3,
+        ext_weapon: 0x09,
+        targon_war: 0x01,
+        ..Default::default()
+    };
+    let rows = status.mission_rows(&m);
+    assert_eq!(rows[0].1, "1: completed; 2: destroyed; 3: completed");
+    assert_eq!(rows[1].1, "ended");
+    let empty = status.mission_rows(&MissionInfo::default());
+    assert_eq!(empty[0].1, "1: none; 2: none; 3: none");
+    assert_eq!(empty[1].1, "none");
 }
 
 /// Закрытый экран не мешает игре: `close` только снимает флаг.

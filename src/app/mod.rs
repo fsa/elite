@@ -518,6 +518,9 @@ impl<'a> App<'a> {
             emu_screen,
             system: world::current_system_name(&self.machine.mem),
             planet: world::selected_planet_name(&self.machine.mem),
+            // Миссии читаются из снимка в конце прохода `GameMain`, а не из
+            // живой памяти в середине кадра: нативный слой не привязан к Z80.
+            missions: crate::state::MissionInfo::from_memory(self.machine.game_state()),
         };
         // Нативный радар — только зеркало включённого в эмуляторе режима.
         self.radar_view = flight::z80_radar_view(&self.machine.mem);
