@@ -2048,6 +2048,53 @@ fn transitions_draw_their_animations() {
 }
 
 #[test]
+fn transitions_keep_front_view_label() {
+    let mut f = open();
+    let geom = cockpit::panel_geometry(640, 480);
+    let font = vec![0xFFu8; 0x300];
+    let view = geom.view();
+    let scale = (view.w.max(0) as usize / 256)
+        .min(view.h.max(0) as usize / 128)
+        .max(1) as i32;
+    let top_end = view.y + 24 * scale;
+
+    let label_pixels = |frame: &Frame| {
+        let mut n = 0;
+        for y in view.y..top_end {
+            for x in view.x..view.x + view.w {
+                if frame.pixels()[y as usize * frame.width + x as usize] == VIEW_LABEL_COLOR {
+                    n += 1;
+                }
+            }
+        }
+        n
+    };
+
+    // И вылет, и стыковка, и обе фазы гиперпрыжка должны держать ту же
+    // подпись Front View, что и обычный экран F1.
+    for (kind, warp) in [
+        (TransitionKind::Launch, false),
+        (TransitionKind::Docking, false),
+        (TransitionKind::Hyperspace, false),
+        (TransitionKind::Hyperspace, true),
+    ] {
+        let mut t = Transition::new(kind, 0);
+        t.warp = warp;
+        t.warp_elapsed = 0.2;
+        t.elapsed = 0.2;
+        f.transition.current = Some(t);
+        f.view_dir = ViewDir::Forward;
+
+        let mut frame = Frame::new(640, 480);
+        f.draw(&mut frame, &geom, &font);
+        assert!(
+            label_pixels(&frame) > 0,
+            "{kind:?} (warp={warp}): подпись Front View не нарисована"
+        );
+    }
+}
+
+#[test]
 fn hyperspace_countdown_keeps_normal_flight_until_zero() {
     let mut f = open();
     let mut mem = vec![0u8; Z80_JUMP_COUNTDOWN + 1];

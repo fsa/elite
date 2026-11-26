@@ -63,6 +63,9 @@ pub(super) fn draw(f: &mut Flight, frame: &mut Frame, geom: &CockpitGeom, font: 
     match current {
         Some(t) if t.kind == super::TransitionKind::Launch => {
             transition::draw_station(frame, vx, vy, vw, vh, s, t.elapsed, true, f.planet_color);
+            // Ролик рисует только трубу: подпись Front View уходит вместе с
+            // обычной сценой, поэтому её нужно нарисовать поверх анимации.
+            draw_view_label(f, frame, font, vx, vy, vw, s);
         }
         Some(t) if t.kind == super::TransitionKind::Hyperspace => {
             // Во время прыжка игра рисует обычное пространство, а тоннель
@@ -88,6 +91,9 @@ pub(super) fn draw(f: &mut Flight, frame: &mut Frame, geom: &CockpitGeom, font: 
                     &view_rot,
                     f.stars.streak(),
                 );
+                // Тоннель закрашивает верх строки обычного вида, поэтому
+                // подпись рисуется последней, как на экране F1.
+                draw_view_label(f, frame, font, vx, vy, vw, s);
             } else {
                 // Во время отсчёта верхнюю надпись рисуем сами (подпись вида):
                 // перехваченные игра печатает в поле зрения цифры, их здесь не
@@ -110,6 +116,7 @@ pub(super) fn draw(f: &mut Flight, frame: &mut Frame, geom: &CockpitGeom, font: 
                 false,
                 f.planet_color,
             );
+            draw_view_label(f, frame, font, vx, vy, vw, s);
         }
         Some(_) => {
             // Остальные переходы (на данный момент их нет) — обычный вид.
