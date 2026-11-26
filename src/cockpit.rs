@@ -74,11 +74,11 @@ pub use self::geometry::{BAR_WIDTH_FRAC, LABEL_WIDTH_PER_ROW_PCT};
 #[cfg(test)]
 pub use self::labels::{LEFT_LABELS, RIGHT_LABELS};
 #[cfg(test)]
-pub use self::palette::DANGER_YELLOW;
+pub use self::palette::{DANGER_YELLOW, MISSILE_LOCK_RED, MISSILE_TARGET_GREEN};
 #[cfg(test)]
 pub use self::values::{
-    DEFLECTION_MAX, Danger, GAUGE_MAX, Indicator, MISSILE_ROW, MISSILE_SLOTS, PANEL_ROWS,
-    RadarContact, RadarContactKind,
+    DEFLECTION_MAX, Danger, GAUGE_MAX, Indicator, MISSILE_ROW, MISSILE_SLOTS, MissileMode,
+    PANEL_ROWS, RadarContact, RadarContactKind,
 };
 
 mod compass;

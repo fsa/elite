@@ -16,6 +16,24 @@ pub const MISSILE_ROW: i32 = PANEL_ROWS - 1;
 
 /// Максимум шкалы индикатора (`0xA0` = 100%, как в оригинале).
 pub const GAUGE_MAX: u8 = 0xA0;
+
+/// Состояние наведения ракеты (`Missile1` в Z80).
+///
+/// Клетка справа от запаса ракет повторяет атрибут `0x5AE7` оригинала:
+/// `Missile1 == 0` — наведение выключено (чёрный фон), `1` — наведение включено
+/// клавишей `T`, цель ещё не захвачена (зелёный), `2` — цель в перекрестии
+/// (красный). Оригинал сам переводит состояние из `1` в `2`, когда в прицеле
+/// оказывается объект (`ObjInTarget`), поэтому нативный слой только читает его.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum MissileMode {
+    /// Наведение выключено: клетка чёрная, как остальной фон панели.
+    Idle,
+    /// Клавиша `T` включила поиск цели: клетка зелёная.
+    Targeting,
+    /// Цель в перекрестии: клетка красная.
+    Locked,
+}
+
 /// Максимальное отклонение стрелки влево/вправо (нейтраль — 0).
 pub const DEFLECTION_MAX: i8 = 15;
 
@@ -302,6 +320,8 @@ pub struct CockpitValues {
     pub compass_blink_phase: bool,
     /// Контакты радара в системе координат игрока.
     pub radar: RadarContacts,
+    /// Состояние наведения ракеты: цвет клетки справа от запаса ракет.
+    pub missile_mode: MissileMode,
     /// Станция рядом (`CoriolisNear`): на панели виден символ `S` и доступен
     /// стыковочный компьютер.
     pub station_near: bool,
@@ -378,6 +398,7 @@ impl CockpitValues {
             in_free_space: false,
             compass_blink_phase: true,
             radar: RadarContacts::empty(),
+            missile_mode: MissileMode::Idle,
             station_near: true,
             ecm_on: true,
             blink: true,

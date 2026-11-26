@@ -6,9 +6,10 @@
 use crate::display::Frame;
 
 use super::geometry::{CockpitGeom, LINE, Rect};
-use super::palette::{BACKGROUND, CockpitStyle};
+use super::palette::{BACKGROUND, CockpitStyle, MISSILE_LOCK_RED, MISSILE_TARGET_GREEN};
 use super::values::{
-    CockpitValues, DEFLECTION_MAX, GAUGE_MAX, Indicator, MISSILE_ROW, MISSILE_SLOTS, PANEL_ROWS,
+    CockpitValues, DEFLECTION_MAX, GAUGE_MAX, Indicator, MISSILE_ROW, MISSILE_SLOTS, MissileMode,
+    PANEL_ROWS,
 };
 
 /// Нарисовать значения всех длинных клеток.
@@ -22,7 +23,7 @@ pub(super) fn draw(f: &mut Frame, g: &CockpitGeom, style: CockpitStyle, values: 
                     Indicator::Missiles(n) => n,
                     _ => 0,
                 };
-                draw_missiles(f, g, style, missiles);
+                draw_missiles(f, g, style, missiles, values.missile_mode);
                 continue;
             }
             draw_indicator(f, g, row, right, value, style);
@@ -130,8 +131,15 @@ pub(super) fn missile_icon_rect(cell: Rect, pitch: i32, slot: i32) -> Rect {
 /// направо. Если ракет меньше, правые прямоугольники не рисуются, но фон
 /// остаётся цветным. Прямоугольник чуть шире своей высоты, а по высоте
 /// совпадает с заливкой индикаторов. Справа после разделителя — клетка
-/// режима; пока она всегда чёрная.
-fn draw_missiles(f: &mut Frame, g: &CockpitGeom, style: CockpitStyle, missiles: u8) {
+/// наведения: чёрная при выключенном поиске, зелёная после `T` и красная,
+/// когда цель попала в перекрестие.
+fn draw_missiles(
+    f: &mut Frame,
+    g: &CockpitGeom,
+    style: CockpitStyle,
+    missiles: u8,
+    mode: MissileMode,
+) {
     let left = g.bar_cell(MISSILE_ROW, false);
     if left.is_empty() {
         return;
@@ -156,10 +164,16 @@ fn draw_missiles(f: &mut Frame, g: &CockpitGeom, style: CockpitStyle, missiles: 
     if sep_w > 0 {
         f.fill_rect(sep_x, left.y, sep_w as usize, left.h as usize, style.line);
     }
-    // Клетка режима: по умолчанию чёрная.
+    // Клетка наведения повторяет атрибут `0x5AE7` оригинала: чёрная,
+    // зелёная или красная в зависимости от `Missile1`.
+    let color = match mode {
+        MissileMode::Idle => BACKGROUND,
+        MissileMode::Targeting => MISSILE_TARGET_GREEN,
+        MissileMode::Locked => MISSILE_LOCK_RED,
+    };
     let mode = g.mode_cell(MISSILE_ROW, false);
     if !mode.is_empty() {
-        fill_cell(f, mode, BACKGROUND);
+        fill_cell(f, mode, color);
     }
 }
 

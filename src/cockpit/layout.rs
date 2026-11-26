@@ -6,7 +6,8 @@
 
 use super::values::{
     COMPASS_CIRCLE_MAX_OFFSET, CockpitValues, Compass, CompassCircle, CompassGlyph, DEFLECTION_MAX,
-    Danger, GAUGE_MAX, Indicator, MISSILE_SLOTS, RadarContact, RadarContactKind, RadarContacts,
+    Danger, GAUGE_MAX, Indicator, MISSILE_SLOTS, MissileMode, RadarContact, RadarContactKind,
+    RadarContacts,
 };
 
 /// Размер слота `SlotObj` в памяти Z80.
@@ -49,6 +50,9 @@ pub struct CockpitLayout {
     pub rotate_du: u16,
     /// Запас ракет (`PilotMissiles`), 0..4.
     pub missiles: u16,
+    /// Состояние наведения (`Missile1`): 0 — выключено, 1 — поиск после `T`,
+    /// 2 — цель в перекрестии.
+    pub missile_state: u16,
     /// Указатель компаса (`CompasPointerCrdX`), знак-величина.
     pub compass_x: u16,
     /// Указатель компаса (`CompasPointerCrdY`), знак-величина.
@@ -88,6 +92,7 @@ pub const KLADOV_COCKPIT: CockpitLayout = CockpitLayout {
     rotate_lr: 0x70FE,
     rotate_du: 0x7100,
     missiles: 0xD083,
+    missile_state: 0xD047,
     compass_x: 0x81A6,
     compass_y: 0x81A7,
     compass_type: 0x81A8,
@@ -105,7 +110,8 @@ impl CockpitLayout {
     /// Прочитать показания панели из живой памяти Z80.
     ///
     /// Значения шкал ограничиваются [`GAUGE_MAX`], отклонения приводятся
-    /// к нейтрали `0x15`, запас ракет — к [`MISSILE_SLOTS`].
+    /// к нейтрали `0x15`, запас ракет — к [`MISSILE_SLOTS`]. Состояние наведения
+    /// (`Missile1`) превращается в [`MissileMode`] для клетки справа от ракет.
     pub fn read(&self, mem: &[u8]) -> CockpitValues {
         let byte = |addr: u16| mem.get(addr as usize).copied().unwrap_or(0);
         let gauge = |addr: u16| Indicator::Gauge(byte(addr).min(GAUGE_MAX));
@@ -136,6 +142,11 @@ impl CockpitLayout {
         } else {
             CompassCircle::hidden()
         };
+        let missile_mode = match byte(self.missile_state) {
+            1 => MissileMode::Targeting,
+            2 => MissileMode::Locked,
+            _ => MissileMode::Idle,
+        };
         CockpitValues {
             left: [
                 gauge(self.shield_front),
@@ -163,6 +174,7 @@ impl CockpitLayout {
             in_free_space,
             compass_blink_phase: true,
             radar: self.read_radar(mem),
+            missile_mode,
             station_near: byte(self.coriolis_near) != 0,
             ecm_on: byte(self.ecm_time) != 0,
             blink: true,

@@ -24,6 +24,10 @@ pub const COMPASS_SUN: u32 = FRAME_COLOR;
 pub const BAR_RED: u32 = 0xFFD7_0000;
 /// Цвет длинных клеток у Cobra Mk IV — фиолетовый (ZX paper 3).
 pub const BAR_MAGENTA: u32 = 0xFFD7_00D7;
+/// Зелёная клетка наведения ракеты (`Missile1 == 1`, ZX paper 4).
+pub const MISSILE_TARGET_GREEN: u32 = 0xFF00_D700;
+/// Красная клетка захваченной цели (`Missile1 == 2`, ZX paper 2).
+pub const MISSILE_LOCK_RED: u32 = BAR_RED;
 
 /// Цвета кокпита: линии/индикаторы и фон длинных клеток.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]

@@ -45,6 +45,7 @@ fn values(missiles: u8) -> CockpitValues {
         in_free_space: false,
         compass_blink_phase: true,
         radar: RadarContacts::empty(),
+        missile_mode: MissileMode::Idle,
         station_near: false,
         ecm_on: false,
         blink: true,
@@ -351,6 +352,31 @@ fn missiles_are_white_rectangles_on_red_background() {
     }
 }
 
+/// Клетка справа от ракет заливается цветом состояния наведения: чёрная
+/// вне поиска, зелёная после `T`, красная при захвате цели.
+#[test]
+fn missile_mode_cell_shows_targeting_colors() {
+    let font = font();
+    let g = panel_geometry(1280, 960);
+    let mode = g.mode_cell(MISSILE_ROW, false);
+    for (state, color) in [
+        (MissileMode::Idle, BACKGROUND),
+        (MissileMode::Targeting, MISSILE_TARGET_GREEN),
+        (MissileMode::Locked, MISSILE_LOCK_RED),
+    ] {
+        let mut values = values(MISSILE_SLOTS as u8);
+        values.missile_mode = state;
+        let mut f = Frame::new(1280, 960);
+        Cockpit::new().draw(&mut f, &font, CockpitStyle::COBRA_MK3, &values);
+        let px = |x: i32, y: i32| f.pixels()[y as usize * 1280 + x as usize];
+        for y in mode.y..mode.y + mode.h {
+            for x in mode.x..mode.x + mode.w {
+                assert_eq!(px(x, y), color, "клетка {state:?} не залита ({x},{y})");
+            }
+        }
+    }
+}
+
 /// Шкала заполняется слева направо: пустая — весь фон полосы, полная —
 /// вся ширина клетки.
 #[test]
@@ -498,6 +524,7 @@ fn layout_reads_all_indicators_from_memory() {
     mem[l.shield_unit1 as usize + 4] = 0x40;
     mem[l.shield_unit1 as usize + 6] = 0;
     mem[l.missiles as usize] = 9; // больше четырёх — обрезается
+    mem[l.missile_state as usize] = 2; // цель в перекрестии
     let v = l.read(&mem);
     assert_eq!(
         v.left,
@@ -523,6 +550,25 @@ fn layout_reads_all_indicators_from_memory() {
             Indicator::Gauge(0),
         ]
     );
+    assert_eq!(v.missile_mode, MissileMode::Locked);
+}
+
+/// `Missile1` превращается в состояние наведения: `1` — поиск после `T`,
+/// `2` — цель в перекрестии. Посторонние значения трактуются как выключенное
+/// наведение, как и в оригинале, где они не встречаются.
+#[test]
+fn layout_reads_missile_targeting_state() {
+    let l = KLADOV_COCKPIT;
+    let mut mem = vec![0u8; 0x10000];
+    for (value, expected) in [
+        (0, MissileMode::Idle),
+        (1, MissileMode::Targeting),
+        (2, MissileMode::Locked),
+        (3, MissileMode::Idle),
+    ] {
+        mem[l.missile_state as usize] = value;
+        assert_eq!(l.read(&mem).missile_mode, expected, "Missile1 = {value}");
+    }
 }
 
 /// Верхние кружки стоят в центральной клетке: опасность слева, компас
