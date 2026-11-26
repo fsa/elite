@@ -1059,6 +1059,12 @@ impl App<'_> {
         if self.machine.intro_seen || self.station_native || self.pending_station_native.is_some() {
             return;
         }
+        // Запрос вылета должен дождаться `switch_to_flight_on_transition()`:
+        // иначе `show_flight()` съест `pending_launch` до старта анимации и
+        // переход будет принят за стыковку.
+        if self.pending_launch || self.pending_flight.is_some() {
+            return;
+        }
         if flight::z80_is_docked(&self.machine.mem) {
             return;
         }

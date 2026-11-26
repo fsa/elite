@@ -561,9 +561,10 @@ use crate::world::{
         assert!(!app.hdmap.active, "F5 не переключил экран");
         assert!(app.shop.active, "F5 не открыл закупку");
         assert!(app.station_native, "закупка не оставила нативный режим");
-        // Закрываем закупку переключением на вылет: управление уходит эмулятору.
+        // Переключение на вылет оставляет закупку видимой до старта перехода,
+        // чтобы между нажатием и шагом Z80 не мелькнул экран эмулятора.
         app.key_event(KeyCode::F1, true, false);
-        assert!(!app.shop.active, "F1 не закрыл закупку");
+        assert!(app.shop.active, "F1 закрыл закупку до начала вылета");
         assert!(!app.station_native, "F1 не передал управление эмулятору");
         assert!(app.station_emulator, "F1 не включил режим эмулятора");
         assert_eq!(app.machine.mem[flight::Z80_WHAT_ON_SCREEN], prev_screen);
@@ -571,6 +572,7 @@ use crate::world::{
         // После возврата в нативный режим карта открывается снова и курсор
         // остаётся на сохранённой цели гиперпрыжка.
         app.enter_native_station();
+        assert!(!app.shop.active, "возврат на станцию не закрыл закупку");
         app.key_event(KeyCode::F6, true, false);
         assert!(app.hdmap.active);
         assert_eq!(app.hdmap.cursor(), (map_x, map_y));
@@ -1073,7 +1075,7 @@ use crate::world::{
         assert_eq!(
             app.machine.keyboard[row] & (1 << bit),
             0,
-            "F1 не передал игре клавишу 1"
+            "F1 не передал игре клавишу 1 (бит нажатия должен быть сброшен)"
         );
 
         // Под экраном продолжает работать Z80, поэтому ввод должен доходить
@@ -1845,7 +1847,7 @@ use crate::world::{
         assert_eq!(
             app.machine.keyboard[row] & (1 << bit),
             0,
-            "F1 не передал игре клавишу 1"
+            "F1 не передал игре клавишу 1 (бит нажатия должен быть сброшен)"
         );
 
         // Z80 обработал клавишу и снова показывает кабину.
@@ -2047,6 +2049,14 @@ use crate::world::{
         app.key_event(KeyCode::F1, true, false);
         assert!(!app.station_native, "F1 не снял нативный режим станции");
         assert!(app.pending_launch, "F1 не запомнил вылет");
+        // До начала перехода остаётся нативный экран капитана: кадр между
+        // нажатием и шагом Z80 не должен показывать эмулятор.
+        app.sync_state();
+        assert_eq!(
+            app.state.screen,
+            crate::state::Screen::PilotStatus,
+            "F1 показал экран эмулятора до начала вылета"
+        );
 
         // Кадр рендера без шага Z80: ввод не переносится в эмулятор, но
         // отложенная клавиша и запрос вылета должны сохраниться.
@@ -2063,12 +2073,103 @@ use crate::world::{
         assert_eq!(
             app.machine.keyboard[row] & (1 << bit),
             0,
-            "F1 не передал игре клавишу 1"
+            "F1 не передал игре клавишу 1 (бит нажатия должен быть сброшен)"
         );
         app.machine.run_frame();
         app.switch_to_flight_on_transition();
         app.open_pending_flight();
         assert!(app.flight.active, "вылет не начался после кадра без Z80");
+        assert_eq!(app.flight.transition_kind(), Some(flight::TransitionKind::Launch));
+    }
+
+    /// `F1` из нативной закупки тоже должен отправить клавишу `1` в Z80 и
+    /// не показывать экран эмулятора до начала анимации вылета.
+    #[test]
+    fn f1_launch_from_shop_keeps_native_screen_and_sends_key() {
+        let opts = kladov_options();
+        let mut m = boot_kladov();
+        let (intro, game) = scene_markers();
+        m.intro_range = intro;
+        m.game_marker = game;
+        for _ in 0..30 {
+            m.run_frame();
+        }
+        native::start_game(&mut m, save_layout_kladov());
+        for _ in 0..1500 {
+            m.run_frame();
+        }
+        let mut app = App::new(m, &opts);
+        app.open_shop();
+        assert!(app.shop.active, "закупка не открылась");
+        app.sync_state();
+        assert_eq!(app.state.screen, crate::state::Screen::EquipShop);
+
+        app.key_event(KeyCode::F1, true, false);
+        app.sync_state();
+        assert_eq!(
+            app.state.screen,
+            crate::state::Screen::EquipShop,
+            "F1 из закупки показал экран эмулятора"
+        );
+        assert!(app.pending_launch, "F1 из закупки не запомнил вылет");
+
+        // Ветка закупки в `App::frame` передаёт одноразовую клавишу до шага Z80.
+        app.forward_pending_key();
+        let (row, bit) = matrix_pos(KeyCode::Digit1).expect("1 в матрице");
+        assert_eq!(
+            app.machine.keyboard[row] & (1 << bit),
+            0,
+            "F1 из закупки не передал игре клавишу 1"
+        );
+        app.machine.run_frame();
+        app.switch_to_flight_on_transition();
+        assert!(app.flight.active, "вылет из закупки не начался");
+        assert_eq!(app.flight.transition_kind(), Some(flight::TransitionKind::Launch));
+        assert!(!app.shop.active, "закупка не закрылась при вылете");
+    }
+
+    /// После явного выхода в эмулятор на станции `F1` должен снова показать
+    /// нативный экран и отправить клавишу `1`, а не оставить экран Z80.
+    #[test]
+    fn f1_after_emulator_handoff_opens_native_status_and_sends_key() {
+        let opts = kladov_options();
+        let mut m = boot_kladov();
+        let (intro, game) = scene_markers();
+        m.intro_range = intro;
+        m.game_marker = game;
+        for _ in 0..30 {
+            m.run_frame();
+        }
+        native::start_game(&mut m, save_layout_kladov());
+        for _ in 0..1500 {
+            m.run_frame();
+        }
+        let mut app = App::new(m, &opts);
+        app.handoff_to_emulator();
+        app.sync_state();
+        assert!(matches!(
+            app.state.screen,
+            crate::state::Screen::Emulator(_)
+        ));
+
+        app.key_event(KeyCode::F1, true, false);
+        app.sync_state();
+        assert_eq!(
+            app.state.screen,
+            crate::state::Screen::PilotStatus,
+            "F1 после выхода в эмулятор не открыл нативный экран"
+        );
+        assert!(app.station_emulator, "F1 не запустил эмулятор");
+        app.apply_input();
+        let (row, bit) = matrix_pos(KeyCode::Digit1).expect("1 в матрице");
+        assert_eq!(
+            app.machine.keyboard[row] & (1 << bit),
+            0,
+            "F1 после выхода в эмулятор не отправил клавишу 1"
+        );
+        app.machine.run_frame();
+        app.switch_to_flight_on_transition();
+        assert!(app.flight.active, "вылет после выхода в эмулятор не начался");
         assert_eq!(app.flight.transition_kind(), Some(flight::TransitionKind::Launch));
     }
 

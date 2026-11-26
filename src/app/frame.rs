@@ -392,6 +392,7 @@ impl App<'_> {
                             self.machine.run_frames(z80_frames);
                             emulator_ran = true;
                             self.switch_to_flight_on_transition();
+                            self.open_pending_flight();
                             self.open_pending_status();
                             self.open_pending_sysinfo();
                             self.open_pending_market();
@@ -405,16 +406,24 @@ impl App<'_> {
                 }
                 Screen::EquipShop => {
                     if !self.state.menu {
-                        if self.pending_station_native.is_some() {
-                            if z80_frames > 0 {
+                        if z80_frames > 0 {
+                            if self.pending_station_native.is_some() {
                                 self.forward_input();
-                                self.machine.run_frames(z80_frames);
-                                emulator_ran = true;
-                                self.play_frame_audio(true);
+                            } else if self.pending_key.is_some() {
+                                // `F1` над закупкой: экран остаётся видимым до
+                                // начала вылета, но клавишу `1` должен увидеть Z80.
+                                self.forward_pending_key();
+                            } else {
+                                self.machine.release_all_keys();
+                                self.machine.release_joystick();
                             }
-                        } else {
-                            self.machine.release_all_keys();
-                            self.machine.release_joystick();
+                            self.machine.run_frames(z80_frames);
+                            emulator_ran = true;
+                            self.switch_to_flight_on_transition();
+                            self.open_pending_flight();
+                            self.follow_native_screens();
+                            self.sync_flight_after_frames(z80_frames);
+                            self.play_frame_audio(true);
                         }
                     } else {
                         self.machine.release_all_keys();
@@ -435,6 +444,7 @@ impl App<'_> {
                             self.machine.run_frames(z80_frames);
                             emulator_ran = true;
                             self.switch_to_flight_on_transition();
+                            self.open_pending_flight();
                             self.follow_native_screens();
                             if self.machine.save_requested {
                                 self.machine.save_requested = false;
@@ -476,6 +486,8 @@ impl App<'_> {
                         self.forward_input();
                         self.machine.run_frames(z80_frames);
                         emulator_ran = true;
+                        self.switch_to_flight_on_transition();
+                        self.open_pending_flight();
                         self.sync_flight_after_frames(z80_frames);
                         self.play_frame_audio(true);
                     } else {
