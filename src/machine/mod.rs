@@ -142,6 +142,11 @@ pub struct Spectrum {
     /// [`native::request_load`] ждёт ближайшего `GameMain`/цикла заставки и
     /// уводит игру на станцию с загруженным командиром.
     pub load_requested: bool,
+    /// Хук загрузки уже сработал, но original ещё не дошёл до `GameMain`.
+    /// Нативный слой держит заглушку `LOADING` до этого момента: при загрузке
+    /// из полёта подготовка станции (`ClsAndPrintRamk`) продолжается несколько
+    /// кадров, и ранняя заморозка Z80 ломает переход на страницу капитана.
+    pub load_wait_game: bool,
     /// Символ, который нативный диалог миссии отдаёт original вместо чтения
     /// `PressKeyPrnSymbol` (`0xFF` — ответа ещё нет).
     pub mission_answer: u8,
@@ -214,6 +219,7 @@ impl Spectrum {
             frame_target: u64::MAX,
             save_requested: false,
             load_requested: false,
+            load_wait_game: false,
             mission_answer: 0xFF,
             hd: display::Frame::new(display::ZX_W, display::ZX_H),
             game_msg: GameMsgTap::default(),
@@ -322,6 +328,7 @@ impl Spectrum {
         }
         if self.game_marker == Some(pc) {
             self.intro_seen = false;
+            self.load_wait_game = false;
         } else if let Some((lo, hi)) = self.intro_range {
             if pc >= lo && pc <= hi {
                 self.intro_seen = true;

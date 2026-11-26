@@ -3039,6 +3039,145 @@ use crate::world::{
         let _ = fs::remove_file(&path);
     }
 
+    /// Загрузка из нативного полёта: под `LOADING` не должен открываться
+    /// нативный вид, иначе после хука он блокирует вход в нативную станцию,
+    /// страницу капитана и вылет по первой же клавише `1`.
+    #[test]
+    fn load_from_native_flight_returns_to_commander_page() {
+        let base = env!("CARGO_MANIFEST_DIR");
+        let dir = format!("{base}/tmp");
+        fs::create_dir_all(&dir).unwrap();
+        let path = format!("{dir}/app_load_flight.zxelite");
+        let (intro, game) = scene_markers();
+
+        // Готовим сохранение на станции.
+        let mut src = boot_kladov();
+        src.intro_range = intro;
+        src.game_marker = game;
+        for f in 0..900u64 {
+            src.release_all_keys();
+            if f >= 30 && f % 16 < 6 {
+                src.set_key(7, 0, true); // SPACE
+            }
+            src.run_frame();
+        }
+        assert_eq!(src.mem[0x7104], 0, "подготовка: не на станции");
+        native::commander_save(&mut src, &path, save_layout_kladov()).unwrap();
+        let entry = storage::entry_from_save_file(std::path::Path::new(&path)).unwrap();
+
+        // Приложение в нативном полёте: проходим интро, вылетаем со станции
+        // и ждём конца родной анимации вылета.
+        let mut m = boot_kladov();
+        m.intro_range = intro;
+        m.game_marker = game;
+        for _ in 0..30 {
+            m.run_frame();
+        }
+        native::start_game(&mut m, save_layout_kladov());
+        for _ in 0..1500 {
+            m.run_frame();
+        }
+        let opts = test_options();
+        let mut app = App::new(m, &opts);
+        app.key_event(KeyCode::F1, true, false);
+        app.forward_pending_key();
+        for f in 0..5000u64 {
+            app.machine.run_frame();
+            app.switch_to_flight_on_transition();
+            app.follow_flight_screen();
+            if f == 2 {
+                app.key_event(KeyCode::F1, false, false);
+            }
+            if !flight::z80_is_docked(&app.machine.mem)
+                && !flight::z80_in_transition(&app.machine.mem)
+                && !app.flight.in_animation_mode()
+            {
+                break;
+            }
+        }
+        app.ensure_native_flight_in_space();
+        app.sync_state();
+        assert!(
+            !flight::z80_is_docked(&app.machine.mem),
+            "подготовка: корабль не вылетел"
+        );
+        assert!(app.flight.active, "подготовка: нет нативного полёта");
+        assert_eq!(app.state.screen, Screen::Flight, "подготовка: нет полёта");
+
+        // Загружаем запись из таблицы.
+        app.save_screen = Some(storage::SaveScreen::Load(storage::LoadList {
+            entries: vec![entry],
+            sel: 0,
+            status: String::new(),
+            confirm_delete: false,
+            confirm_overwrite: false,
+        }));
+        app.key_event(KeyCode::Enter, true, false);
+        app.key_event(KeyCode::Enter, false, false);
+        assert!(app.loading, "загрузка не показала заглушку");
+        assert!(!app.flight.active, "загрузка не закрыла нативный полёт");
+        // Пока Z80 не дошёл до хука, он ещё стоит в кабине: автооткрытие
+        // нативного вида здесь и создавало залипший экран полёта.
+        app.ensure_native_flight_in_space();
+        assert!(
+            !app.flight.active,
+            "под LOADING открылся нативный вид полёта"
+        );
+
+        // Повторяем шаги кадра до хука и входа в нативную станцию.
+        for _ in 0..900u64 {
+            app.maybe_enter_native_station();
+            app.ensure_native_flight_in_space();
+            app.sync_state();
+            if app.loading {
+                app.machine.release_all_keys();
+            } else {
+                app.apply_input();
+            }
+            app.machine.run_frame();
+            app.finish_pending_station_native();
+            app.sync_loading_overlay();
+            if app.station_native {
+                break;
+            }
+        }
+        assert!(!app.loading, "заглушка загрузки не снялась");
+        assert!(!app.machine.intro_seen, "после загрузки осталась заставка");
+        assert_eq!(app.machine.mem[0x7104], 0, "после загрузки не станция");
+        assert_eq!(
+            app.machine.mem[0x70E3], 0x0B,
+            "после загрузки не станционный экран"
+        );
+        assert!(!app.flight.active, "нативный полёт остался поверх станции");
+        assert!(app.station_native, "нативная станция не включилась");
+        assert!(app.status.active, "страница капитана не открылась");
+        app.sync_state();
+        assert_eq!(
+            app.state.screen,
+            Screen::PilotStatus,
+            "после загрузки показан не экран капитана"
+        );
+
+        // Первое нажатие `1` после загрузки запускает вылет.
+        app.key_event(KeyCode::Digit1, true, false);
+        assert!(!app.station_native, "вылет не вернул управление эмулятору");
+        assert!(app.flight.active, "нативный вид вылета не открылся");
+        for f in 0..900u64 {
+            app.sync_state();
+            app.apply_input();
+            if f == 2 {
+                app.key_event(KeyCode::Digit1, false, false);
+            }
+            app.machine.run_frame();
+        }
+        assert_ne!(
+            app.machine.mem[0x7104], 0,
+            "вылет после загрузки не работает"
+        );
+
+        let _ = fs::remove_file(&path);
+    }
+
 
     #[test]
     fn pause_menu_selection_and_actions() {

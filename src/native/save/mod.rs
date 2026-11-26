@@ -223,6 +223,7 @@ pub fn commander_load(m: &mut Spectrum, path: &str, layout: SaveLayout) -> std::
 /// в буфер текущий экран, и после вылета панель была бы забита его текстом.
 pub fn request_load(m: &mut Spectrum, layout: SaveLayout) {
     m.load_requested = true;
+    m.load_wait_game = false;
     m.save_requested = false;
     // Хук вешаем и на главный цикл, и на заставку: неизвестно, где игра
     // находится в момент запроса. Сработает первый достигнутый адрес, хук

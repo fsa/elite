@@ -159,6 +159,13 @@ impl App<'_> {
             self.cancel_pending_station();
             return;
         }
+        // `IndDanger` сбрасывается раньше, чем original уходит с вида из
+        // кабины на экран станции (особенно после загрузки из полёта). Если
+        // заморозить Z80 в этот момент, страница капитана не откроется.
+        if flight::z80_in_cockpit(&self.machine.mem) {
+            self.cancel_pending_station();
+            return;
+        }
         if self.machine.intro_seen || self.flight.active {
             self.cancel_pending_station();
             return;
@@ -183,11 +190,11 @@ impl App<'_> {
     /// Убрать заглушку загрузки, когда хук вывел игру из заставки.
     ///
     /// `load_requested` снимается самим хуком, но до входа в `GameMain`
-    /// эмулятор ещё может показывать интро. Хук загрузки сразу направляет Z80
-    /// на станцию, поэтому достаточно дождаться сброса `intro_seen`; нативный
-    /// режим станции включится следующим кадром, уже без заглушки.
+    /// эмулятор ещё может показывать интро либо готовиться к станции из
+    /// полёта. Поэтому ждём сброса `intro_seen` и `load_wait_game`; нативный
+    /// режим станции включится после этого, уже без заглушки.
     pub(super) fn sync_loading_overlay(&mut self) {
-        if !self.loading || self.machine.load_requested {
+        if !self.loading || self.machine.load_requested || self.machine.load_wait_game {
             return;
         }
         if !self.machine.intro_seen {
@@ -1056,7 +1063,15 @@ impl App<'_> {
     /// информационный экран, показываем нативный вид кабины и синхронизируем
     /// направление с экраном Z80.
     pub(super) fn ensure_native_flight_in_space(&mut self) {
-        if self.machine.intro_seen || self.station_native || self.pending_station_native.is_some() {
+        // Под `LOADING` Z80 ещё может стоять в кабине, хотя сохранение уже
+        // уводит его на станцию. Открытый здесь нативный вид остался бы и
+        // после хука: он мешает входу в нативную станцию (не уходит `L`) и
+        // заставляет `F1` переключать вид вместо вылета.
+        if self.loading
+            || self.machine.intro_seen
+            || self.station_native
+            || self.pending_station_native.is_some()
+        {
             return;
         }
         // Запрос вылета должен дождаться `switch_to_flight_on_transition()`:

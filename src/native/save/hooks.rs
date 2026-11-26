@@ -116,6 +116,11 @@ pub(crate) fn load_into_docked(cpu: &mut Z80, m: &mut Spectrum, layout: SaveLayo
     }
     m.remove_hook(layout.game_main);
     m.load_requested = false;
+    // Загрузка из полёта приходит с уже сброшенным `intro_seen`, поэтому
+    // заглушка снялась бы прямо в хуке, пока original ещё стоит в подготовке
+    // (`ClsAndPrintRamk`) и не дошёл до `GameMain`. Держим её до входа в игру:
+    // `note_pc` на `game_main` сбросит этот флаг.
+    m.load_wait_game = true;
 
     // На виде из кабины (и на заставке, где `WhatOnScreen` тоже 0) нижняя
     // треть экрана уже занята кабиной — `SaveCocpitInBuffer` ниже снимет её
