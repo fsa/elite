@@ -97,6 +97,13 @@ pub(super) const Z80_SHIELD_REAR: usize = 0x70EA;
 pub(super) const Z80_DAMAGE_FRONT_SHIELD: usize = 0x9CA3;
 /// `DamageRearShield` — то же для заднего щита.
 pub(super) const Z80_DAMAGE_REAR_SHIELD: usize = 0x9CA4;
+/// `FlgObjNear` — оригинал обнуляет его в начале `MoveAllObjects` (`32 96 9C`)
+/// и взводит для каждого занятого слота из `oEnerg` (`sub_F916`).
+///
+/// По этому флагу `PrnExplodeObj` решает, печатать ли круги взрыва; у
+/// `ShipHyperJump` такого гейта нет, но он работает только с занятым слотом.
+/// Нативный уход проверяет флаг как защиту от одиночных пустых слотов.
+pub(super) const Z80_FLG_OBJ_NEAR: usize = 0x9C96;
 /// `TempLaser` — нагрев лазера, 0..0xA0.
 pub(super) const Z80_TEMP_LASER: usize = 0x70F0;
 /// Таблица звёзд оригинала (`byte_7A39`): 16 пар координат.
@@ -126,12 +133,39 @@ pub(super) const Z80_SLOT_OENERG: usize = 0x22;
 /// `oEnerg` уничтоженного объекта: `FireLaser` пишет `0xFF` перед
 /// `DestroyObj`, а на следующем игровом такте слот очищается до нуля.
 pub(super) const Z80_OENERG_DESTROYED: u8 = 0xFF;
+/// Число слотов `SlotObj`: станция, шесть кораблей и ракета.
+pub(super) const Z80_SLOT_COUNT: usize = 8;
+/// Дополнительные слоты (`byte_B457`) по 10 байт на объект.
+///
+/// Первый байт — рабочая копия флагов модели. `CounterShipHyperJump`
+/// инкрементирует его для уходящего объекта: `0xA0..0xA7` — идёт отсчёт
+/// ухода, круги печатаются именно в этом состоянии, а при переходе через
+/// `0xA8` слот очищается. Капсуле `sub_7C60` пишет `0xA0` при выбросе.
+pub(super) const Z80_EXT_SLOT_BASE: usize = 0xB457;
+pub(super) const Z80_EXT_SLOT_SIZE: usize = 0x0A;
 /// `oAdrData` в слоте: адрес блока модели.
 pub(super) const Z80_SLOT_OADRDATA: usize = 0x23;
 /// Координаты солнца (9 байт, знак-величина).
 pub(super) const Z80_SUN_CRD: usize = 0x7107;
 /// Координаты планеты (9 байт, знак-величина).
 pub(super) const Z80_PLANET_CRD: usize = 0x7110;
+
+/// Адрес слота по индексу: станция, шесть кораблей, ракета.
+pub(super) fn slot_base(i: usize) -> usize {
+    match i {
+        0 => Z80_OBJ_CORIOLIS,
+        i if i == Z80_SLOT_COUNT - 1 => Z80_OBJ_MISSILE,
+        i => Z80_OBJ_SLOT0 + (i - 1) * Z80_SLOT_SIZE,
+    }
+}
+
+/// Адрес дополнительного слота того же объекта, что и `slot_base(i)`.
+///
+/// `FindObjInExtSlot` ставит в соответствие объектным слотам (станция, шесть
+/// кораблей, ракета) восемь дополнительных слотов по 10 байт в том же порядке.
+pub(super) fn ext_slot_base(i: usize) -> usize {
+    Z80_EXT_SLOT_BASE + i * Z80_EXT_SLOT_SIZE
+}
 
 /// Находится ли корабль вне планетной системы (`InFreeSpace <> 0`).
 pub fn z80_in_free_space(mem: &[u8]) -> bool {

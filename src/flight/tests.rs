@@ -5,14 +5,16 @@ use crate::render3d::{ENGINE_IDLE, Rotation, Screen};
 
 use super::explosions::EXPLOSION_TIME;
 use super::memory::{
-    read_signed24, read_signed8, Z80_DAMAGE_FRONT_SHIELD, Z80_IN_FREE_SPACE, Z80_LASER_MOUNTS,
-    Z80_OBJ_CORIOLIS, Z80_OBJ_MISSILE, Z80_OBJ_SLOT0, Z80_OENERG_DESTROYED, Z80_PLANET_CRD,
-    Z80_SHIELD_FRONT, Z80_SHIELD_REAR, Z80_SLOT_OACCEL, Z80_SLOT_OADRDATA, Z80_SLOT_OENERG,
-    Z80_SLOT_SIZE, Z80_STARS_TABLE, Z80_SUN_CRD, Z80_TEMP_LASER,
+    ext_slot_base, read_signed24, read_signed8, Z80_DAMAGE_FRONT_SHIELD, Z80_FLG_OBJ_NEAR,
+    Z80_IN_FREE_SPACE, Z80_LASER_MOUNTS, Z80_OBJ_CORIOLIS, Z80_OBJ_MISSILE, Z80_OBJ_SLOT0,
+    Z80_OENERG_DESTROYED, Z80_PLANET_CRD, Z80_SHIELD_FRONT, Z80_SHIELD_REAR, Z80_SLOT_OACCEL,
+    Z80_SLOT_OADRDATA, Z80_SLOT_OENERG, Z80_SLOT_SIZE, Z80_STARS_TABLE, Z80_SUN_CRD,
+    Z80_TEMP_LASER,
 };
 use super::messages::{countdown_number, view_label, BOTTOM_MSG_TTL};
 use super::palette::{
-    planet_rim, sun_tint, CYAN, ENEMY_BEAM, RED, STAR_RIM_COLOR, VIEW_LABEL_COLOR,
+    planet_rim, sun_tint, teleport_ring_color, CYAN, ENEMY_BEAM, RED, STAR_RIM_COLOR,
+    VIEW_LABEL_COLOR,
 };
 use super::render::scene::{draw_star, draw_stars_view};
 use super::scene::{
@@ -23,6 +25,7 @@ use super::stars::{
     star_count_for, Star, SPEED_MAX, STAR_ANGLE_LR_PER_UNIT, STAR_COUNT, STAR_COUNT_MAX,
     STAR_FIELD_RADIUS,
 };
+use super::teleports::TELEPORT_TRAIL_TIME;
 use super::transition::Transition;
 use super::view;
 
@@ -2362,5 +2365,284 @@ fn destroyed_object_draws_warm_particle_cloud() {
     assert!(
         after.pixels().iter().any(|&p| is_warm(p)),
         "облако частиц не нарисовано"
+    );
+}
+
+/// Память с объектами, у которых original взводил бы `FlgObjNear`.
+fn flight_mem_with_near_objects() -> Vec<u8> {
+    let mut mem = z80_mem_with_flight();
+    mem[Z80_FLG_OBJ_NEAR] = 1;
+    mem
+}
+
+/// Освободить слот: в конце отсчёта original сам обнуляет `oEnerg`.
+fn clear_slot(mem: &mut [u8], base: usize) {
+    mem[base + Z80_SLOT_OENERG] = 0;
+}
+
+/// Запустить отсчёт ухода в первом корабельном слоте: слот ещё занят, а в
+/// дополнительном слоте уже 0xA0. Так уходят и корабли, и выброшенные капсулы.
+fn start_warp(mem: &mut [u8], name: &str) {
+    put_obj(mem, Z80_OBJ_SLOT0, name);
+    mem[ext_slot_base(1)] = 0xA0;
+}
+
+fn start_ship_warp(mem: &mut [u8]) {
+    start_warp(mem, "d_Cobra1");
+}
+
+#[test]
+fn departing_ship_spawns_warp_while_slot_is_occupied() {
+    let mut f = open();
+    let mut mem = flight_mem_with_near_objects();
+    f.sync_from_z80(&mem);
+    assert!(f.teleports.warps.is_empty());
+
+    start_ship_warp(&mut mem);
+    f.sync_from_z80(&mem);
+
+    assert_eq!(f.teleports.warps.len(), 1, "уход корабля не пойман");
+    assert_eq!(f.teleports.warps[0].center, [1000.0, 0.0, 3000.0]);
+    assert_ne!(mem[Z80_OBJ_SLOT0 + Z80_SLOT_OENERG], 0, "слот уже пуст");
+    // Обычное облако взрыва создаётся только по `oEnerg == 0xFF`.
+    assert!(f.explosions.clouds.is_empty());
+}
+
+#[test]
+fn warp_appears_on_countdown_not_after_slot_clear() {
+    let mut f = open();
+    let mut mem = flight_mem_with_near_objects();
+    f.sync_from_z80(&mem);
+
+    start_ship_warp(&mut mem);
+    mem[ext_slot_base(1)] = 0xA3;
+    f.sync_from_z80(&mem);
+    assert_eq!(f.teleports.warps.len(), 1, "счётчик гиперпрыжка не пойман");
+
+    // Конец отсчёта: original чистит слот и уже не печатает круги.
+    mem[ext_slot_base(1)] = 0;
+    clear_slot(&mut mem, Z80_OBJ_SLOT0);
+    mem[Z80_FLG_OBJ_NEAR] = 0;
+    f.sync_from_z80(&mem);
+    assert_eq!(f.teleports.warps.len(), 1, "эффект создан повторно");
+}
+
+#[test]
+fn departing_escape_pod_spawns_warp() {
+    let mut f = open();
+    let mut mem = flight_mem_with_near_objects();
+    f.sync_from_z80(&mem);
+
+    // `sub_7C60` пишет 0xA0 в допслот при выбросе капсулы — тот же счётчик,
+    // что и у уходящего корабля.
+    start_warp(&mut mem, "d_EscapePod");
+    f.sync_from_z80(&mem);
+
+    assert_eq!(f.teleports.warps.len(), 1, "уход капсулы не пойман");
+    assert_ne!(mem[Z80_OBJ_SLOT0 + Z80_SLOT_OENERG], 0, "слот уже пуст");
+}
+
+#[test]
+fn empty_slot_without_countdown_does_not_spawn_warp() {
+    let mut f = open();
+    let mut mem = flight_mem_with_near_objects();
+    put_obj(&mut mem, Z80_OBJ_SLOT0, "d_EscapePod");
+    f.sync_from_z80(&mem);
+
+    clear_slot(&mut mem, Z80_OBJ_SLOT0);
+    f.sync_from_z80(&mem);
+
+    assert!(
+        f.teleports.warps.is_empty(),
+        "пустой слот принят за телепорт"
+    );
+}
+
+#[test]
+fn destroyed_object_does_not_spawn_warp() {
+    let mut f = open();
+    let mut mem = flight_mem_with_near_objects();
+    f.sync_from_z80(&mem);
+
+    mark_slot_destroyed(&mut mem, Z80_OBJ_SLOT0);
+    f.sync_from_z80(&mem);
+    assert!(f.teleports.warps.is_empty(), "взрыв принят за телепорт");
+    assert_eq!(f.explosions.clouds.len(), 1);
+
+    // После очистки слот уже не имеет прошлого состояния корабля.
+    clear_slot(&mut mem, Z80_OBJ_SLOT0);
+    f.sync_from_z80(&mem);
+    assert!(f.teleports.warps.is_empty());
+}
+
+#[test]
+fn warp_is_not_spawned_twice() {
+    let mut f = open();
+    let mut mem = flight_mem_with_near_objects();
+    f.sync_from_z80(&mem);
+    start_ship_warp(&mut mem);
+    f.sync_from_z80(&mem);
+    assert_eq!(f.teleports.warps.len(), 1);
+
+    // Счётчик идёт несколько тактов, слот опрашивается на каждом кадре.
+    mem[ext_slot_base(1)] = 0xA5;
+    f.sync_from_z80(&mem);
+    f.sync_from_z80(&mem);
+    assert_eq!(f.teleports.warps.len(), 1, "эффект создан повторно");
+}
+
+#[test]
+fn warp_needs_near_objects_flag() {
+    let mut f = open();
+    let mut mem = z80_mem_with_flight();
+    mem[Z80_FLG_OBJ_NEAR] = 0;
+    f.sync_from_z80(&mem);
+
+    start_ship_warp(&mut mem);
+    f.sync_from_z80(&mem);
+
+    assert!(
+        f.teleports.warps.is_empty(),
+        "эффект показан без `FlgObjNear`"
+    );
+}
+
+#[test]
+fn warp_needs_object_in_view() {
+    let mut f = open();
+    let mut mem = flight_mem_with_near_objects();
+    // Знак у 24-битной координаты — старший бит третьего байта.
+    mem[Z80_OBJ_SLOT0 + 8] = 0x80; // z = -3000, объект позади камеры
+    f.sync_from_z80(&mem);
+
+    start_ship_warp(&mut mem);
+    f.sync_from_z80(&mem);
+
+    assert!(
+        f.teleports.warps.is_empty(),
+        "эффект показан для объекта за кадром"
+    );
+}
+
+#[test]
+fn cargo_and_station_do_not_spawn_warp() {
+    let mut f = open();
+    let mut mem = flight_mem_with_near_objects();
+    put_obj(&mut mem, Z80_OBJ_SLOT0, "d_Cargo");
+    mem[ext_slot_base(1)] = 0xA0;
+    f.sync_from_z80(&mem);
+    assert!(f.teleports.warps.is_empty(), "груз принят за корабль");
+    clear_slot(&mut mem, Z80_OBJ_SLOT0);
+    f.sync_from_z80(&mem);
+    assert!(f.teleports.warps.is_empty(), "груз принят за корабль");
+
+    f.sync_from_z80(&mem);
+    mem[ext_slot_base(0)] = 0xA0;
+    clear_slot(&mut mem, Z80_OBJ_CORIOLIS);
+    f.sync_from_z80(&mem);
+    assert!(f.teleports.warps.is_empty(), "станция принята за корабль");
+}
+
+#[test]
+fn warp_tail_follows_game_tick_after_object_leaves() {
+    let mut f = open();
+    let mut mem = flight_mem_with_near_objects();
+    f.sync_from_z80(&mem);
+    start_ship_warp(&mut mem);
+    f.sync_from_z80(&mem);
+
+    // После очистки слот уже не обновляет координату эффекта: дальше он
+    // движется вместе с миром, как облако взрыва.
+    mem[ext_slot_base(1)] = 0;
+    clear_slot(&mut mem, Z80_OBJ_SLOT0);
+    f.sync_from_z80(&mem);
+    let before = f.teleports.warps[0].center;
+
+    game_tick(&mut mem);
+    mem[Z80_HIGH_ANGLE_LR] = 0x40;
+    f.sync_from_z80(&mem);
+    let after = f.teleports.warps[0].center;
+
+    assert_ne!(after, before, "эффект не повернулся вместе с миром");
+    assert!(
+        after[2] < before[2] - 1.0,
+        "эффект не сдвинулся к игроку: {} -> {}",
+        before[2],
+        after[2]
+    );
+}
+
+#[test]
+fn warp_follows_object_until_slot_is_empty() {
+    let mut f = open();
+    let mut mem = flight_mem_with_near_objects();
+    f.sync_from_z80(&mem);
+    start_ship_warp(&mut mem);
+    f.sync_from_z80(&mem);
+    let before = f.teleports.warps[0].center;
+
+    mem[Z80_OBJ_SLOT0] = mem[Z80_OBJ_SLOT0].wrapping_add(8);
+    f.sync_from_z80(&mem);
+    let after = f.teleports.warps[0].center;
+
+    assert_ne!(after, before, "эффект не последовал за объектом");
+    assert!(
+        (after[0] - before[0] - 8.0).abs() < 1e-3,
+        "эффект отошёл от объекта: {} -> {}",
+        before[0],
+        after[0]
+    );
+}
+
+#[test]
+fn warp_disappears_after_animation() {
+    let mut f = open();
+    let mut mem = flight_mem_with_near_objects();
+    f.sync_from_z80(&mem);
+    start_ship_warp(&mut mem);
+    f.sync_from_z80(&mem);
+    let duration = f.teleports.warps[0].duration;
+    // После ухода объекта эффект ещё живёт полсекунды.
+    assert!(duration > TELEPORT_TRAIL_TIME, "эффект слишком короткий");
+
+    for _ in 0..(duration / 2.0 / 0.02) as usize {
+        f.tick(0.02);
+    }
+    assert_eq!(f.teleports.warps.len(), 1, "эффект исчез раньше времени");
+
+    for _ in 0..(duration / 2.0 / 0.02) as usize + 5 {
+        f.tick(0.02);
+    }
+    assert!(
+        f.teleports.warps.is_empty(),
+        "эффект не закончился за {duration} с"
+    );
+}
+
+#[test]
+fn departing_object_draws_cold_rings_not_explosion() {
+    let mut f = open();
+    let mut mem = flight_mem_with_near_objects();
+    f.sync_from_z80(&mem);
+    let geom = cockpit::panel_geometry(640, 480);
+    let ring = teleport_ring_color(1.0);
+    let mut before = Frame::new(640, 480);
+    f.draw(&mut before, &geom, &[]);
+    assert!(
+        !before.pixels().iter().any(|&p| p == ring),
+        "кольца телепорта были ещё до ухода"
+    );
+
+    start_ship_warp(&mut mem);
+    f.sync_from_z80(&mem);
+    let mut after = Frame::new(640, 480);
+    f.draw(&mut after, &geom, &[]);
+    assert!(
+        after.pixels().iter().any(|&p| p == ring),
+        "кольца телепорта не нарисованы"
+    );
+    assert!(
+        !after.pixels().iter().any(|&p| is_warm(p)),
+        "уход объекта нарисован тёплым взрывом"
     );
 }

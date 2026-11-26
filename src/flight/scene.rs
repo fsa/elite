@@ -271,7 +271,7 @@ fn map_ship_ptr(ptr: u16) -> Option<&'static Ship> {
 /// Возвращает `None` для пустого (`oEnerg == 0`) слота и для неизвестной
 /// модели. Уничтоженный слот (`oEnerg == 0xFF`) ещё хранит модель: по ней
 /// [`slot_pose`] находит радиус облака частиц.
-fn slot_object(mem: &[u8], base: usize) -> Option<(&'static Ship, [f32; 3])> {
+pub(super) fn slot_object(mem: &[u8], base: usize) -> Option<(&'static Ship, [f32; 3])> {
     if base + Z80_SLOT_SIZE > mem.len() || mem[base + Z80_SLOT_OENERG] == 0 {
         return None;
     }

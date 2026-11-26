@@ -15,16 +15,13 @@
 use crate::render3d::Rotation;
 
 use super::memory::{
-    Z80_OBJ_CORIOLIS, Z80_OBJ_MISSILE, Z80_OBJ_SLOT0, Z80_OENERG_DESTROYED, Z80_SLOT_OENERG,
-    Z80_SLOT_SIZE,
+    slot_base, Z80_OENERG_DESTROYED, Z80_SLOT_COUNT, Z80_SLOT_OENERG,
 };
 use super::rng::Rng;
 use super::scene;
 
 /// Сколько секунд живёт облако: за это время частицы разлетаются и гаснут.
 pub(super) const EXPLOSION_TIME: f32 = 2.0;
-/// Число слотов `SlotObj`: станция, шесть кораблей и ракета.
-const SLOT_COUNT: usize = 8;
 /// Минимальный радиус облака в единицах координат (для мелких объектов).
 const MIN_RADIUS: f32 = 12.0;
 /// Пределы числа частиц в одном облаке.
@@ -54,7 +51,7 @@ pub(super) struct Cloud {
 pub(super) struct Explosions {
     pub(super) clouds: Vec<Cloud>,
     /// `oEnerg` каждого слота на прошлом опросе.
-    prev_energ: Option<[u8; SLOT_COUNT]>,
+    prev_energ: Option<[u8; Z80_SLOT_COUNT]>,
     rng: Rng,
 }
 
@@ -79,7 +76,7 @@ impl Explosions {
     /// опрос того же состояния облака не дублирует. Простое обнуление слотов
     /// (например, `SetShipwreck2` при гибели игрока) взрывом не считается.
     pub(super) fn observe(&mut self, mem: &[u8]) {
-        let mut energy = [0u8; SLOT_COUNT];
+        let mut energy = [0u8; Z80_SLOT_COUNT];
         for (i, e) in energy.iter_mut().enumerate() {
             *e = mem
                 .get(slot_base(i) + Z80_SLOT_OENERG)
@@ -87,7 +84,7 @@ impl Explosions {
                 .unwrap_or(0);
         }
         if let Some(prev) = self.prev_energ {
-            for i in 0..SLOT_COUNT {
+            for i in 0..Z80_SLOT_COUNT {
                 if prev[i] != Z80_OENERG_DESTROYED && energy[i] == Z80_OENERG_DESTROYED {
                     if let Some((pos, radius)) = scene::slot_pose(mem, slot_base(i)) {
                         self.spawn(pos, radius);
@@ -160,7 +157,7 @@ impl Explosions {
                 velocity: [dir[0] * speed, dir[1] * speed, dir[2] * speed],
             });
         }
-        if self.clouds.len() >= SLOT_COUNT {
+        if self.clouds.len() >= Z80_SLOT_COUNT {
             self.clouds.remove(0);
         }
         self.clouds.push(Cloud {
@@ -168,15 +165,6 @@ impl Explosions {
             age: 0.0,
             particles,
         });
-    }
-}
-
-/// Адрес слота по индексу: станция, шесть кораблей, ракета.
-fn slot_base(i: usize) -> usize {
-    match i {
-        0 => Z80_OBJ_CORIOLIS,
-        i if i == SLOT_COUNT - 1 => Z80_OBJ_MISSILE,
-        i => Z80_OBJ_SLOT0 + (i - 1) * Z80_SLOT_SIZE,
     }
 }
 

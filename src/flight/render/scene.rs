@@ -6,7 +6,8 @@ use crate::render3d::{self, Rotation, Screen};
 
 use super::super::explosions::EXPLOSION_TIME;
 use super::super::palette::{
-    explosion_color, planet_rim, STAR_RIM_COLOR, CYAN, ENEMY_BEAM, RED,
+    explosion_color, planet_rim, teleport_flash_color, teleport_ring_color, STAR_RIM_COLOR, CYAN,
+    ENEMY_BEAM, RED,
 };
 use super::super::scene::{Body, BodyKind};
 use super::super::stars::Star;
@@ -25,6 +26,7 @@ pub(super) fn draw_flight_scene(
     draw_stars_view(frame, screen, &f.stars.stars, view_rot, f.stars.streak());
     draw_bodies_view(f, frame, screen, view_rot, s);
     draw_explosions_view(f, frame, screen, view_rot, s);
+    draw_teleports_view(f, frame, screen, view_rot, s);
     draw_enemy_shots_view(f, frame, screen, 0, view_bottom, view_rot);
     // Лазер может быть установлен в любом из четырёх креплений. Прицел и
     // собственный луч видны только в том направлении, где лазер есть.
@@ -192,6 +194,65 @@ fn draw_explosions_view(
                 dot as usize,
                 color,
             );
+        }
+    }
+}
+
+/// Нарисовать схлопывающиеся кольца и вспышку на месте телепорта.
+///
+/// В отличие от взрыва, частицы не разлетаются: кольца стягиваются к точке,
+/// где объект был в последний раз, и в конце коротко вспыхивает центр. Всё
+/// рисуется в координатах вида, поэтому эффект следует за поворотом мира.
+fn draw_teleports_view(
+    f: &Flight,
+    frame: &mut Frame,
+    screen: &Screen,
+    view_rot: &Rotation,
+    s: i32,
+) {
+    if f.teleports.warps.is_empty() {
+        return;
+    }
+    let cam = view_rot.transpose();
+    let dot = s.max(1);
+    for warp in &f.teleports.warps {
+        let progress = (warp.age / warp.duration).clamp(0.0, 1.0);
+        let vpos = cam.apply(warp.center);
+        if vpos[2] <= view::NEAR {
+            continue;
+        }
+        let x = screen.cx + vpos[0] / vpos[2] * screen.k;
+        let y = screen.cy - vpos[1] / vpos[2] * screen.k;
+        if !x.is_finite() || !y.is_finite() {
+            continue;
+        }
+        let (cx, cy) = (x.round() as i32, y.round() as i32);
+        let base = (warp.radius / vpos[2] * screen.k).max(dot as f32);
+
+        // Небольшой сдвиг по фазе читается как несколько колец, летящих
+        // внутрь, а не как одно кольцо, которое просто уменьшается.
+        for ring in 0..3 {
+            let delay = ring as f32 * 0.07;
+            if progress < delay {
+                continue;
+            }
+            let phase = ((progress - delay) / (1.0 - delay)).clamp(0.0, 1.0);
+            let r = (base * (1.0 - phase).powf(1.3)).round() as i32;
+            if r > 0 {
+                frame.circle(cx, cy, r, teleport_ring_color(1.0 - phase));
+            }
+        }
+
+        // Вспышка появляется, когда кольца почти сошлись, и гаснет к концу.
+        let flash = ((progress - 0.55) / 0.2).clamp(0.0, 1.0)
+            * (1.0 - ((progress - 0.75) / 0.25).clamp(0.0, 1.0));
+        if flash > 0.0 {
+            let color = teleport_flash_color(flash);
+            let r = (dot as f32 * (0.5 + 1.2 * flash)).round() as i32;
+            frame.disc(cx, cy, r, color);
+            let arm = r * 3;
+            frame.line(cx - arm, cy, cx + arm, cy, color);
+            frame.line(cx, cy - arm, cx, cy + arm, color);
         }
     }
 }

@@ -30,6 +30,7 @@
 //! - [`stars`] — звёздное поле, его вращение и темп;
 //! - [`combat`] — лазеры, ответные лучи и вспышка попадания;
 //! - [`explosions`] — облака частиц после уничтожения объекта;
+//! - [`teleports`] — сжатие в точку при уходе корабля или капсулы;
 //! - [`transition`] — вылет, гиперпрыжок и стыковка;
 //! - [`messages`] — перехваченные сообщения игры и надписи вида;
 //! - [`view`] — направления кабины, камера и отсечение отрезков;
@@ -54,6 +55,8 @@ use self::scene::{
 use self::stars::{
     StarField, SPEED_MAX, STAR_ANGLE_DU_PER_UNIT, STAR_ANGLE_LR_PER_UNIT, STAR_COUNT,
 };
+use self::teleports::Teleports;
+use self::view::rotation as view_rotation;
 
 /// Снимок координат тел, по которому различаются их обновления в Z80.
 ///
@@ -105,6 +108,7 @@ mod render;
 mod rng;
 mod scene;
 mod stars;
+mod teleports;
 mod transition;
 mod view;
 
@@ -205,6 +209,8 @@ pub struct Flight {
     combat: Combat,
     /// Облака частиц на месте уничтоженных объектов.
     explosions: Explosions,
+    /// Схлопывающиеся кольца на месте ухода корабля или капсулы.
+    teleports: Teleports,
     /// Последнее сообщение, перехваченное из игры (см. [`GameMsgTap`]).
     messages: Messages,
 }
@@ -240,6 +246,7 @@ impl Flight {
             docking_blackout: false,
             combat: Combat::new(),
             explosions: Explosions::new(),
+            teleports: Teleports::new(),
             messages: Messages::new(),
         }
     }
@@ -272,6 +279,7 @@ impl Flight {
         self.docking_blackout = false;
         self.combat.reset();
         self.explosions.reset();
+        self.teleports.reset();
         self.messages.reset();
         if planet_color != 0 {
             self.planet_color = planet_green(planet_color);
@@ -292,6 +300,7 @@ impl Flight {
             self.speed_resync = true;
         }
         self.explosions.reset();
+        self.teleports.reset();
     }
 
     /// Начать анимацию перехода с заранее известным видом (например,
@@ -303,6 +312,7 @@ impl Flight {
             self.speed_resync = true;
         }
         self.explosions.reset();
+        self.teleports.reset();
     }
 
     /// Идёт ли сейчас нативный переход (вылет, прыжок или стыковка).
@@ -405,6 +415,7 @@ impl Flight {
             if !self.transition.in_transition() {
                 self.transition.start(launch, mem);
                 self.explosions.reset();
+                self.teleports.reset();
             }
             return;
         }
@@ -613,6 +624,7 @@ impl Flight {
                 // игроку на шаг `CalcNewCrdObj_Pl`.
                 let delta_z = 2.0 * (self.speed.round() + 1.0);
                 self.explosions.tick_world(&turn, delta_z);
+                self.teleports.tick_world(&turn, delta_z);
             }
             self.z80_fast_scroll = false;
         }
@@ -677,6 +689,7 @@ impl Flight {
         // Уничтожение ловится по `oEnerg == 0xFF`: так `FireLaser` помечает
         // объект перед `DestroyObj`.
         self.explosions.observe(mem);
+        self.teleports.observe(mem, &view_rotation(self.view_dir));
     }
 
     /// Один шаг анимации: таймеры лучей и движение звёзд.
@@ -689,6 +702,7 @@ impl Flight {
         self.world_accum += dt;
         self.combat.tick(dt);
         self.explosions.tick(dt);
+        self.teleports.tick(dt);
         self.transition.tick(dt);
         // После гибели камера стоит: даже нулевая скорость даёт базовый шаг
         // `speed_b(0) == 1`, поэтому звёзды надо остановить явно.
