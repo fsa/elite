@@ -1431,10 +1431,20 @@ impl App<'_> {
     ) {
         use KeyCode::*;
         let typed = typed.or_else(|| if repeat { None } else { Self::physical_ascii(code) });
+        // В экране сохранения первая строка — виртуальный слот «NEW SAVE»,
+        // поэтому реальная запись сдвинута на один индекс.
+        let selected = if save_choice {
+            list.sel
+                .checked_sub(1)
+                .and_then(|i| list.entries.get(i))
+                .cloned()
+        } else {
+            list.entries.get(list.sel).cloned()
+        };
         if list.confirm_delete || list.confirm_overwrite {
             match typed {
                 Some(c) if c.to_ascii_lowercase() == 'y' => {
-                    if let Some(entry) = list.entries.get(list.sel).cloned() {
+                    if let Some(entry) = selected.clone() {
                         if list.confirm_delete {
                             list.status = match storage::delete_entry(&entry) {
                                 Ok(mut entries) => {
@@ -1496,17 +1506,28 @@ impl App<'_> {
         }
 
         match code {
-            Escape => self.close_save_screen(),
+            Escape => {
+                self.close_save_screen();
+                // Без `return` ниже обработчик собрал бы таблицу заново и
+                // экран остался бы открытым.
+                return;
+            }
             ArrowUp if !repeat && list.sel > 0 => {
                 list.sel -= 1;
                 list.status.clear();
             }
-            ArrowDown if !repeat && list.sel + 1 < list.entries.len() => {
+            ArrowDown
+                if !repeat && list.sel + 1 < list.entries.len() + usize::from(save_choice) =>
+            {
                 list.sel += 1;
                 list.status.clear();
             }
             Enter if !repeat => {
-                if let Some(entry) = list.entries.get(list.sel).cloned() {
+                if save_choice && list.sel == 0 {
+                    self.save_screen = Some(storage::SaveScreen::Save(self.make_save_prompt()));
+                    return;
+                }
+                if let Some(entry) = selected {
                     if save_choice {
                         list.confirm_overwrite = true;
                         list.status = "OVERWRITE SAVE? Y/N".to_string();

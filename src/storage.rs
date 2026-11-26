@@ -82,7 +82,8 @@ pub struct LoadList {
 pub enum SaveScreen {
     Save(SavePrompt),
     Load(LoadList),
-    /// Выбор: создать новое сохранение или перезаписать существующее.
+    /// Выбор: создать новое сохранение (`sel == 0`) или перезаписать
+    /// существующее (`sel - 1` — индекс в `entries`).
     SaveChoice(LoadList),
 }
 

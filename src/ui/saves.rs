@@ -10,7 +10,7 @@
 
 use crate::display::Frame;
 use crate::font::ZX_FONT;
-use crate::storage::{LoadList, PromptField, SavePrompt};
+use crate::storage::{Entry, LoadList, PromptField, SavePrompt};
 
 const BG: u32 = 0xFF00_0000;
 const FRAME: u32 = crate::cockpit::FRAME_COLOR;
@@ -175,8 +175,13 @@ pub(crate) fn draw_save_prompt(frame: &mut Frame, prompt: &SavePrompt) {
 
 /// Подтверждение опасного действия поверх таблицы. Пока оно открыто,
 /// остальные клавиши не меняют выбор и не запускают действие.
-fn draw_confirmation(frame: &mut Frame, list: &LoadList, c: i32, scale: usize) {
-    let entry = list.entries.get(list.sel);
+fn draw_confirmation(
+    frame: &mut Frame,
+    list: &LoadList,
+    c: i32,
+    scale: usize,
+    entry: Option<&Entry>,
+) {
     let name = entry
         .map(|e| truncate(&e.name, crate::storage::NAME_LEN))
         .unwrap_or_default();
@@ -229,6 +234,7 @@ fn draw_entries_table(
     title: &str,
     footer1: &str,
     footer2: &str,
+    new_slot: bool,
 ) {
     let c = cell(frame);
     let scale = (c / 8).max(1) as usize;
@@ -246,27 +252,43 @@ fn draw_entries_table(
     let first_row = row_y(header_y, c, 1);
     let total_rows = ((frame.height as i32 - 2 * border(c)).max(0) / c).max(1) as usize;
     let used_rows = (first_row / c).max(0) as usize + 3;
+    // В экране сохранения строка «NEW SAVE» стоит перед записями каталога.
+    let extra = usize::from(new_slot);
+    let total_items = list.entries.len() + extra;
     let visible = total_rows
         .saturating_sub(used_rows)
         .max(1)
-        .min(list.entries.len().max(1));
+        .min(total_items.max(1));
     let first = if list.sel >= visible {
         list.sel + 1 - visible
     } else {
         0
     };
 
-    if list.entries.is_empty() {
+    if total_items == 0 {
         frame.draw_text(ZX_FONT, x, first_row, "NO SAVES", GREY, scale);
     }
-    for (row, entry) in list.entries.iter().enumerate().skip(first).take(visible) {
-        let y = row_y(first_row, c, row - first);
-        let selected = row == list.sel;
+    for item in first..(first + visible).min(total_items) {
+        let y = row_y(first_row, c, item - first);
+        let selected = item == list.sel;
         if selected {
             highlight(frame, x, y, c);
         }
         let color = if selected { WHITE } else { FRAME };
-        frame.draw_text(ZX_FONT, name_x, y, &truncate(&entry.name, 10), color, scale);
+        if new_slot && item == 0 {
+            frame.draw_text(ZX_FONT, name_x, y, "NEW SAVE", color, scale);
+            frame.draw_text(ZX_FONT, comment_x, y, "CREATE NEW SLOT", color, scale);
+            continue;
+        }
+        let entry = &list.entries[item - extra];
+        frame.draw_text(
+            ZX_FONT,
+            name_x,
+            y,
+            &truncate(&entry.name, crate::storage::NAME_LEN),
+            color,
+            scale,
+        );
         frame.draw_text(
             ZX_FONT,
             comment_x,
@@ -299,7 +321,12 @@ fn draw_entries_table(
         );
     }
     if list.confirm_delete || list.confirm_overwrite {
-        draw_confirmation(frame, list, c, scale);
+        let selected = if new_slot {
+            list.sel.checked_sub(1).and_then(|i| list.entries.get(i))
+        } else {
+            list.entries.get(list.sel)
+        };
+        draw_confirmation(frame, list, c, scale, selected);
     }
 }
 
@@ -311,17 +338,20 @@ pub(crate) fn draw_load_list(frame: &mut Frame, list: &LoadList) {
         LIST_TITLE,
         "ENTER LOAD  E EXPORT  I IMPORT",
         "DEL DELETE  ESC CLOSE",
+        false,
     );
 }
 
-/// Выбор слота для сохранения: существующий можно перезаписать, новый — создать.
+/// Выбор слота для сохранения: первая строка создаёт новый, остальные можно
+/// перезаписать.
 pub(crate) fn draw_save_choice(frame: &mut Frame, list: &LoadList) {
     draw_entries_table(
         frame,
         list,
         PROMPT_TITLE,
-        "ENTER OVERWRITE  N NEW SAVE",
-        "ESC CANCEL",
+        "ENTER NEW/OVERWRITE  N NEW",
+        "UP DOWN SELECT  ESC CANCEL",
+        true,
     );
 }
 
@@ -355,6 +385,34 @@ mod tests {
             frame.pixels(),
             plain.as_slice(),
             "подтверждение должно менять кадр таблицы"
+        );
+    }
+
+    #[test]
+    fn save_choice_highlights_new_slot_row() {
+        let mut frame = Frame::new(1280, 960);
+        let list = LoadList {
+            entries: vec![Entry {
+                name: "LAVE".to_string(),
+                comment: "Lave".to_string(),
+                saved_at: 0,
+                data: vec![0; crate::storage::COMMANDER_LEN],
+            }],
+            sel: 0,
+            status: String::new(),
+            confirm_delete: false,
+            confirm_overwrite: false,
+        };
+        draw_save_choice(&mut frame, &list);
+        let new_selected = frame.pixels().to_vec();
+
+        let mut list = list;
+        list.sel = 1;
+        draw_save_choice(&mut frame, &list);
+        assert_ne!(
+            frame.pixels(),
+            new_selected.as_slice(),
+            "выбор первого и второго слота должен выглядеть по-разному"
         );
     }
 }

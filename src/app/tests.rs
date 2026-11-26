@@ -2864,6 +2864,100 @@ use crate::world::{
         let _ = fs::remove_file(&catalog);
     }
 
+    /// При сохранении первая строка списка создаёт новый слот: Enter по ней
+    /// открывает форму, а перезапись начинается только со второй строки.
+    #[test]
+    fn save_choice_new_slot_is_first_row() {
+        let catalog =
+            std::env::temp_dir().join(format!("elite-save-choice-{}.bin", std::process::id()));
+        let _ = fs::remove_file(&catalog);
+        storage::set_test_catalog(Some(catalog.clone()));
+        let opts = test_options();
+        let mut app = App::new(boot(), &opts);
+        storage::save_to_catalog(&mut app.machine, "AAAA", "FIRST", save_layout_kladov()).unwrap();
+        storage::save_to_catalog(&mut app.machine, "BBBB", "SECOND", save_layout_kladov()).unwrap();
+
+        app.open_save_prompt();
+        match &app.save_screen {
+            Some(storage::SaveScreen::SaveChoice(list)) => {
+                assert_eq!(list.sel, 0, "новый слот должен быть выбран первым");
+                assert_eq!(list.entries.len(), 2);
+            }
+            _ => panic!("не открылся выбор слота сохранения"),
+        }
+
+        app.key_event(KeyCode::Enter, true, false);
+        assert!(
+            matches!(app.save_screen, Some(storage::SaveScreen::Save(_))),
+            "Enter по первой строке должен открыть форму нового сохранения"
+        );
+        assert_eq!(storage::read_entries_from(&catalog).unwrap().len(), 2);
+
+        app.key_event(KeyCode::Escape, true, false);
+        app.open_save_prompt();
+        app.key_event(KeyCode::ArrowDown, true, false);
+        match &app.save_screen {
+            Some(storage::SaveScreen::SaveChoice(list)) => {
+                assert_eq!(list.sel, 1);
+                assert!(!list.confirm_overwrite);
+            }
+            _ => panic!("выбор слота закрылся после стрелки"),
+        }
+        app.key_event(KeyCode::Enter, true, false);
+        match &app.save_screen {
+            Some(storage::SaveScreen::SaveChoice(list)) => {
+                assert!(list.confirm_overwrite, "Enter по записи должен требовать перезаписи");
+            }
+            _ => panic!("подтверждение перезаписи закрыло экран"),
+        }
+        assert_eq!(storage::read_entries_from(&catalog).unwrap().len(), 2);
+
+        // Сокращение `N` по-прежнему открывает форму нового сохранения.
+        app.key_event(KeyCode::Escape, true, false);
+        app.key_event(KeyCode::KeyN, true, false);
+        assert!(matches!(app.save_screen, Some(storage::SaveScreen::Save(_))));
+
+        storage::set_test_catalog(None);
+        let _ = fs::remove_file(&catalog);
+    }
+
+    /// Esc в таблице загрузки и в выборе слота сохранения должен отменять
+    /// экран, не запуская загрузку/перезапись и не оставляя игру в меню.
+    #[test]
+    fn escape_cancels_load_and_save_lists() {
+        let catalog =
+            std::env::temp_dir().join(format!("elite-save-escape-{}.bin", std::process::id()));
+        let _ = fs::remove_file(&catalog);
+        storage::set_test_catalog(Some(catalog.clone()));
+        let opts = test_options();
+        let mut app = App::new(boot(), &opts);
+        storage::save_to_catalog(&mut app.machine, "AAAA", "FIRST", save_layout_kladov()).unwrap();
+
+        app.open_load_list();
+        app.key_event(KeyCode::Escape, true, false);
+        assert!(app.save_screen.is_none(), "Esc не закрыл таблицу загрузки");
+        assert!(!app.menu, "Esc оставил меню открытым");
+        assert!(!app.machine.load_requested, "Esc запустил загрузку");
+        assert!(!app.loading, "Esc показал заглушку загрузки");
+
+        app.open_save_prompt();
+        assert!(matches!(app.save_screen, Some(storage::SaveScreen::SaveChoice(_))));
+        app.key_event(KeyCode::Escape, true, false);
+        assert!(app.save_screen.is_none(), "Esc не закрыл выбор слота");
+        assert!(!app.menu, "Esc оставил меню открытым");
+        assert_eq!(storage::read_entries_from(&catalog).unwrap().len(), 1);
+
+        // В пустом каталоге сразу открывается форма: Esc должен закрыть и её.
+        let _ = fs::remove_file(&catalog);
+        app.open_save_prompt();
+        assert!(matches!(app.save_screen, Some(storage::SaveScreen::Save(_))));
+        app.key_event(KeyCode::Escape, true, false);
+        assert!(app.save_screen.is_none(), "Esc не закрыл форму сохранения");
+
+        storage::set_test_catalog(None);
+        let _ = fs::remove_file(&catalog);
+    }
+
     /// Загрузка из меню с заставки доводит игру до станции, и после неё
     /// клавиши снова управляют игрой, а не остаются в нативном экране.
     #[test]

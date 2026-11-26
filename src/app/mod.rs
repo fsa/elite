@@ -435,8 +435,8 @@ impl<'a> App<'a> {
         }
     }
 
-    /// Открыть экран сохранения: если есть записи, сначала выбрать
-    /// перезапись существующей или создание новой; иначе сразу форма нового.
+    /// Открыть экран сохранения: если есть записи, сверху стоит новый слот,
+    /// ниже — существующие для перезаписи; иначе сразу форма нового.
     pub(super) fn open_save_prompt(&mut self) {
         let entries = match storage::read_entries() {
             Ok(mut entries) => {
@@ -451,7 +451,7 @@ impl<'a> App<'a> {
             storage::SaveScreen::SaveChoice(storage::LoadList {
                 entries,
                 sel: 0,
-                status: "ENTER SELECT  N NEW  ESC CANCEL".to_string(),
+                status: String::new(),
                 confirm_delete: false,
                 confirm_overwrite: false,
             })
