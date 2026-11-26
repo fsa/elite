@@ -23,7 +23,8 @@ pub(super) fn draw_flight_scene(
     view_bottom: i32,
     s: i32,
 ) {
-    draw_stars_view(frame, screen, &f.stars.stars, view_rot, f.stars.streak());
+    let stars = f.render_stars();
+    draw_stars_view(frame, screen, &stars, view_rot, f.stars.streak());
     draw_bodies_view(f, frame, screen, view_rot, s);
     draw_explosions_view(f, frame, screen, view_rot, s);
     draw_teleports_view(f, frame, screen, view_rot, s);

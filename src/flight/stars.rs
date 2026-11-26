@@ -8,7 +8,8 @@
 //!
 //! Скорость и темп задаёт Z80. Растяжение координат из `sub_78B1` оригинала
 //! переведено в эквивалентное поступательное движение поля (см.
-//! [`StarField::advance`]).
+//! [`StarField::advance`]). Поворот поля объявляется на игровом такте, но
+//! между тактами рисуется интерполяцией, как и движение кораблей.
 
 use crate::render3d::Rotation;
 
@@ -76,14 +77,16 @@ const STAR_STREAK_TIME: f32 = 0.15;
 /// Поворот звёздного поля за единицу `HighAngleLR` (крен).
 ///
 /// В `CalcNewCrdObj_Pl` крен применяется как `angleLR * 2 / 256`, а тангаж —
-/// как `angleDU / 256`. Это малые углы за игровой такт, а не за кадр 50 Гц:
-/// оригинал пересчитывает координаты примерно на 5.5 Гц, поэтому поворот
-/// звёзд применяется только на такте (см. `Flight::sync_from_z80`).
+/// как `angleDU / 256`. Это углы за игровой такт, а не за кадр 50 Гц:
+/// оригинал пересчитывает координаты примерно на 5.5 Гц. Нативный слой
+/// объявляет этот поворот на такте, а рисует его распределённым между
+/// кадрами, как и движение кораблей (см. `StarField::begin_tick`).
 pub(super) const STAR_ANGLE_LR_PER_UNIT: f32 = 2.0 / 256.0;
 /// Поворот звёздного поля за единицу `HighAngleDU` (тангаж).
 pub(super) const STAR_ANGLE_DU_PER_UNIT: f32 = 1.0 / 256.0;
 
 /// Звезда в космическом пространстве.
+#[derive(Clone)]
 pub(super) struct Star {
     /// Положение в координатах корабля (`+Z` — вперёд).
     pub(super) pos: [f32; 3],
@@ -100,6 +103,12 @@ pub(super) struct StarField {
     j_drive: f32,
     /// Длина штриха звезды в координатах мира (0 — рисовать точкой).
     streak: f32,
+    /// Поле на момент игрового такта до поворота камеры.
+    prev_stars: Vec<Star>,
+    /// То же поле сразу после поворота, который записал Z80.
+    turn_stars: Vec<Star>,
+    /// Поступательный сдвиг поля, накопленный с момента такта.
+    translated: f32,
 }
 
 impl StarField {
@@ -107,17 +116,21 @@ impl StarField {
         let mut rng = Rng::new(0x1234_5678);
         let stars = make_stars(&mut rng, count);
         StarField {
+            prev_stars: stars.clone(),
+            turn_stars: stars.clone(),
             stars,
             rng,
             boost: false,
             j_drive: 0.0,
             streak: 0.0,
+            translated: 0.0,
         }
     }
 
     /// Пересоздать поле (при открытии экрана полёта).
     pub(super) fn reset(&mut self, count: usize) {
         self.stars = make_stars(&mut self.rng, count);
+        self.snapshot();
         self.boost = false;
         self.j_drive = 0.0;
         self.streak = 0.0;
@@ -127,7 +140,15 @@ impl StarField {
     pub(super) fn resize(&mut self, count: usize) {
         if self.stars.len() != count {
             self.stars = make_stars(&mut self.rng, count);
+            self.snapshot();
         }
+    }
+
+    /// Сбросить интерполяцию: обе границы совпадают с полем.
+    fn snapshot(&mut self) {
+        self.prev_stars = self.stars.clone();
+        self.turn_stars = self.stars.clone();
+        self.translated = 0.0;
     }
 
     pub(super) fn rng_mut(&mut self) -> &mut Rng {
@@ -139,15 +160,47 @@ impl StarField {
         self.streak
     }
 
-    /// Повернуть звёздное поле на шаг камеры.
+    /// Начать новый игровой такт: зафиксировать границы интерполяции и
+    /// повернуть поле на угол, который Z80 записал за этот такт.
     ///
     /// Звёзды хранятся прямо в координатах корабля. Поворот камеры на `turn`
     /// переводит старые координаты в новые той же матрицей, поэтому никакой
-    /// отдельной ориентации поля не нужно.
-    pub(super) fn turn(&mut self, turn: &Rotation) {
+    /// отдельной ориентации поля не нужно. Обе границы уже в системе игрока:
+    /// previous повторно не поворачивается, как и у кораблей.
+    pub(super) fn begin_tick(&mut self, turn: &Rotation) {
+        self.prev_stars = self.stars.clone();
         for star in &mut self.stars {
             star.pos = turn.apply(star.pos);
         }
+        self.turn_stars = self.stars.clone();
+        self.translated = 0.0;
+    }
+
+    /// Поле для кадра между игровыми тактами.
+    ///
+    /// Поворот камеры интерполируется между снимками так же, как положение
+    /// кораблей. Поступательное движение не интерполируется: оно уже идёт
+    /// каждый кадр, поэтому из обеих границ вычитается накопленный сдвиг —
+    /// звёзды летят равномерно, а не «залипают» в начале такта.
+    pub(super) fn render(&self, alpha: f32) -> Vec<Star> {
+        if alpha >= 0.999
+            || self.prev_stars.len() != self.stars.len()
+            || self.turn_stars.len() != self.stars.len()
+        {
+            return self.stars.clone();
+        }
+        self.prev_stars
+            .iter()
+            .zip(&self.turn_stars)
+            .map(|(prev, next)| {
+                let mut pos = [0.0; 3];
+                for k in 0..3 {
+                    pos[k] = prev.pos[k] + (next.pos[k] - prev.pos[k]) * alpha;
+                }
+                pos[2] -= self.translated;
+                Star { pos, mag: next.mag }
+            })
+            .collect()
     }
 
     /// Запомнить, что на ближайшем шаге нужно разогнать звёзды (J-драйв).
@@ -222,18 +275,29 @@ impl StarField {
 
     /// Сдвинуть все звёзды на `step` назад и пересоздать ушедшие за облако.
     fn move_stars(&mut self, step: f32) {
-        let StarField { stars, rng, .. } = self;
-        for star in stars.iter_mut() {
+        let StarField {
+            stars,
+            prev_stars,
+            turn_stars,
+            rng,
+            translated,
+            ..
+        } = self;
+        *translated += step;
+        for (i, star) in stars.iter_mut().enumerate() {
             if !star.pos.iter().all(|value| value.is_finite()) {
                 *star = spawn_star(rng);
+                note_respawn(prev_stars, turn_stars, i, star, *translated);
                 continue;
             }
             star.pos[2] -= step;
             // Звезда прошла позади корабля и ушла за облако — рождаем новую
             // в случайной точке сферы. При большом числе звёзд такие
-            // «подмены» незаметны.
+            // «подмены» незаметны, но интерполяция не должна вести новую
+            // звезду из старой точки.
             if star.pos[2] < -STAR_FIELD_RADIUS {
                 *star = spawn_star(rng);
+                note_respawn(prev_stars, turn_stars, i, star, *translated);
             }
         }
     }
@@ -257,6 +321,22 @@ pub(super) fn star_count_for(width: usize, height: usize) -> usize {
 /// Детерминированное звёздное поле, равномерно заполняющее сферу.
 fn make_stars(rng: &mut Rng, count: usize) -> Vec<Star> {
     (0..count).map(|_| spawn_star(rng)).collect()
+}
+
+/// Подменить обе границы интерполяции для только что рождённой звезды.
+///
+/// Снимки хранятся без поступательного сдвига: он вычитается при рендере.
+/// Поэтому координата рождения сдвигается на уже накопленный шаг, иначе
+/// новая звезда начинала бы путь со смещением назад.
+fn note_respawn(prev: &mut [Star], turn: &mut [Star], i: usize, star: &Star, translated: f32) {
+    if i >= prev.len() || i >= turn.len() {
+        return;
+    }
+    let mut pos = star.pos;
+    pos[2] += translated;
+    let shown = Star { pos, mag: star.mag };
+    prev[i] = shown.clone();
+    turn[i] = shown;
 }
 
 /// Родить звезду в случайной точке сферического облака.

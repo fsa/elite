@@ -53,7 +53,7 @@ use self::scene::{
     Body, ShipTints, BODY_SRC_CORIOLIS, BODY_SRC_MISSILE, BODY_SRC_PLANET, BODY_SRC_SUN,
 };
 use self::stars::{
-    StarField, SPEED_MAX, STAR_ANGLE_DU_PER_UNIT, STAR_ANGLE_LR_PER_UNIT, STAR_COUNT,
+    Star, StarField, SPEED_MAX, STAR_ANGLE_DU_PER_UNIT, STAR_ANGLE_LR_PER_UNIT, STAR_COUNT,
 };
 use self::teleports::Teleports;
 use self::view::rotation as view_rotation;
@@ -195,6 +195,9 @@ pub struct Flight {
     world_accum: f32,
     world_interval: f32,
     stars: StarField,
+    /// Время с последнего игрового такта и его длительность для звёзд.
+    star_accum: f32,
+    star_interval: f32,
     planet_color: u32,
     /// Цвет системы на карте галактики — оттенок почти белой звезды.
     system_color: u32,
@@ -240,6 +243,8 @@ impl Flight {
             world_accum: 0.0,
             world_interval: 1.0 / 5.5,
             stars: StarField::new(STAR_COUNT),
+            star_accum: 0.0,
+            star_interval: 1.0 / 5.5,
             planet_color: PLANET_COLOR,
             system_color: 0,
             transition: TransitionState::new(),
@@ -275,6 +280,8 @@ impl Flight {
         self.station_interval = 1.0 / 5.5;
         self.world_accum = 0.0;
         self.world_interval = 1.0 / 5.5;
+        self.star_accum = 0.0;
+        self.star_interval = 1.0 / 5.5;
         self.transition.reset();
         self.docking_blackout = false;
         self.combat.reset();
@@ -596,6 +603,10 @@ impl Flight {
             .mul(&Rotation::axis_angle([1.0, 0.0, 0.0], pitch));
 
         if ticked {
+            // Интервал звёзд привязан к тому же шагу модели, что и у тел:
+            // между этими тактами и распределяется поворот камеры.
+            self.star_interval = self.star_accum.max(1.0 / 60.0);
+            self.star_accum = 0.0;
             // J-драйв `PrintStars` проматывает звёзды тремя проходами
             // `sub_78B1` (скорости `0x1E` и дважды `0x10`) и на этом такте
             // временно перезаписывает `HighDeltaSpeed`. Ловим и сам флаг, и
@@ -611,13 +622,18 @@ impl Flight {
                 // камера стоит. Обломки из слотов Z80 уносятся своей скоростью,
                 // а облака взрывов не поворачиваются и не летят на игрока.
                 // Шаг `CalcNewCrdObj_Pl` при `HighDeltaSpeed == 0` равен 2.
+                self.stars.begin_tick(&Rotation::identity());
                 self.explosions.tick_death(2.0);
             } else {
                 // Каждый проход `sub_78B1` поворачивает поле, поэтому при
-                // J-драйве за такт набегает тройной поворот.
-                for _ in 0..if fast { 3 } else { 1 } {
-                    self.stars.turn(&turn);
-                }
+                // J-драйве за такт набегает тройной поворот. Он и становится
+                // правой границей интерполяции звёзд.
+                let star_turn = if fast {
+                    turn.mul(&turn).mul(&turn)
+                } else {
+                    turn
+                };
+                self.stars.begin_tick(&star_turn);
                 self.stars.mark_boost(fast);
                 // Облака живут в той же системе координат, что и тела: на
                 // такте они поворачиваются вместе с миром и сдвигаются к
@@ -700,6 +716,7 @@ impl Flight {
         self.ship_accum += dt;
         self.station_accum += dt;
         self.world_accum += dt;
+        self.star_accum += dt;
         self.combat.tick(dt);
         self.explosions.tick(dt);
         self.teleports.tick(dt);
@@ -741,8 +758,7 @@ impl Flight {
     /// содержат координаты в системе игрока на свои моменты: Z80 сам повора-
     /// чивает их на угле камеры в `CalcNewCrdObj_Pl`. Дополнительный поворот
     /// previous-координат последним углом заставлял тело при тангаже сначала
-    /// идти назад, а на такте прыгать вперёд. Звёзды не интерполируются: они
-    /// рисуются из живого поля, которое обновляется по `dt`.
+    /// идти назад, а на такте прыгать вперёд.
     pub(in crate::flight) fn render_bodies(&self) -> Vec<Body> {
         let alpha = |accum: f32, interval: f32| {
             if interval > 0.0 {
@@ -788,6 +804,17 @@ impl Flight {
                 out
             })
             .collect()
+    }
+
+    /// Звёзды для кадра: поворот камеры между игровыми тактами интерполирован,
+    /// а поступательное движение идёт полным шагом, как и раньше.
+    pub(in crate::flight) fn render_stars(&self) -> Vec<Star> {
+        let alpha = if self.star_interval > 0.0 {
+            (self.star_accum / self.star_interval).clamp(0.0, 1.0)
+        } else {
+            1.0
+        };
+        self.stars.render(alpha)
     }
 
     /// Цвет рамки кокпита: белый, при попадании — красный.

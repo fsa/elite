@@ -298,6 +298,92 @@ fn stars_turn_only_on_model_tick() {
 }
 
 #[test]
+fn stars_rotate_smoothly_between_model_ticks() {
+    let mut f = open();
+    let mut mem = vec![0u8; Z80_MEM_MIN];
+    f.sync_from_z80(&mem);
+    f.stars.stars = vec![star([1000.0, 0.0, 0.0])];
+    f.stars.begin_tick(&Rotation::identity());
+
+    // Пятьдесят кадров эмулятора между шагами модели: поворот ещё не должен
+    // быть виден, но следующий такт уже знает его длительность.
+    f.tick(0.1);
+    mem[Z80_HIGH_ANGLE_LR] = 4;
+    game_tick(&mut mem);
+    f.sync_from_z80(&mem);
+    let full = 4.0 * STAR_ANGLE_LR_PER_UNIT;
+    assert!(
+        (f.star_interval - 0.1).abs() < 1e-6,
+        "интервал звёзд не покрывает кадры между тактами"
+    );
+
+    let shown_angle = |flight: &Flight| {
+        let p = flight.render_stars()[0].pos;
+        p[1].atan2(p[0])
+    };
+    assert!(
+        shown_angle(&f).abs() < 1e-3,
+        "поворот показан сразу на такте: {}",
+        shown_angle(&f)
+    );
+    f.tick(0.025);
+    let quarter = shown_angle(&f);
+    f.tick(0.025);
+    let half = shown_angle(&f);
+    f.tick(0.05);
+    let end = shown_angle(&f);
+    assert!(
+        (quarter - full * 0.25).abs() < 1e-3,
+        "после четверти интервала звезда повёрнута на {quarter} вместо {}",
+        full * 0.25
+    );
+    assert!(
+        (half - full * 0.5).abs() < 1e-3,
+        "в середине интервала звезда повёрнута на {half} вместо {}",
+        full * 0.5
+    );
+    assert!(
+        (end - full).abs() < 1e-3,
+        "к концу интервала поворот не дошёл до такта: {end} против {full}"
+    );
+}
+
+#[test]
+fn star_interpolation_keeps_forward_motion_linear() {
+    let mut f = open();
+    f.speed = 12.0;
+    f.stars.stars = vec![star([200.0, 0.0, 2000.0])];
+    f.stars.begin_tick(&Rotation::identity());
+    f.star_interval = 0.2;
+
+    // Поворот нулевой, поэтому любой кадр интерполяции должен совпадать с
+    // живым полем: поступательное движение не замедляется в начале такта.
+    for _ in 0..4 {
+        f.tick(0.05);
+        assert_vec_close(f.render_stars()[0].pos, f.stars.stars[0].pos);
+    }
+}
+
+#[test]
+fn respawned_star_does_not_streak_from_old_position() {
+    let mut f = open();
+    f.speed = SPEED_MAX;
+    f.stars.stars = vec![star([0.0, 0.0, -STAR_FIELD_RADIUS + 1.0])];
+    f.stars.begin_tick(&Rotation::identity());
+    f.star_interval = 0.2;
+
+    f.tick(1.0 / 50.0);
+    let born = f.stars.stars[0].pos;
+    assert!(
+        born[2] > -STAR_FIELD_RADIUS,
+        "звезда не переродилась за облаком"
+    );
+    // Новая звезда появилась внутри интервала, но для кадра она уже должна
+    // быть на месте: старая точка не тянет за ней штрих через весь экран.
+    assert_vec_close(f.render_stars()[0].pos, born);
+}
+
+#[test]
 fn coriolis_change_does_not_count_as_game_tick() {
     let mut f = open();
     let mut mem = z80_mem_with_flight();

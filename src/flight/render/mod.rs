@@ -84,13 +84,8 @@ pub(super) fn draw(f: &mut Flight, frame: &mut Frame, geom: &CockpitGeom, font: 
                 );
                 // Звёзды прыжка поверх тоннеля: видны и поверх колец, и вне
                 // центрального кольца.
-                scene::draw_stars_view(
-                    frame,
-                    &screen,
-                    &f.stars.stars,
-                    &view_rot,
-                    f.stars.streak(),
-                );
+                let stars = f.render_stars();
+                scene::draw_stars_view(frame, &screen, &stars, &view_rot, f.stars.streak());
                 // Тоннель закрашивает верх строки обычного вида, поэтому
                 // подпись рисуется последней, как на экране F1.
                 draw_view_label(f, frame, font, vx, vy, vw, s);
