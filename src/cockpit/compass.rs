@@ -33,7 +33,8 @@ const COMPASS_GLYPHS: [[u8; 4]; 6] = [
 /// режим сканера в эмуляторе. Клавиша `C` в паузе включает режим цветных
 /// кругов: зелёная планета, синеватая станция и белое солнце. В обычном
 /// режиме внутри системы показывается один круг цели, окрашенный по тому же
-/// правилу: зелёный для планеты, синеватый для станции. В межпланетном
+/// правилу: зелёный для планеты, синеватый для станции. При подлёте к станции
+/// дополнительный режим берёт тот же круг, что и обычный. В межпланетном
 /// пространстве печатаются оригинальные растры «стороны света» (`N/S/W/E`) и
 /// круги тел не показываются; по фазе [`CockpitValues::compass_blink_phase`]
 /// чередуются пары знаков солнца и планеты. Внутри системы пока солнце и
@@ -43,13 +44,25 @@ const COMPASS_GLYPHS: [[u8; 4]; 6] = [
 pub enum CompassView {
     /// Один указатель на планету или станцию, как в обычном полёте.
     Pointer,
-    /// Дополнительный режим: станция, если она есть, иначе планета и солнце.
+    /// Дополнительный режим: станция при подлёте или если она есть, иначе
+    /// планета и солнце.
     Bodies,
 }
 
 impl Default for CompassView {
     fn default() -> Self {
         CompassView::Pointer
+    }
+}
+
+/// Круг по готовому указателю `PrintCompass` — общий для обоих режимов.
+fn target_circle(values: &CockpitValues) -> CompassCircle {
+    let pointer = &values.compass;
+    CompassCircle {
+        x: pointer.x.clamp(-COMPASS_CIRCLE_MAX_OFFSET, COMPASS_CIRCLE_MAX_OFFSET),
+        y: pointer.y.clamp(-COMPASS_CIRCLE_MAX_OFFSET, COMPASS_CIRCLE_MAX_OFFSET),
+        behind: pointer.glyph.is_behind(),
+        visible: pointer.visible,
     }
 }
 
@@ -97,9 +110,13 @@ pub(super) fn draw(
         return;
     }
     if view == CompassView::Bodies {
-        // При наличии станции дополнительный режим показывает только её: планета
-        // и солнце в этом режиме больше не нужны и только засоряют компас.
-        if values.compass_station.visible {
+        // При подлёте к станции Z80 уже переводит указатель на неё (`CoriolisNear`).
+        // Дополнительный режим должен показывать тот же круг, что и обычный, даже
+        // если слот станции ещё пуст: иначе рядом со станцией остаются планета и
+        // солнце. Наличие станции в слоте тоже переключает на неё.
+        if values.station_near {
+            draw_circle(f, cx, cy, unit, COMPASS_STATION, &target_circle(values));
+        } else if values.compass_station.visible {
             draw_circle(f, cx, cy, unit, COMPASS_STATION, &values.compass_station);
         } else if values.compass_bodies_overlap() && !values.compass_blink_phase {
             // Наложение: меняем порядок, чтобы в общей области попеременно
@@ -114,25 +131,12 @@ pub(super) fn draw(
     } else {
         // Обычный режим: внутри системы — круг цели с той же расцветкой, что
         // и круги тел в дополнительном режиме.
-        let pointer = &values.compass;
         let color = if values.station_near {
             COMPASS_STATION
         } else {
             COMPASS_PLANET
         };
-        draw_circle(
-            f,
-            cx,
-            cy,
-            unit,
-            color,
-            &CompassCircle {
-                x: pointer.x.clamp(-COMPASS_CIRCLE_MAX_OFFSET, COMPASS_CIRCLE_MAX_OFFSET),
-                y: pointer.y.clamp(-COMPASS_CIRCLE_MAX_OFFSET, COMPASS_CIRCLE_MAX_OFFSET),
-                behind: pointer.glyph.is_behind(),
-                visible: pointer.visible,
-            },
-        );
+        draw_circle(f, cx, cy, unit, color, &target_circle(values));
     }
 }
 

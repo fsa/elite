@@ -997,9 +997,25 @@ fn compass_draws_colored_bodies_without_blinking() {
         px(&station_mode, pointer_px.0, pointer_px.1),
         COMPASS_STATION
     );
+    let bodies_station = draw(CompassView::Bodies, true);
+    assert_eq!(
+        px(&bodies_station, pointer_px.0, pointer_px.1),
+        COMPASS_STATION,
+        "у станции оба режима должны показывать один и тот же круг"
+    );
+    assert_eq!(
+        px(&bodies_station, sun_px.0, sun_px.1),
+        BACKGROUND,
+        "у станции солнце не показывается"
+    );
+    assert_eq!(
+        px(&bodies_station, planet_px.0, planet_px.1),
+        BACKGROUND,
+        "у станции планета не показывается"
+    );
 
-    // Дополнительный режим: при наличии станции показываем только её,
-    // планету и солнце скрываем.
+    // Станция в слоте, но компас ещё не переключился на неё: дополнительный
+    // режим по-прежнему показывает только её.
     let bodies = draw(CompassView::Bodies, false);
     assert_eq!(px(&bodies, pointer_px.0, pointer_px.1), BACKGROUND);
     assert_eq!(px(&bodies, planet_px.0, planet_px.1), BACKGROUND);
@@ -1024,6 +1040,60 @@ fn compass_draws_colored_bodies_without_blinking() {
     assert_eq!(px(&f, sun_px.0, sun_px.1), COMPASS_SUN);
     assert_eq!(px(&f, planet_px.0, planet_px.1), COMPASS_PLANET);
     assert_eq!(px(&f, station_rim.0, station_rim.1), BACKGROUND);
+}
+
+/// При подлёте к станции дополнительный режим показывается так же, как
+/// обычный, даже если слот `objCoriolis` ещё пуст.
+#[test]
+fn compass_bodies_switches_to_station_when_near() {
+    let font = font();
+    let g = panel_geometry(1280, 960);
+    let cell = g.compass_cell();
+    let unit = (cell.w.min(cell.h) / 20).max(1);
+    let cx = cell.x + cell.w / 2;
+    let cy = cell.y + cell.h / 2;
+    let circle = |x: i8| CompassCircle {
+        x,
+        y: 0,
+        behind: false,
+        visible: true,
+    };
+    let draw = |view| {
+        let mut v = values(MISSILE_SLOTS as u8);
+        v.compass = Compass {
+            x: 0,
+            y: 6,
+            glyph: CompassGlyph::Filled,
+            visible: true,
+        };
+        v.station_near = true;
+        v.compass_planet = circle(-4);
+        v.compass_sun = circle(4);
+        let mut f = Frame::new(1280, 960);
+        Cockpit::new().draw_with_geom_views(
+            &mut f,
+            &g,
+            &font,
+            CockpitStyle::COBRA_MK3,
+            &v,
+            RadarView::Classic,
+            view,
+        );
+        f
+    };
+    let px = |f: &Frame, x: i32, y: i32| f.pixels()[y as usize * 1280 + x as usize];
+    let station = (cx, cy - 6 * unit);
+    let pointer = draw(CompassView::Pointer);
+    let bodies = draw(CompassView::Bodies);
+
+    assert_eq!(px(&pointer, station.0, station.1), COMPASS_STATION);
+    assert_eq!(
+        px(&bodies, station.0, station.1),
+        COMPASS_STATION,
+        "компас в режиме планеты+солнца не показал станцию"
+    );
+    assert_eq!(px(&bodies, cx - 4 * unit, cy), BACKGROUND);
+    assert_eq!(px(&bodies, cx + 4 * unit, cy), BACKGROUND);
 }
 
 /// При наложении солнца и планеты меняется только их порядок: в общей
