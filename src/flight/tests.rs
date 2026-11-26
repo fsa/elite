@@ -11,7 +11,10 @@ use super::memory::{
     Z80_SLOT_OADRDATA, Z80_SLOT_OENERG, Z80_SLOT_SIZE, Z80_STARS_TABLE, Z80_SUN_CRD,
     Z80_TEMP_LASER,
 };
-use super::messages::{countdown_number, view_label, BOTTOM_MSG_TTL};
+use super::messages::{
+    countdown_number, view_label, BOTTOM_MSG_TTL, DOCKING_BLINK_ON_FRAMES, DOCKING_BLINK_PERIOD,
+    DOCKING_MSG_TTL,
+};
 use super::palette::{
     planet_rim, sun_tint, teleport_ring_color, CYAN, ENEMY_BEAM, RED, STAR_RIM_COLOR,
     VIEW_LABEL_COLOR,
@@ -2192,13 +2195,13 @@ fn bottom_message_expires_after_ttl() {
 #[test]
 fn repeated_bottom_message_refreshes_ttl() {
     let mut f = open();
-    let mut tap = tap_with_text("DOCKING COMPUTERS ON", 13, 5);
+    let mut tap = tap_with_text("HYPERSPACE -- LAVE", 13, 5);
     f.sync_game_msg(&mut tap);
     f.advance_messages(BOTTOM_MSG_TTL as u64);
-    assert_eq!(f.messages.bottom_label(), Some("DOCKING COMPUTERS ON"));
+    assert_eq!(f.messages.bottom_label(), Some("HYPERSPACE -- LAVE"));
 
     // Повтор той же строки — heartbeat: возраст снова ноль.
-    let mut tap = tap_with_text("DOCKING COMPUTERS ON", 13, 5);
+    let mut tap = tap_with_text("HYPERSPACE -- LAVE", 13, 5);
     f.sync_game_msg(&mut tap);
     assert_eq!(
         f.messages.bottom.as_ref().map(|m| m.age),
@@ -2206,7 +2209,62 @@ fn repeated_bottom_message_refreshes_ttl() {
         "повтор не продлил показ"
     );
     f.advance_messages(BOTTOM_MSG_TTL as u64);
+    assert_eq!(f.messages.bottom_label(), Some("HYPERSPACE -- LAVE"));
+}
+
+#[test]
+fn docking_message_stays_visible_between_game_prints() {
+    let mut f = open();
+    let mut tap = tap_with_text("DOCKING COMPUTERS ON", 13, 5);
+    f.sync_game_msg(&mut tap);
     assert_eq!(f.messages.bottom_label(), Some("DOCKING COMPUTERS ON"));
+
+    // Один проход `GameMain` занимает 3–4 кадра, поэтому между печатями внутри
+    // пачки бывают пропуски. Они не должны вызывать мигание.
+    for _ in 0..6 {
+        f.advance_messages(4);
+        let mut tap = tap_with_text("DOCKING COMPUTERS ON", 13, 5);
+        f.sync_game_msg(&mut tap);
+        assert_eq!(f.messages.bottom_label(), Some("DOCKING COMPUTERS ON"));
+    }
+}
+
+#[test]
+fn docking_message_blinks_with_slow_period() {
+    let mut f = open();
+    let mut tap = tap_with_text("DOCKING COMPUTERS ON", 13, 5);
+    f.sync_game_msg(&mut tap);
+
+    // Повторная печать обновляет срок жизни, но не фазу мигания.
+    let mut elapsed = 0;
+    while elapsed < DOCKING_BLINK_ON_FRAMES - 1 {
+        f.advance_messages(3);
+        elapsed += 3;
+        let mut tap = tap_with_text("DOCKING COMPUTERS ON", 13, 5);
+        f.sync_game_msg(&mut tap);
+        assert_eq!(f.messages.bottom_label(), Some("DOCKING COMPUTERS ON"));
+    }
+
+    f.advance_messages(1);
+    assert_eq!(f.messages.bottom_label(), None, "надпись не погасла");
+
+    // Пауза короче TTL, поэтому надпись остаётся в сообщении и появляется
+    // снова на следующем цикле.
+    f.advance_messages((DOCKING_BLINK_PERIOD - DOCKING_BLINK_ON_FRAMES - 1) as u64);
+    assert_eq!(f.messages.bottom_label(), None);
+    f.advance_messages(1);
+    assert_eq!(f.messages.bottom_label(), Some("DOCKING COMPUTERS ON"));
+}
+
+#[test]
+fn docking_message_expires_when_prints_stop() {
+    let mut f = open();
+    let mut tap = tap_with_text("DOCKING COMPUTERS ON", 13, 5);
+    f.sync_game_msg(&mut tap);
+    f.advance_messages(DOCKING_MSG_TTL as u64);
+    assert_eq!(f.messages.bottom_label(), Some("DOCKING COMPUTERS ON"));
+    f.advance_messages(1);
+    assert_eq!(f.messages.bottom_label(), None);
 }
 
 #[test]
