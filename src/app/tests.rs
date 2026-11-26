@@ -3755,95 +3755,77 @@ use crate::world::{
         assert_eq!(app.pending_key, None);
     }
 
-    /// Индикатор ускорения эмуляции появляется только при множителе больше
-    /// единицы и занимает клетку слева от радара, зеркальную паре `ES` справа.
+    /// Ускорение эмуляции рисуется зелёным в верхней левой клетке рамки,
+    /// а обычная скорость `x1` кадр не засоряет.
     #[test]
-    fn speed_indicator_shows_only_when_accelerated() {
+    fn speed_indicator_green_in_top_left_when_accelerated() {
         let opts = test_options();
         let mut app = App::new(boot(), &opts);
         let (w, h) = (1024usize, 768usize);
         app.state.screen = Screen::Flight;
         app.machine.hd.resize(w, h);
+
+        let g = cockpit::panel_geometry(w as u32, h as u32);
+        let view = g.view();
+        let scale = (h as f32 / 300.0).floor().max(1.0) as usize;
         app.machine.hd.clear(display::TRANSPARENT);
         app.draw_speed_indicator();
         assert!(
             app.machine.hd.pixels().iter().all(|&p| p == display::TRANSPARENT),
-            "индикатор нарисован без ускорения"
+            "индикатор нарисован при x1"
         );
-
-        app.speed_multiplier = 2;
-        app.draw_speed_indicator();
-        let g = cockpit::panel_geometry(w as u32, h as u32);
-        let speed = g.speed_cell();
-        let e = g.ecm_cell();
-        let s = g.station_cell();
-        let es = cockpit::Rect {
-            x: e.x,
-            y: e.y,
-            w: s.x + s.w - e.x,
-            h: e.h,
-        };
-        assert!(
-            es.x > g.center_cell().x + g.center_cell().w / 2,
-            "подготовка: пара ES не справа от центра"
-        );
-        assert!(
-            speed.x + speed.w <= g.center_cell().x + g.center_cell().w / 2,
-            "индикатор скорости не слева от радара"
-        );
-        assert_eq!(speed.y, es.y, "индикатор скорости не симметричен ES по высоте");
-        assert_eq!(speed.h, es.h, "размер индикатора скорости отличается от ES");
-        let lit_in = |r: cockpit::Rect| {
-            app.machine.hd.pixels().iter().enumerate().any(|(i, &p)| {
-                let (x, y) = (i % w, i / w);
-                p != display::TRANSPARENT
-                    && x >= r.x.max(0) as usize
-                    && x < (r.x + r.w).max(0) as usize
-                    && y >= r.y.max(0) as usize
-                    && y < (r.y + r.h).max(0) as usize
-            })
-        };
-        assert!(lit_in(speed), "индикатор x2 не нарисован в своей клетке");
-        let top = cockpit::Rect {
-            x: 0,
-            y: 0,
-            w: w as i32,
-            h: (g.panel_y - g.margin).max(0),
-        };
-        assert!(!lit_in(top), "индикатор ушёл в верхнюю часть экрана");
-    }
-
-    /// Индикатор рисуется для каждого выбранного множителя, а не только x2.
-    #[test]
-    fn speed_indicator_draws_x5_and_x10() {
-        let opts = test_options();
-        let mut app = App::new(boot(), &opts);
-        let (w, h) = (1024usize, 768usize);
-        app.state.screen = Screen::Flight;
-        app.machine.hd.resize(w, h);
-
         for multiplier in [2, 5, 10] {
             app.speed_multiplier = multiplier;
             app.machine.hd.clear(display::TRANSPARENT);
             app.draw_speed_indicator();
+            let green: Vec<(usize, usize)> = app
+                .machine
+                .hd
+                .pixels()
+                .iter()
+                .enumerate()
+                .filter(|&(_, &p)| p == cockpit::DANGER_GREEN)
+                .map(|(i, _)| (i % w, i / w))
+                .collect();
+            assert!(!green.is_empty(), "индикатор x{multiplier} не нарисован");
             assert!(
-                app.machine.hd.pixels().iter().any(|&p| p != display::TRANSPARENT),
-                "индикатор x{multiplier} не нарисован"
+                app.machine.hd.pixels().iter().all(|&p| {
+                    p == display::TRANSPARENT || p == cockpit::DANGER_GREEN
+                }),
+                "индикатор x{multiplier} содержит другие цвета"
+            );
+            let (min_x, max_x) = green
+                .iter()
+                .fold((usize::MAX, 0), |(lo, hi), &(x, _)| (lo.min(x), hi.max(x)));
+            let (min_y, max_y) = green
+                .iter()
+                .fold((usize::MAX, 0), |(lo, hi), &(_, y)| (lo.min(y), hi.max(y)));
+            assert!(
+                min_x >= view.x.max(0) as usize
+                    && max_x < (view.x + 4 * 8 * scale as i32).max(0) as usize,
+                "индикатор x{multiplier} вышел за левую клетку рамки"
+            );
+            assert!(
+                min_y >= view.y.max(0) as usize
+                    && max_y < (view.y + 2 * 8 * scale as i32).max(0) as usize,
+                "индикатор x{multiplier} вышел за верхнюю строку рамки"
             );
         }
     }
 
-    /// Индикатор множителя относится только к кокпиту: на картах,
-    /// информационных экранах, заставке и экране эмулятора его нет.
+    /// Индикатор множителя рисуется на всех экранах: в кокпите, на карте,
+    /// информационных экранах, заставке и на экране эмулятора.
     #[test]
-    fn speed_indicator_absent_outside_cockpit() {
+    fn speed_indicator_visible_on_every_screen() {
         let opts = test_options();
         let mut app = App::new(boot(), &opts);
         let (w, h) = (1024usize, 768usize);
         app.machine.hd.resize(w, h);
-        app.speed_multiplier = 2;
+        app.speed_multiplier = 5;
 
         let screens = [
+            Screen::Flight,
+            Screen::Animation(crate::state::Animation::Hyperspace),
             Screen::Intro,
             Screen::GalacticMap,
             Screen::EquipShop,
@@ -3857,18 +3839,74 @@ use crate::world::{
             app.machine.hd.clear(display::TRANSPARENT);
             app.draw_speed_indicator();
             assert!(
-                app.machine.hd.pixels().iter().all(|&p| p == display::TRANSPARENT),
-                "индикатор показан на экране {screen:?}"
+                app.machine.hd.pixels().contains(&cockpit::DANGER_GREEN),
+                "индикатор не нарисован на экране {screen:?}"
             );
         }
+    }
 
-        // Анимации переходов показываются поверх того же кокпита.
-        app.state.screen = Screen::Animation(crate::state::Animation::Hyperspace);
+    /// На экране эмулятора рамку рисует Z80, поэтому множитель отодвинут от
+    /// края кадра дополнительной клеткой по обеим осям.
+    #[test]
+    fn speed_indicator_is_further_inset_in_emulator() {
+        let opts = test_options();
+        let mut app = App::new(boot(), &opts);
+        let (w, h) = (1024usize, 768usize);
+        app.machine.hd.resize(w, h);
+        app.speed_multiplier = 2;
+
+        let mut position = |screen: Screen| {
+            app.state.screen = screen;
+            app.machine.hd.clear(display::TRANSPARENT);
+            app.draw_speed_indicator();
+            app.machine
+                .hd
+                .pixels()
+                .iter()
+                .enumerate()
+                .filter(|&(_, &p)| p == cockpit::DANGER_GREEN)
+                .map(|(i, _)| (i % w, i / w))
+                .min()
+                .expect("индикатор не нарисован")
+        };
+        let (flight_x, flight_y) = position(Screen::Flight);
+        let (emu_x, emu_y) = position(Screen::Emulator(crate::state::OriginalScreen::FrontView));
+        assert!(emu_x > flight_x, "в эмуляторе множитель не сдвинулся вправо");
+        assert!(emu_y > flight_y, "в эмуляторе множитель не сдвинулся вниз");
+    }
+
+    /// При отсчёте гиперпрычка множитель сдвигается вправо от числа в той же
+    /// строке, чтобы они не перекрывали друг друга.
+    #[test]
+    fn speed_indicator_moves_aside_for_countdown() {
+        let opts = test_options();
+        let mut app = App::new(boot(), &opts);
+        let (w, h) = (1024usize, 768usize);
+        app.machine.hd.resize(w, h);
+        app.speed_multiplier = 2;
+
+        let min_x = |app: &App<'_>| {
+            app.machine
+                .hd
+                .pixels()
+                .iter()
+                .enumerate()
+                .filter(|&(_, &p)| p == cockpit::DANGER_GREEN)
+                .map(|(i, _)| i % w)
+                .min()
+                .expect("индикатор не нарисован")
+        };
+        app.draw_speed_indicator();
+        let plain = min_x(&app);
+
+        app.machine.mem[flight::Z80_JUMP_COUNTDOWN] = 10;
+        app.machine.mem[flight::Z80_JUMP_DOCKING] = 1;
+        app.machine.mem[flight::Z80_IND_DANGER] = 4;
         app.machine.hd.clear(display::TRANSPARENT);
         app.draw_speed_indicator();
         assert!(
-            app.machine.hd.pixels().iter().any(|&p| p != display::TRANSPARENT),
-            "индикатор пропал в анимации перехода"
+            min_x(&app) > plain,
+            "множитель не сдвинулся от отсчёта гиперпрыжка"
         );
     }
 

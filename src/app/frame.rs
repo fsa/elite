@@ -124,33 +124,58 @@ impl App<'_> {
         self.flight.tick(frames as f32 / 50.0);
     }
 
-    /// Индикатор ускорения эмуляции (`F12`) слева от радара.
+    /// Индикатор ускорения эмуляции (`F12`) в левом верхнем углу рамки.
     ///
-    /// Множитель рисуется тем же шрифтом ПЗУ, что подписи панели, в клетке,
-    /// зеркальной паре `ES` (`x2` слева, `ES` справа). Обычно множитель равен
-    /// единице и ничего не рисуется, чтобы не засорять кадр. Индикатор
-    /// относится к панели кокпита, поэтому он не должен появляться на карте,
-    /// информационных экранах, заставке или экране эмулятора.
+    /// При обычной скорости (`x1`) ничего не рисуется, чтобы не засорять кадр.
+    /// Ускорение (`x2`/`x5`/`x10`) показывается зелёным шрифтом ПЗУ на всех
+    /// экранах: в кокпите, на карте, информационных экранах, заставке и на
+    /// экране эмулятора. Позиция считается от внутренней границы главной рамки,
+    /// как у отсчёта гиперпрыжка. На экране эмулятора рамка рисует сам Z80 и
+    /// проходит ближе к краю кадра, поэтому добавляется ещё одна клетка отступа.
+    /// Когда отсчёт активен, индикатор сдвигается на две клетки вправо, чтобы не
+    /// перекрывать число.
     pub(super) fn draw_speed_indicator(&mut self) {
-        if !matches!(self.state.screen, Screen::Flight | Screen::Animation(_)) {
-            return;
-        }
         if self.speed_multiplier == 1 {
             return;
         }
         let (w, h) = (self.machine.hd.width as u32, self.machine.hd.height as u32);
         let g = cockpit::panel_geometry(w, h);
-        let cell = g.speed_cell();
-        if cell.is_empty() {
+        let view = g.view();
+        if view.is_empty() {
             return;
         }
-        let scale = (cell.h / 8).min(cell.w / 16).max(1) as usize;
-        let x = cell.x + (cell.w - 16 * scale as i32) / 2;
-        let y = cell.y + (cell.h - 8 * scale as i32) / 2;
+        let scale = (h as f32 / 300.0).floor().max(1.0) as usize;
+        let extra = if matches!(self.state.screen, Screen::Emulator(_)) {
+            8 * scale as i32
+        } else {
+            0
+        };
+        let mut x = view.x + 8 * scale as i32 + extra;
+        let y = view.y + 8 * scale as i32 + extra;
+        if self.jump_countdown_active() {
+            x += 16 * scale as i32;
+        }
         let text = format!("x{}", self.speed_multiplier);
         self.machine
             .hd
-            .draw_text(ZX_FONT, x, y, &text, cockpit::FRAME_COLOR, scale);
+            .draw_text(ZX_FONT, x, y, &text, cockpit::DANGER_GREEN, scale);
+    }
+
+    /// Показывается ли сейчас отсчёт гиперпрыжка в левом верхнем углу.
+    ///
+    /// Условия те же, что в `draw_jump_countdown`; индикатору множителя нужно
+    /// знать их, чтобы не наложиться на число в той же строке.
+    fn jump_countdown_active(&self) -> bool {
+        let raw = self
+            .machine
+            .mem
+            .get(flight::Z80_JUMP_COUNTDOWN)
+            .copied()
+            .unwrap_or(0);
+        raw != 0
+            && !self.machine.intro_seen
+            && !flight::z80_is_docked(&self.machine.mem)
+            && flight::z80_in_transition(&self.machine.mem)
     }
 
     /// Полукруг индикатора опасности в правом верхнем углу вспомогательного
@@ -173,19 +198,15 @@ impl App<'_> {
     /// только то же число в той же клетке у левой и верхней рамок. Пункт
     /// назначения и подпись вида остаются только в кабине.
     pub(super) fn draw_jump_countdown(&mut self) {
+        if !self.jump_countdown_active() {
+            return;
+        }
         let raw = self
             .machine
             .mem
             .get(flight::Z80_JUMP_COUNTDOWN)
             .copied()
             .unwrap_or(0);
-        if raw == 0
-            || self.machine.intro_seen
-            || flight::z80_is_docked(&self.machine.mem)
-            || !flight::z80_in_transition(&self.machine.mem)
-        {
-            return;
-        }
         let (w, h) = (self.machine.hd.width as u32, self.machine.hd.height as u32);
         let g = cockpit::panel_geometry(w, h);
         let scale = (h as f32 / 300.0).floor().max(1.0) as usize;

@@ -59,7 +59,7 @@ use crate::display::Frame;
 pub use self::geometry::{CockpitGeom, LINE, Rect, compass_hit, panel_geometry};
 pub use self::layout::KLADOV_COCKPIT;
 pub use self::palette::{
-    BACKGROUND, BAR_MAGENTA, BAR_RED, CockpitStyle, DANGER_COLOR, FRAME_COLOR,
+    BACKGROUND, BAR_MAGENTA, BAR_RED, CockpitStyle, DANGER_COLOR, DANGER_GREEN, FRAME_COLOR,
 };
 #[cfg(test)]
 pub use self::palette::{COMPASS_PLANET, COMPASS_STATION, COMPASS_SUN};
@@ -74,7 +74,7 @@ pub use self::geometry::{BAR_WIDTH_FRAC, LABEL_WIDTH_PER_ROW_PCT};
 #[cfg(test)]
 pub use self::labels::{LEFT_LABELS, RIGHT_LABELS};
 #[cfg(test)]
-pub use self::palette::{DANGER_GREEN, DANGER_YELLOW};
+pub use self::palette::DANGER_YELLOW;
 #[cfg(test)]
 pub use self::values::{
     DEFLECTION_MAX, Danger, GAUGE_MAX, Indicator, MISSILE_ROW, MISSILE_SLOTS, PANEL_ROWS,

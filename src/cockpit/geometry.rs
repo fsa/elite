@@ -439,25 +439,6 @@ impl CockpitGeom {
         }
     }
 
-    /// Клетка индикатора множителя эмуляции слева от радара.
-    ///
-    /// Зеркальна паре `ES` относительно центральной клетки: та же высота и
-    /// ширина в два глифа, но в левом нижнем углу. Благодаря этому `x2` и
-    /// `ES` читаются как симметричная пара над нижней частью радара.
-    pub fn speed_cell(&self) -> Rect {
-        let center = self.center_cell();
-        let pair = self.status_pair();
-        if center.is_empty() || pair.is_empty() {
-            return pair;
-        }
-        Rect {
-            x: center.x + center.w - (pair.x - center.x) - pair.w,
-            y: pair.y,
-            w: pair.w,
-            h: pair.h,
-        }
-    }
-
     /// Зазор вокруг радара.
     fn radar_gap(&self) -> i32 {
         (self.side_row(0).h / 3).max(LINE)
