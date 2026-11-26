@@ -27,7 +27,6 @@ const NAME_LEN: usize = 11;
 
 /// Смещения полей внутри блока командира (`PilotName` = `0xD054`).
 const OFF_LEGAL: usize = 11;
-const OFF_RATING: usize = 12;
 const OFF_CASH2: usize = 18;
 const OFF_CASH1: usize = 20;
 /// `PilotFrontLaser` и далее: FRONT, REAR, LEFT, RIGHT.
@@ -146,7 +145,7 @@ impl Status {
                 + u16::from_le_bytes([mem[p + OFF_CASH1], mem[p + OFF_CASH1 + 1]]) as u32,
             fuel: mem[p + OFF_FUEL],
             legal: mem[p + OFF_LEGAL],
-            rating: rating::tier(&mem[p + OFF_RATING..p + OFF_RATING + 3]),
+            rating: rating::commander_tier(&mem[p..]),
             equipment: read_equipment(&mem[p..]),
         };
         self.active = true;

@@ -78,6 +78,29 @@ pub fn name(tier: u8) -> &'static str {
     }
 }
 
+/// Смещение `PilotRating0..2` от начала блока командира.
+pub const COMMANDER_OFFSET: usize = 0x0C;
+
+/// Три байта рейтинга из блока командира.
+pub fn commander_bytes(block: &[u8]) -> &[u8] {
+    block.get(COMMANDER_OFFSET..COMMANDER_OFFSET + 3).unwrap_or(&[])
+}
+
+/// Число и название рейтинга из блока командира.
+pub fn commander_label(block: &[u8]) -> String {
+    label(commander_bytes(block))
+}
+
+/// Очки боя из блока командира (`PilotRating0..1`).
+pub fn commander_score(block: &[u8]) -> u32 {
+    score(commander_bytes(block))
+}
+
+/// Индекс звания из блока командира.
+pub fn commander_tier(block: &[u8]) -> u8 {
+    tier(commander_bytes(block))
+}
+
 fn byte(bytes: &[u8], index: usize) -> u8 {
     bytes.get(index).copied().unwrap_or(0)
 }

@@ -225,8 +225,8 @@ pub(crate) fn draw_save_editor_fullscreen(
     let cash = crate::world::commander_cash_tenths(save_data, 0);
     let fuel = b(0x2E);
     let missiles = b(0x2F);
-    let rating = crate::rating::label(save_data);
-    let score = crate::rating::score(save_data);
+    let rating = crate::rating::commander_label(save_data);
+    let score = crate::rating::commander_score(save_data);
     let r2 = b(0x0E);
     let war = r2 & 0x80 != 0;
     let war_end = r2 & 0x40 != 0;
@@ -315,8 +315,8 @@ fn draw_save_summary(
 
     let name = summary_name(save_data);
     let legal = b(0x0B);
-    let rating = crate::rating::label(save_data);
-    let score = crate::rating::score(save_data);
+    let rating = crate::rating::commander_label(save_data);
+    let score = crate::rating::commander_score(save_data);
     let cash = crate::world::commander_cash_tenths(save_data, 0);
 
     let rows: [(usize, &str, String); 26] = [
