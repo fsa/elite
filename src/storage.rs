@@ -484,7 +484,7 @@ pub fn import_entry_dialog() -> io::Result<Option<Entry>> {
     Ok(Some(entry))
 }
 
-/// Стартовая загрузка из `--save FILE`: импортировать файл в каталог, поместить
+/// Стартовая загрузка из позиционного `FILE`: импортировать файл в каталог, поместить
 /// блок в память и увести Z80 на станцию, минуя заставку.
 pub fn load_startup_save(machine: &mut Spectrum, path: &Path) -> io::Result<()> {
     let entry = entry_from_save_file(path)?;
