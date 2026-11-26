@@ -1421,6 +1421,159 @@ impl App<'_> {
         })
     }
 
+    fn handle_save_list_key(
+        &mut self,
+        code: KeyCode,
+        repeat: bool,
+        typed: Option<char>,
+        list: &mut storage::LoadList,
+        save_choice: bool,
+    ) {
+        use KeyCode::*;
+        let typed = typed.or_else(|| if repeat { None } else { Self::physical_ascii(code) });
+        if list.confirm_delete || list.confirm_overwrite {
+            match typed {
+                Some(c) if c.to_ascii_lowercase() == 'y' => {
+                    if let Some(entry) = list.entries.get(list.sel).cloned() {
+                        if list.confirm_delete {
+                            list.status = match storage::delete_entry(&entry) {
+                                Ok(mut entries) => {
+                                    storage::sorted_for_table(&mut entries);
+                                    list.sel = list.sel.min(entries.len().saturating_sub(1));
+                                    list.entries = entries;
+                                    "DELETED".to_string()
+                                }
+                                Err(_) => "ERROR: CANNOT DELETE".to_string(),
+                            };
+                        } else {
+                            match storage::overwrite_entry(
+                                &mut self.machine,
+                                &entry,
+                                world::save_layout_kladov(),
+                            ) {
+                                Ok(_) => {
+                                    self.close_save_screen();
+                                    return;
+                                }
+                                Err(_) => {
+                                    list.status = "ERROR: CANNOT WRITE CATALOG".to_string();
+                                }
+                            }
+                        }
+                    }
+                    list.confirm_delete = false;
+                    list.confirm_overwrite = false;
+                }
+                Some(c) if c.to_ascii_lowercase() == 'n' => {
+                    let was_delete = list.confirm_delete;
+                    list.confirm_delete = false;
+                    list.confirm_overwrite = false;
+                    list.status = if was_delete {
+                        "DELETE CANCELLED".to_string()
+                    } else {
+                        "OVERWRITE CANCELLED".to_string()
+                    };
+                }
+                _ if code == Escape && !repeat => {
+                    let was_delete = list.confirm_delete;
+                    list.confirm_delete = false;
+                    list.confirm_overwrite = false;
+                    list.status = if was_delete {
+                        "DELETE CANCELLED".to_string()
+                    } else {
+                        "OVERWRITE CANCELLED".to_string()
+                    };
+                }
+                _ => {}
+            }
+            let screen = if save_choice {
+                storage::SaveScreen::SaveChoice(list.clone())
+            } else {
+                storage::SaveScreen::Load(list.clone())
+            };
+            self.save_screen = Some(screen);
+            return;
+        }
+
+        match code {
+            Escape => self.close_save_screen(),
+            ArrowUp if !repeat && list.sel > 0 => {
+                list.sel -= 1;
+                list.status.clear();
+            }
+            ArrowDown if !repeat && list.sel + 1 < list.entries.len() => {
+                list.sel += 1;
+                list.status.clear();
+            }
+            Enter if !repeat => {
+                if let Some(entry) = list.entries.get(list.sel).cloned() {
+                    if save_choice {
+                        list.confirm_overwrite = true;
+                        list.status = "OVERWRITE SAVE? Y/N".to_string();
+                    } else {
+                        let intro = self.machine.intro_seen;
+                        storage::load_entry(&mut self.machine, &entry);
+                        self.loading = true;
+                        self.close_save_screen();
+                        self.close_all_native();
+                        self.cancel_pending_station();
+                        self.station_native = false;
+                        self.station_emulator = false;
+                        self.flight_emulator = false;
+                        if intro {
+                            self.splash_emulator = true;
+                        }
+                        return;
+                    }
+                }
+            }
+            KeyN if !repeat && save_choice => {
+                self.save_screen = Some(storage::SaveScreen::Save(self.make_save_prompt()));
+                return;
+            }
+            KeyE if !repeat && !save_choice => {
+                if let Some(entry) = list.entries.get(list.sel).cloned() {
+                    list.status = match storage::export_entry_dialog(&entry) {
+                        Ok(Some(_)) => "EXPORTED".to_string(),
+                        Ok(None) => "EXPORT CANCELLED".to_string(),
+                        Err(_) => "ERROR: EXPORT FAILED".to_string(),
+                    };
+                }
+            }
+            KeyI if !repeat && !save_choice => {
+                list.status = match storage::import_entry_dialog() {
+                    Ok(Some(entry)) => match storage::read_entries() {
+                        Ok(mut entries) => {
+                            storage::sorted_for_table(&mut entries);
+                            list.sel = entries
+                                .iter()
+                                .position(|e| e.saved_at == entry.saved_at && e.name == entry.name)
+                                .unwrap_or(0);
+                            list.entries = entries;
+                            "IMPORTED".to_string()
+                        }
+                        Err(_) => "ERROR: CANNOT READ CATALOG".to_string(),
+                    },
+                    Ok(None) => "IMPORT CANCELLED".to_string(),
+                    Err(_) => "ERROR: IMPORT FAILED".to_string(),
+                };
+            }
+            Delete | Backspace if !repeat && !save_choice => {
+                if list.entries.get(list.sel).is_some() {
+                    list.confirm_delete = true;
+                    list.status = "DELETE SAVE? Y/N".to_string();
+                }
+            }
+            _ => {}
+        }
+        let screen = if save_choice {
+            storage::SaveScreen::SaveChoice(list.clone())
+        } else {
+            storage::SaveScreen::Load(list.clone())
+        };
+        self.save_screen = Some(screen);
+    }
+
     /// Ввод на экране сохранения и таблицы загрузки.
     ///
     /// В приглашении Enter с поля NAME просто подтверждает имя и переводит
@@ -1496,118 +1649,10 @@ impl App<'_> {
                 }
             },
             Some(storage::SaveScreen::Load(mut list)) => {
-                let typed = typed.or_else(|| {
-                    if repeat {
-                        None
-                    } else {
-                        Self::physical_ascii(code)
-                    }
-                });
-                if list.confirm_delete {
-                    match typed {
-                        Some(c) if c.to_ascii_lowercase() == 'y' => {
-                            if let Some(entry) = list.entries.get(list.sel).cloned() {
-                                list.status = match storage::delete_entry(&entry) {
-                                    Ok(mut entries) => {
-                                        storage::sorted_for_table(&mut entries);
-                                        list.sel = list.sel.min(entries.len().saturating_sub(1));
-                                        list.entries = entries;
-                                        "DELETED".to_string()
-                                    }
-                                    Err(_) => "ERROR: CANNOT DELETE".to_string(),
-                                };
-                            }
-                            list.confirm_delete = false;
-                        }
-                        Some(c) if c.to_ascii_lowercase() == 'n' => {
-                            list.confirm_delete = false;
-                            list.status = "DELETE CANCELLED".to_string();
-                        }
-                        _ if code == Escape && !repeat => {
-                            list.confirm_delete = false;
-                            list.status = "DELETE CANCELLED".to_string();
-                        }
-                        _ => {}
-                    }
-                    self.save_screen = Some(storage::SaveScreen::Load(list));
-                } else {
-                    match code {
-                        Escape => self.close_save_screen(),
-                        ArrowUp if !repeat && list.sel > 0 => {
-                            list.sel -= 1;
-                            list.status.clear();
-                            self.save_screen = Some(storage::SaveScreen::Load(list));
-                        }
-                        ArrowDown if !repeat && list.sel + 1 < list.entries.len() => {
-                            list.sel += 1;
-                            list.status.clear();
-                            self.save_screen = Some(storage::SaveScreen::Load(list));
-                        }
-                        Enter if !repeat => {
-                            if let Some(entry) = list.entries.get(list.sel).cloned() {
-                                let intro = self.machine.intro_seen;
-                                storage::load_entry(&mut self.machine, &entry);
-                                self.loading = true;
-                                self.close_save_screen();
-                                // Хук загрузки сработает только когда Z80 будет
-                                // исполняться. На станции надо снять нативный
-                                // захват и отложенный вход, иначе эмулятор останется
-                                // замороженным и заглушка не исчезнет.
-                                self.close_all_native();
-                                self.cancel_pending_station();
-                                self.station_native = false;
-                                self.station_emulator = false;
-                                self.flight_emulator = false;
-                                // Загрузка с заставки сразу показывает кадр Z80: хук
-                                // отведёт игру на станцию, не дожидаясь `Space`.
-                                if intro {
-                                    self.splash_emulator = true;
-                                }
-                            }
-                        }
-                        KeyE if !repeat => {
-                            if let Some(entry) = list.entries.get(list.sel).cloned() {
-                                list.status = match storage::export_entry_dialog(&entry) {
-                                    Ok(Some(_)) => "EXPORTED".to_string(),
-                                    Ok(None) => "EXPORT CANCELLED".to_string(),
-                                    Err(_) => "ERROR: EXPORT FAILED".to_string(),
-                                };
-                            }
-                            self.save_screen = Some(storage::SaveScreen::Load(list));
-                        }
-                        KeyI if !repeat => {
-                            list.status = match storage::import_entry_dialog() {
-                                Ok(Some(entry)) => match storage::read_entries() {
-                                    Ok(mut entries) => {
-                                        storage::sorted_for_table(&mut entries);
-                                        list.sel = entries
-                                            .iter()
-                                            .position(|e| {
-                                                e.saved_at == entry.saved_at && e.name == entry.name
-                                            })
-                                            .unwrap_or(0);
-                                        list.entries = entries;
-                                        "IMPORTED".to_string()
-                                    }
-                                    Err(_) => "ERROR: CANNOT READ CATALOG".to_string(),
-                                },
-                                Ok(None) => "IMPORT CANCELLED".to_string(),
-                                Err(_) => "ERROR: IMPORT FAILED".to_string(),
-                            };
-                            self.save_screen = Some(storage::SaveScreen::Load(list));
-                        }
-                        Delete | Backspace if !repeat => {
-                            if list.entries.get(list.sel).is_some() {
-                                list.confirm_delete = true;
-                                list.status = "DELETE SAVE? Y/N".to_string();
-                            }
-                            self.save_screen = Some(storage::SaveScreen::Load(list));
-                        }
-                        _ => {
-                            self.save_screen = Some(storage::SaveScreen::Load(list));
-                        }
-                    }
-                }
+                self.handle_save_list_key(code, repeat, typed, &mut list, false);
+            }
+            Some(storage::SaveScreen::SaveChoice(mut list)) => {
+                self.handle_save_list_key(code, repeat, typed, &mut list, true);
             }
             None => {}
         }

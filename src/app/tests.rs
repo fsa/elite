@@ -2800,6 +2800,7 @@ use crate::world::{
             sel: 0,
             status: String::new(),
             confirm_delete: false,
+            confirm_overwrite: false,
         }));
         app.key_event(KeyCode::Enter, true, false);
         app.key_event(KeyCode::Enter, false, false);
@@ -2913,6 +2914,7 @@ use crate::world::{
             sel: 0,
             status: String::new(),
             confirm_delete: false,
+            confirm_overwrite: false,
         }));
         app.key_event(KeyCode::Enter, true, false);
         app.key_event(KeyCode::Enter, false, false);
@@ -2984,6 +2986,7 @@ use crate::world::{
             sel: 0,
             status: String::new(),
             confirm_delete: false,
+            confirm_overwrite: false,
         });
 
         // Первая загрузка с заставки и возврат в нативный режим станции.

@@ -422,19 +422,40 @@ impl<'a> App<'a> {
         app
     }
 
-    /// Открыть приглашение сохранения: имя берём из текущего блока commander,
-    /// а комментарий подставляем из имени текущей планеты.
-    pub(super) fn open_save_prompt(&mut self) {
+    fn make_save_prompt(&self) -> storage::SavePrompt {
         let name = {
             let layout = world::save_layout_kladov();
             storage::name_from_block(crate::native::commander_block(&self.machine, layout))
         };
-        self.save_screen = Some(storage::SaveScreen::Save(storage::SavePrompt {
+        storage::SavePrompt {
             name,
             comment: storage::sanitize_comment(&self.state.system),
             field: storage::PromptField::Name,
             status: String::new(),
-        }));
+        }
+    }
+
+    /// Открыть экран сохранения: если есть записи, сначала выбрать
+    /// перезапись существующей или создание новой; иначе сразу форма нового.
+    pub(super) fn open_save_prompt(&mut self) {
+        let entries = match storage::read_entries() {
+            Ok(mut entries) => {
+                storage::sorted_for_table(&mut entries);
+                entries
+            }
+            Err(_) => Vec::new(),
+        };
+        self.save_screen = Some(if entries.is_empty() {
+            storage::SaveScreen::Save(self.make_save_prompt())
+        } else {
+            storage::SaveScreen::SaveChoice(storage::LoadList {
+                entries,
+                sel: 0,
+                status: "ENTER SELECT  N NEW  ESC CANCEL".to_string(),
+                confirm_delete: false,
+                confirm_overwrite: false,
+            })
+        });
         self.menu = true;
         self.menu_sel = 0;
         self.input_char = None;
@@ -459,6 +480,7 @@ impl<'a> App<'a> {
             sel: 0,
             status,
             confirm_delete: false,
+            confirm_overwrite: false,
         }));
         self.menu = true;
         self.menu_sel = 0;

@@ -73,6 +73,8 @@ pub struct LoadList {
     pub status: String,
     /// Идёт подтверждение удаления выбранной записи (`Y`/`N`/`Esc`).
     pub confirm_delete: bool,
+    /// Идёт подтверждение перезаписи выбранной записи (`Y`/`N`/`Esc`).
+    pub confirm_overwrite: bool,
 }
 
 /// Полноэкранный экран работы с сохранениями.
@@ -80,6 +82,8 @@ pub struct LoadList {
 pub enum SaveScreen {
     Save(SavePrompt),
     Load(LoadList),
+    /// Выбор: создать новое сохранение или перезаписать существующее.
+    SaveChoice(LoadList),
 }
 
 /// Имя файла для экспорта/headless: `elite-ГГГГ-ММ-ДД_ЧЧ-ММ-СС.zxelite`.
@@ -333,6 +337,23 @@ pub fn sorted_for_table(entries: &mut [Entry]) {
     });
 }
 
+/// Собрать запись из текущего блока командира с заданными метаданными.
+fn entry_from_current(
+    machine: &mut Spectrum,
+    name: &str,
+    comment: &str,
+    layout: crate::native::SaveLayout,
+) -> Entry {
+    let mut data = native::commander_snapshot(machine, layout);
+    write_name_into_block(&mut data, name);
+    Entry {
+        name: sanitize_name(name),
+        comment: sanitize_comment(comment),
+        saved_at: Utc::now().timestamp(),
+        data,
+    }
+}
+
 /// Сохранить текущий блок с введёнными именем и комментарием.
 ///
 /// Имя записывается и в 102-байтовый блок (байт 10 остаётся нулевым), поэтому
@@ -343,14 +364,34 @@ pub fn save_to_catalog(
     comment: &str,
     layout: crate::native::SaveLayout,
 ) -> io::Result<Vec<Entry>> {
-    let mut data = native::commander_snapshot(machine, layout);
-    write_name_into_block(&mut data, name);
-    append_entry(Entry {
-        name: sanitize_name(name),
-        comment: sanitize_comment(comment),
-        saved_at: Utc::now().timestamp(),
-        data,
-    })
+    append_entry(entry_from_current(machine, name, comment, layout))
+}
+
+/// Перезаписать существующую запись текущим блоком командира.
+///
+/// Имя и комментарий берутся из выбранной записи; штамп и данные обновляются.
+/// Если запись уже исчезла из каталога, возвращается ошибка.
+pub fn overwrite_entry(
+    machine: &mut Spectrum,
+    entry: &Entry,
+    layout: crate::native::SaveLayout,
+) -> io::Result<Vec<Entry>> {
+    let Some(path) = catalog_path() else {
+        return Err(io::Error::new(
+            ErrorKind::NotFound,
+            "не найден стандартный каталог данных пользователя",
+        ));
+    };
+    let mut entries = read_entries_from(&path)?;
+    let Some(pos) = entries.iter().position(|e| e == entry) else {
+        return Err(io::Error::new(
+            ErrorKind::NotFound,
+            "сохранение не найдено в каталоге",
+        ));
+    };
+    entries[pos] = entry_from_current(machine, &entry.name, &entry.comment, layout);
+    write_entries_to(&path, &entries)?;
+    Ok(entries)
 }
 
 /// Удалить одну запись из каталога (сравнение по полному содержимому, чтобы

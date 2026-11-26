@@ -173,9 +173,9 @@ pub(crate) fn draw_save_prompt(frame: &mut Frame, prompt: &SavePrompt) {
     }
 }
 
-/// Подтверждение удаления поверх таблицы. Пока оно открыто, остальные
-/// клавиши не меняют выбор и не запускают загрузку.
-fn draw_delete_confirmation(frame: &mut Frame, list: &LoadList, c: i32, scale: usize) {
+/// Подтверждение опасного действия поверх таблицы. Пока оно открыто,
+/// остальные клавиши не меняют выбор и не запускают действие.
+fn draw_confirmation(frame: &mut Frame, list: &LoadList, c: i32, scale: usize) {
     let entry = list.entries.get(list.sel);
     let name = entry
         .map(|e| truncate(&e.name, crate::storage::NAME_LEN))
@@ -183,11 +183,16 @@ fn draw_delete_confirmation(frame: &mut Frame, list: &LoadList, c: i32, scale: u
     let comment = entry
         .map(|e| truncate(&e.comment, crate::storage::COMMENT_LEN))
         .unwrap_or_default();
+    let (title, action) = if list.confirm_delete {
+        ("DELETE SAVE?", "Y DELETE  N KEEP  ESC CANCEL")
+    } else {
+        ("OVERWRITE SAVE?", "Y OVERWRITE  N KEEP  ESC CANCEL")
+    };
     let lines = [
-        "DELETE SAVE?".to_string(),
+        title.to_string(),
         format!("NAME: {name}"),
         format!("COMMENT: {comment}"),
-        "Y DELETE  N KEEP  ESC CANCEL".to_string(),
+        action.to_string(),
     ];
     let chars = lines
         .iter()
@@ -218,12 +223,17 @@ fn draw_delete_confirmation(frame: &mut Frame, list: &LoadList, c: i32, scale: u
     }
 }
 
-/// Таблица сохранений. Строки приходят уже отсортированными: свежие сверху.
-pub(crate) fn draw_load_list(frame: &mut Frame, list: &LoadList) {
+fn draw_entries_table(
+    frame: &mut Frame,
+    list: &LoadList,
+    title: &str,
+    footer1: &str,
+    footer2: &str,
+) {
     let c = cell(frame);
     let scale = (c / 8).max(1) as usize;
     let cols = columns(frame, c);
-    let x = draw_base(frame, c, LIST_TITLE);
+    let x = draw_base(frame, c, title);
     let header_y = row_y(x, c, 2);
     let name_x = x;
     let comment_x = name_x + (crate::storage::NAME_LEN + 1) as i32 * c;
@@ -276,22 +286,8 @@ pub(crate) fn draw_load_list(frame: &mut Frame, list: &LoadList) {
     }
 
     let footer_y = frame.height as i32 - border(c) - 3 * c;
-    frame.draw_text(
-        ZX_FONT,
-        x,
-        footer_y,
-        "ENTER LOAD  E EXPORT  I IMPORT",
-        GREY,
-        scale,
-    );
-    frame.draw_text(
-        ZX_FONT,
-        x,
-        row_y(footer_y, c, 1),
-        "DEL DELETE  ESC CLOSE",
-        GREY,
-        scale,
-    );
+    frame.draw_text(ZX_FONT, x, footer_y, footer1, GREY, scale);
+    frame.draw_text(ZX_FONT, x, row_y(footer_y, c, 1), footer2, GREY, scale);
     if !list.status.is_empty() {
         frame.draw_text(
             ZX_FONT,
@@ -302,9 +298,31 @@ pub(crate) fn draw_load_list(frame: &mut Frame, list: &LoadList) {
             scale,
         );
     }
-    if list.confirm_delete {
-        draw_delete_confirmation(frame, list, c, scale);
+    if list.confirm_delete || list.confirm_overwrite {
+        draw_confirmation(frame, list, c, scale);
     }
+}
+
+/// Таблица сохранений. Строки приходят уже отсортированными: свежие сверху.
+pub(crate) fn draw_load_list(frame: &mut Frame, list: &LoadList) {
+    draw_entries_table(
+        frame,
+        list,
+        LIST_TITLE,
+        "ENTER LOAD  E EXPORT  I IMPORT",
+        "DEL DELETE  ESC CLOSE",
+    );
+}
+
+/// Выбор слота для сохранения: существующий можно перезаписать, новый — создать.
+pub(crate) fn draw_save_choice(frame: &mut Frame, list: &LoadList) {
+    draw_entries_table(
+        frame,
+        list,
+        PROMPT_TITLE,
+        "ENTER OVERWRITE  N NEW SAVE",
+        "ESC CANCEL",
+    );
 }
 
 #[cfg(test)]
@@ -325,6 +343,7 @@ mod tests {
             sel: 0,
             status: String::new(),
             confirm_delete: false,
+            confirm_overwrite: false,
         };
         draw_load_list(&mut frame, &list);
         let plain = frame.pixels().to_vec();

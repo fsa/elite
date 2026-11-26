@@ -15,7 +15,7 @@ use crate::galaxy;
 use crate::state::Screen;
 use crate::storage;
 use crate::ui::menu::draw_pause_menu;
-use crate::ui::saves::{draw_load_list, draw_save_prompt};
+use crate::ui::saves::{draw_load_list, draw_save_choice, draw_save_prompt};
 use crate::ui::present::{blit_zx_frame, draw_debug_panel};
 use crate::{native, world};
 
@@ -754,6 +754,9 @@ impl App<'_> {
                     draw_save_prompt(&mut self.machine.hd, &prompt)
                 }
                 storage::SaveScreen::Load(list) => draw_load_list(&mut self.machine.hd, &list),
+                storage::SaveScreen::SaveChoice(list) => {
+                    draw_save_choice(&mut self.machine.hd, &list)
+                }
             }
         }
 
