@@ -445,18 +445,45 @@ pub fn export_entry_dialog(entry: &Entry) -> io::Result<Option<PathBuf>> {
     Ok(Some(path))
 }
 
-/// Собрать запись из внешнего файла ровно в 102 байта.
+/// Проверить внешний блок commander перед импортом.
 ///
-/// В дате остаётся mtime файла (это единственная дата, которую несёт блок),
-/// а в комментарий пишется момент импорта.
-pub fn entry_from_save_file(path: &Path) -> io::Result<Entry> {
-    let data = fs::read(path)?;
+/// Это единственная проверка файлов сохранения: её используют и диалог
+/// импорта, и стартовая загрузка через `entry_from_save_file`. В оригинале
+/// блок начинается с `PilotName` (`JAMESON   ` и завершающий `0x00`, см.
+/// `kladov/11_j_init_and_data.asm` и docs/kladov_save.md): первые 10 байт —
+/// заглавные латинские буквы и пробелы, байт `#0A` — ноль.
+fn validate_save_block(data: &[u8]) -> io::Result<()> {
     if data.len() != COMMANDER_LEN {
         return Err(io::Error::new(
             ErrorKind::InvalidData,
             format!("ожидалось {COMMANDER_LEN} байт, получено {}", data.len()),
         ));
     }
+    if data[NAME_LEN] != 0 {
+        return Err(io::Error::new(
+            ErrorKind::InvalidData,
+            "после имени пилота нет завершающего 0x00",
+        ));
+    }
+    let name = &data[..NAME_LEN];
+    if !name.iter().any(u8::is_ascii_uppercase)
+        || name.iter().any(|b| !b.is_ascii_uppercase() && *b != b' ')
+    {
+        return Err(io::Error::new(
+            ErrorKind::InvalidData,
+            "в начале файла нет имени пилота",
+        ));
+    }
+    Ok(())
+}
+
+/// Собрать запись из внешнего файла ровно в 102 байта.
+///
+/// В дате остаётся mtime файла (это единственная дата, которую несёт блок),
+/// а в комментарий пишется момент импорта.
+pub fn entry_from_save_file(path: &Path) -> io::Result<Entry> {
+    let data = fs::read(path)?;
+    validate_save_block(&data)?;
     let saved_at = fs::metadata(path)
         .ok()
         .and_then(|m| m.modified().ok())
@@ -574,7 +601,7 @@ mod tests {
     #[test]
     fn import_takes_file_mtime() {
         let path = temp_path("zxelite");
-        fs::write(&path, vec![0u8; COMMANDER_LEN]).unwrap();
+        fs::write(&path, &sample(0).data).unwrap();
         let stamp = UNIX_EPOCH + std::time::Duration::from_secs(1_700_000_123);
         fs::File::options()
             .write(true)
@@ -595,5 +622,31 @@ mod tests {
         fs::write(&path, vec![0u8; COMMANDER_LEN - 1]).unwrap();
         assert!(entry_from_save_file(&path).is_err());
         let _ = fs::remove_file(&path);
+    }
+
+    #[test]
+    fn import_rejects_missing_name_terminator() {
+        let mut data = sample(0).data;
+        data[NAME_LEN] = b'X';
+        assert!(validate_save_block(&data).is_err());
+    }
+
+    #[test]
+    fn import_rejects_invalid_pilot_name() {
+        let mut data = sample(0).data;
+        data[0] = b'1';
+        assert!(validate_save_block(&data).is_err());
+    }
+
+    #[test]
+    fn import_rejects_empty_pilot_name() {
+        let mut data = sample(0).data;
+        data[..NAME_LEN].fill(b' ');
+        assert!(validate_save_block(&data).is_err());
+    }
+
+    #[test]
+    fn valid_pilot_name_passes_check() {
+        assert!(validate_save_block(&sample(0).data).is_ok());
     }
 }

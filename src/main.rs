@@ -61,6 +61,7 @@ fn main() {
         let path = std::path::Path::new(path);
         if let Err(e) = storage::load_startup_save(&mut machine, path) {
             eprintln!("Ошибка загрузки при старте: {e}");
+            std::process::exit(1);
         }
     }
     if opts.headless {
