@@ -370,22 +370,25 @@ impl App<'_> {
                 self.play_frame_audio(true);
             }
         } else {
+            // Ввод переносим в Z80 только вместе с шагом эмуляции: кадр
+            // рендера без накопленного кадра не должен забирать одноразовую
+            // клавишу (`pending_key`) до того, как её увидит игра.
             match self.state.screen {
                 Screen::GalacticMap => {
                     if !self.state.menu {
-                        let in_flight = !self.state.intro
-                            && self.state.location == crate::state::Location::Space;
-                        if self.pending_station_native.is_some() {
-                            self.forward_input();
-                        } else if self.pending_key.is_some() {
-                            self.forward_pending_key();
-                        } else if in_flight {
-                            self.apply_input();
-                        } else {
-                            self.machine.release_all_keys();
-                            self.machine.release_joystick();
-                        }
                         if z80_frames > 0 {
+                            let in_flight = !self.state.intro
+                                && self.state.location == crate::state::Location::Space;
+                            if self.pending_station_native.is_some() {
+                                self.forward_input();
+                            } else if self.pending_key.is_some() {
+                                self.forward_pending_key();
+                            } else if in_flight {
+                                self.apply_input();
+                            } else {
+                                self.machine.release_all_keys();
+                                self.machine.release_joystick();
+                            }
                             self.machine.run_frames(z80_frames);
                             emulator_ran = true;
                             self.switch_to_flight_on_transition();
@@ -403,8 +406,8 @@ impl App<'_> {
                 Screen::EquipShop => {
                     if !self.state.menu {
                         if self.pending_station_native.is_some() {
-                            self.forward_input();
                             if z80_frames > 0 {
+                                self.forward_input();
                                 self.machine.run_frames(z80_frames);
                                 emulator_ran = true;
                                 self.play_frame_audio(true);
@@ -420,15 +423,15 @@ impl App<'_> {
                 }
                 Screen::Inventory => {
                     if !self.state.menu {
-                        // Из эмулятора экран открывается, только когда оригинал
-                        // уже на своём инвентаре; перед заморозкой станции он
-                        // должен получить `Enter`.
-                        if self.pending_station_native.is_some() {
-                            self.forward_input();
-                        } else {
-                            self.apply_input();
-                        }
                         if z80_frames > 0 {
+                            // Из эмулятора экран открывается, только когда
+                            // оригинал уже на своём инвентаре; перед заморозкой
+                            // станции он должен получить `Enter`.
+                            if self.pending_station_native.is_some() {
+                                self.forward_input();
+                            } else {
+                                self.apply_input();
+                            }
                             self.machine.run_frames(z80_frames);
                             emulator_ran = true;
                             self.switch_to_flight_on_transition();
@@ -446,39 +449,35 @@ impl App<'_> {
                     }
                 }
                 Screen::PilotStatus | Screen::PlanetInfo | Screen::Market => {
-                    if !self.state.menu {
+                    if !self.state.menu && z80_frames > 0 {
                         self.apply_input();
-                        if z80_frames > 0 {
-                            self.machine.run_frames(z80_frames);
-                            emulator_ran = true;
-                            self.switch_to_flight_on_transition();
-                            self.open_pending_status();
-                            self.open_pending_sysinfo();
-                            self.open_pending_market();
-                            self.open_pending_shop();
-                            self.open_pending_flight();
-                            self.follow_native_screens();
-                            if self.machine.save_requested {
-                                self.machine.save_requested = false;
-                                self.open_save_prompt();
-                            }
-                            self.sync_flight_after_frames(z80_frames);
-                            self.play_frame_audio(true);
+                        self.machine.run_frames(z80_frames);
+                        emulator_ran = true;
+                        self.switch_to_flight_on_transition();
+                        self.open_pending_status();
+                        self.open_pending_sysinfo();
+                        self.open_pending_market();
+                        self.open_pending_shop();
+                        self.open_pending_flight();
+                        self.follow_native_screens();
+                        if self.machine.save_requested {
+                            self.machine.save_requested = false;
+                            self.open_save_prompt();
                         }
+                        self.sync_flight_after_frames(z80_frames);
+                        self.play_frame_audio(true);
                     } else {
                         self.machine.release_all_keys();
                         self.machine.release_joystick();
                     }
                 }
                 Screen::Flight | Screen::Animation(_) => {
-                    if !self.state.menu {
+                    if !self.state.menu && z80_frames > 0 {
                         self.forward_input();
-                        if z80_frames > 0 {
-                            self.machine.run_frames(z80_frames);
-                            emulator_ran = true;
-                            self.sync_flight_after_frames(z80_frames);
-                            self.play_frame_audio(true);
-                        }
+                        self.machine.run_frames(z80_frames);
+                        emulator_ran = true;
+                        self.sync_flight_after_frames(z80_frames);
+                        self.play_frame_audio(true);
                     } else {
                         self.machine.release_all_keys();
                         self.machine.release_joystick();
@@ -495,27 +494,25 @@ impl App<'_> {
                     }
                 }
                 Screen::Emulator(_) => {
-                    if self.state.menu {
+                    if !self.state.menu && z80_frames > 0 {
+                        self.apply_input();
+                        self.machine.run_frames(z80_frames);
+                        emulator_ran = true;
+                        self.switch_to_flight_on_transition();
+                        self.open_pending_status();
+                        self.open_pending_sysinfo();
+                        self.open_pending_market();
+                        self.open_pending_shop();
+                        self.open_pending_flight();
+                        self.follow_native_screens();
+                        if self.machine.save_requested {
+                            self.machine.save_requested = false;
+                            self.open_save_prompt();
+                        }
+                        self.play_frame_audio(true);
+                    } else {
                         self.machine.release_all_keys();
                         self.machine.release_joystick();
-                    } else {
-                        self.apply_input();
-                        if z80_frames > 0 {
-                            self.machine.run_frames(z80_frames);
-                            emulator_ran = true;
-                            self.switch_to_flight_on_transition();
-                            self.open_pending_status();
-                            self.open_pending_sysinfo();
-                            self.open_pending_market();
-                            self.open_pending_shop();
-                            self.open_pending_flight();
-                            self.follow_native_screens();
-                            if self.machine.save_requested {
-                                self.machine.save_requested = false;
-                                self.open_save_prompt();
-                            }
-                            self.play_frame_audio(true);
-                        }
                     }
                 }
             }

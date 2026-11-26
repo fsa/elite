@@ -2024,6 +2024,54 @@ use crate::world::{
         assert!(!app.flight.docking_blackout, "затемнение не снято");
     }
 
+    /// `F1` на станции должен запускать вылет, даже если кадр рендера попал
+    /// между фиксированными кадрами Z80. Раньше одноразовая клавиша `1`
+    /// переносилась в матрицу на каждом кадре рендера и стиралась следующим
+    /// кадром до шага эмуляции: игра оставалась на станции, а приложение
+    /// показывало экран эмулятора вместо нативного вылета.
+    #[test]
+    fn f1_launch_survives_frame_without_z80_step() {
+        let opts = kladov_options();
+        let mut m = boot_kladov();
+        let (intro, game) = scene_markers();
+        m.intro_range = intro;
+        m.game_marker = game;
+        for _ in 0..30 {
+            m.run_frame();
+        }
+        native::start_game(&mut m, save_layout_kladov());
+        for _ in 0..1500 {
+            m.run_frame();
+        }
+        let mut app = App::new(m, &opts);
+        app.key_event(KeyCode::F1, true, false);
+        assert!(!app.station_native, "F1 не снял нативный режим станции");
+        assert!(app.pending_launch, "F1 не запомнил вылет");
+
+        // Кадр рендера без шага Z80: ввод не переносится в эмулятор, но
+        // отложенная клавиша и запрос вылета должны сохраниться.
+        app.machine.release_all_keys();
+        assert!(
+            app.pending_key.is_some(),
+            "клавиша 1 потерялась до шага Z80"
+        );
+        assert!(app.pending_launch, "запрос вылета потерялся до шага Z80");
+
+        // Следующий кадр рендера уже выполняет кадр Z80.
+        app.apply_input();
+        let (row, bit) = matrix_pos(KeyCode::Digit1).expect("1 в матрице");
+        assert_eq!(
+            app.machine.keyboard[row] & (1 << bit),
+            0,
+            "F1 не передал игре клавишу 1"
+        );
+        app.machine.run_frame();
+        app.switch_to_flight_on_transition();
+        app.open_pending_flight();
+        assert!(app.flight.active, "вылет не начался после кадра без Z80");
+        assert_eq!(app.flight.transition_kind(), Some(flight::TransitionKind::Launch));
+    }
+
     /// Реальная игра: `F1` на станции запускает вылет, нативный рендер
     /// включается уже во время перехода и показывает свою анимацию вылета.
     #[test]
