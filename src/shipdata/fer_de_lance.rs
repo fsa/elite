@@ -2,7 +2,7 @@
 //!
 //! Модель из таблицы `AdrDataShips` версии Кладова.
 
-use super::{Edge, Face, Ship, Stats, Vertex};
+use super::{Edge, Face, FaceStyle, Ship, Stats, Vertex};
 
 pub(super) static SHIP_D_FERDELANCE: Ship = Ship {
     name: "d_FerDeLance",
@@ -54,17 +54,19 @@ pub(super) static SHIP_D_FERDELANCE: Ship = Ship {
         Edge { lod: 0xd, v: [4, 3], faces: 0x42 },
         Edge { lod: 0xd, v: [9, 6], faces: 0x53 },
         Edge { lod: 0xd, v: [8, 7], faces: 0x43 },
-        Edge { lod: 0xb, v: [18, 17], faces: 0x99 },
-        Edge { lod: 0xb, v: [12, 17], faces: 0x99 },
-        Edge { lod: 0xb, v: [12, 18], faces: 0x99 },
+        // Нижний вырез остаётся в грани 9 и заливается добавленной гранью 12.
+        Edge { lod: 0xb, v: [18, 17], faces: 0x9c },
+        Edge { lod: 0xb, v: [12, 17], faces: 0x9c },
+        Edge { lod: 0xb, v: [12, 18], faces: 0x9c },
         Edge { lod: 0xb, v: [6, 1], faces: 0x76 },
         Edge { lod: 0xb, v: [7, 1], faces: 0x86 },
-        Edge { lod: 0xb, v: [15, 11], faces: 0x0 },
-        Edge { lod: 0xb, v: [10, 16], faces: 0x0 },
-        Edge { lod: 0x9, v: [13, 16], faces: 0x0 },
-        Edge { lod: 0x9, v: [13, 10], faces: 0x0 },
-        Edge { lod: 0x9, v: [14, 11], faces: 0x0 },
-        Edge { lod: 0x9, v: [15, 14], faces: 0x0 },
+        // Верхние вырезы остаются в грани 0 и заливаются гранями 10/11.
+        Edge { lod: 0xb, v: [15, 11], faces: 0x0b },
+        Edge { lod: 0xb, v: [10, 16], faces: 0x0a },
+        Edge { lod: 0x9, v: [13, 16], faces: 0x0a },
+        Edge { lod: 0x9, v: [13, 10], faces: 0x0a },
+        Edge { lod: 0x9, v: [14, 11], faces: 0x0b },
+        Edge { lod: 0x9, v: [15, 14], faces: 0x0b },
     ],
     faces: &[
         Face { nx: 0, ny: 24, nz: 6, flags: 0x1b },
@@ -77,6 +79,15 @@ pub(super) static SHIP_D_FERDELANCE: Ship = Ship {
         Face { nx: -12, ny: 46, nz: -19, flags: 0xbb },
         Face { nx: 12, ny: 46, nz: -19, flags: 0x3e },
         Face { nx: 0, ny: -28, nz: 0, flags: 0x5f },
+        // Локальные дополнения: нормали повторяют грани 0 и 9, чтобы
+        // заливка вырезов появлялась при тех же ракурсах.
+        Face { nx: 0, ny: 24, nz: 6, flags: 0x1b },
+        Face { nx: 0, ny: 24, nz: 6, flags: 0x1b },
+        Face { nx: 0, ny: -28, nz: 0, flags: 0x5f },
     ],
-    face_styles: &[],
+    face_styles: &[
+        (10, FaceStyle::Color(0xFF20_2E3A)),
+        (11, FaceStyle::Color(0xFF20_2E3A)),
+        (12, FaceStyle::Color(0xFF34_281C)),
+    ],
 };

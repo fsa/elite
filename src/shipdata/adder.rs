@@ -2,7 +2,7 @@
 //!
 //! Модель из таблицы `AdrDataShips` версии Кладова.
 
-use super::{Edge, Face, Ship, Stats, Vertex};
+use super::{Edge, Face, FaceStyle, Ship, Stats, Vertex};
 
 pub(super) static SHIP_D_ADDER: Ship = Ship {
     name: "d_Adder",
@@ -62,10 +62,11 @@ pub(super) static SHIP_D_ADDER: Ship = Ship {
         Edge { lod: 0x1f, v: [13, 12], faces: 0xb1 },
         Edge { lod: 0x7, v: [3, 0], faces: 0x54 },
         Edge { lod: 0x7, v: [2, 1], faces: 0x32 },
-        Edge { lod: 0x7, v: [15, 14], faces: 0x0 },
-        Edge { lod: 0x3, v: [15, 16], faces: 0x0 },
-        Edge { lod: 0x3, v: [14, 17], faces: 0x0 },
-        Edge { lod: 0x5, v: [17, 16], faces: 0x0 },
+        // Окно остаётся в грани 0 и заливается добавленной гранью 13.
+        Edge { lod: 0x7, v: [15, 14], faces: 0x0d },
+        Edge { lod: 0x3, v: [15, 16], faces: 0x0d },
+        Edge { lod: 0x3, v: [14, 17], faces: 0x0d },
+        Edge { lod: 0x5, v: [17, 16], faces: 0x0d },
     ],
     faces: &[
         Face { nx: 0, ny: 39, nz: 10, flags: 0x1f },
@@ -81,6 +82,9 @@ pub(super) static SHIP_D_ADDER: Ship = Ship {
         Face { nx: 0, ny: 28, nz: 0, flags: 0x1f },
         Face { nx: 0, ny: -28, nz: 0, flags: 0x5e },
         Face { nx: 0, ny: 0, nz: -160, flags: 0x3f },
+        // Локальное дополнение: нормаль повторяет грань 0, чтобы стекло
+        // появлялось при тех же ракурсах, что и верхняя поверхность.
+        Face { nx: 0, ny: 39, nz: 10, flags: 0x1f },
     ],
-    face_styles: &[],
+    face_styles: &[(13, FaceStyle::Color(0xFF20_2E3A))],
 };

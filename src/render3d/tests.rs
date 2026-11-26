@@ -47,6 +47,103 @@ fn station_opening_is_black() {
     );
 }
 
+/// Вырезы Fer-de-Lance заливаются цветными поверхностями, а не чёрным фоном.
+/// Верхняя пара — затемнённое стекло, нижний треугольник — тёплый металл.
+#[test]
+fn fer_de_lance_cutouts_are_filled() {
+    const GLASS: u32 = 0xFF20_2E3A;
+    const TITANIUM: u32 = 0xFF34_281C;
+
+    let ship = shipdata::find("d_FerDeLance").expect("модель Fer-de-Lance не найдена");
+    assert_eq!(ship.face_style(10), FaceStyle::Color(GLASS));
+    assert_eq!(ship.face_style(11), FaceStyle::Color(GLASS));
+    assert_eq!(ship.face_style(12), FaceStyle::Color(TITANIUM));
+
+    let screen = Screen {
+        cx: 200.0,
+        cy: 200.0,
+        k: 400.0,
+        bx: 0.0,
+        by: 0.0,
+    };
+    let count = |rot: Rotation, color: u32| {
+        let mut f = Frame::new(400, 400);
+        f.clear(0xFFFF_0000); // контрастный фон: дыра осталась бы красной
+        draw_ship_tinted(&mut f, ship, &rot, [0.0, 0.0, 512.0], &screen, SHIP_COLOR, None);
+        f.pixels().iter().filter(|&&p| p == color).count()
+    };
+    let quarter = std::f32::consts::FRAC_PI_2;
+
+    assert!(
+        count(Rotation::axis_angle([1.0, 0.0, 0.0], -quarter), GLASS) > 0,
+        "верхние вырезы должны быть залиты стеклом"
+    );
+    assert!(
+        count(Rotation::axis_angle([1.0, 0.0, 0.0], quarter), TITANIUM) > 0,
+        "нижний вырез должен быть залит тёплым металлом"
+    );
+}
+
+/// Прямоугольное окно Adder заливается тем же затемнённым стеклом.
+#[test]
+fn adder_window_is_glass() {
+    const GLASS: u32 = 0xFF20_2E3A;
+
+    let ship = shipdata::find("d_Adder").expect("модель Adder не найдена");
+    assert_eq!(ship.face_style(13), FaceStyle::Color(GLASS));
+
+    let mut f = Frame::new(400, 400);
+    f.clear(0xFFFF_0000); // контрастный фон: дыра осталась бы красной
+    let screen = Screen {
+        cx: 200.0,
+        cy: 200.0,
+        k: 400.0,
+        bx: 0.0,
+        by: 0.0,
+    };
+    let rot = Rotation::axis_angle([1.0, 0.0, 0.0], -std::f32::consts::FRAC_PI_2);
+    draw_ship_tinted(&mut f, ship, &rot, [0.0, 0.0, 512.0], &screen, SHIP_COLOR, None);
+
+    assert!(
+        f.pixels().iter().any(|&p| p == GLASS),
+        "окно должно быть залито стеклом"
+    );
+}
+
+/// Стрелка Krait заливается тёплым металлом с обеих сторон изгиба корпуса.
+#[test]
+fn krait_arrow_is_titanium() {
+    const TITANIUM: u32 = 0xFF34_281C;
+
+    let ship = shipdata::find("d_Krait").expect("модель Krait не найдена");
+    assert_eq!(ship.face_style(8), FaceStyle::Color(TITANIUM));
+    assert_eq!(ship.face_style(9), FaceStyle::Color(TITANIUM));
+
+    let mut f = Frame::new(400, 400);
+    f.clear(0xFFFF_0000); // контрастный фон: незакрытый вырез остался бы красным
+    let screen = Screen {
+        cx: 200.0,
+        cy: 200.0,
+        k: 400.0,
+        bx: 0.0,
+        by: 0.0,
+    };
+    let rot = Rotation::axis_angle([1.0, 0.0, 0.0], -std::f32::consts::FRAC_PI_2);
+    draw_ship_tinted(&mut f, ship, &rot, [0.0, 0.0, 512.0], &screen, SHIP_COLOR, None);
+
+    let (mut left, mut right) = (0, 0);
+    for (i, &p) in f.pixels().iter().enumerate() {
+        if p == TITANIUM {
+            if i % 400 < 200 {
+                left += 1;
+            } else {
+                right += 1;
+            }
+        }
+    }
+    assert!(left > 0 && right > 0, "стрелка должна быть залита с обеих сторон изгиба: {left}/{right}");
+}
+
 /// Обломки корабля (`d_Alloys`) в ROM не имеют нормалей, поэтому без
 /// добавленных граней они оставались белым каркасом. Теперь они заливаются
 /// обычным цветом корпуса — в том числе после поворота на 180°.

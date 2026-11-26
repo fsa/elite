@@ -47,10 +47,14 @@ pub(super) static SHIP_D_KRAIT: Ship = Ship {
         Edge { lod: 0x1e, v: [5, 3], faces: 0x10 },
         Edge { lod: 0x1e, v: [6, 4], faces: 0x32 },
         Edge { lod: 0x8, v: [2, 1], faces: 0x54 },
-        Edge { lod: 0x9, v: [10, 7], faces: 0x0 },
-        Edge { lod: 0x6, v: [10, 8], faces: 0x0 },
-        Edge { lod: 0x9, v: [9, 7], faces: 0x33 },
-        Edge { lod: 0x6, v: [9, 8], faces: 0x33 },
+        // Стрелка на верху: правая половина — грань 0, левая — грань 3.
+        Edge { lod: 0x9, v: [10, 7], faces: 0x80 },
+        Edge { lod: 0x6, v: [10, 8], faces: 0x80 },
+        Edge { lod: 0x9, v: [9, 7], faces: 0x93 },
+        Edge { lod: 0x6, v: [9, 8], faces: 0x93 },
+        // Замыкающие ребро по изгибу корпуса: только для заливки, без линии.
+        Edge { lod: 0x0, v: [7, 8], faces: 0x80 },
+        Edge { lod: 0x0, v: [7, 8], faces: 0x93 },
         // Модификация модели: треугольники двигателей в основании входят
         // и в задние грани 4/5, и в отдельные грани 6/7 со свечением.
         Edge { lod: 0x8, v: [15, 11], faces: 0x64 },
@@ -70,6 +74,14 @@ pub(super) static SHIP_D_KRAIT: Ship = Ship {
         // Модификация модели: треугольники двигателей в основании.
         Face { nx: 38, ny: 0, nz: -77, flags: 0x3f },
         Face { nx: -38, ny: 0, nz: -77, flags: 0xbe },
+        // Стрелка: нормали повторяют грани 0 и 3 по обе стороны изгиба.
+        Face { nx: 3, ny: 24, nz: 3, flags: 0x1f },
+        Face { nx: -3, ny: 24, nz: 3, flags: 0x9e },
     ],
-    face_styles: &[(6, FaceStyle::EngineGlow), (7, FaceStyle::EngineGlow)],
+    face_styles: &[
+        (6, FaceStyle::EngineGlow),
+        (7, FaceStyle::EngineGlow),
+        (8, FaceStyle::Color(0xFF34_281C)),
+        (9, FaceStyle::Color(0xFF34_281C)),
+    ],
 };
