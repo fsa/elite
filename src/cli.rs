@@ -3,6 +3,13 @@
 use std::env;
 use std::process::exit;
 
+/// Версия сборки. В релизных сборках CI задаёт `ELITE_VERSION` из имени тега;
+/// при обычной локальной сборке используется версия из `Cargo.toml`.
+pub const VERSION: &str = match option_env!("ELITE_VERSION") {
+    Some(tag) => tag,
+    None => env!("CARGO_PKG_VERSION"),
+};
+
 pub struct Options {
     pub headless: bool,
     pub frames: u64,
@@ -57,10 +64,15 @@ pub fn parse_args() -> Options {
             "--save" => opts.save = args.next(),
             "--fullscreen" => opts.fullscreen = true,
             "--debug" => opts.debug = true,
+            "-V" | "--version" => {
+                println!("elite {VERSION}");
+                exit(0);
+            }
             "-h" | "--help" => {
                 println!(
-                    "usage: elite [--headless] [--frames N] [--dump out.ppm] [--mute] [--audio] [--wav out.wav] [--native] [--save FILE] [--fullscreen] [--debug]"
+                    "usage: elite [--headless] [--frames N] [--dump out.ppm] [--mute] [--audio] [--wav out.wav] [--native] [--save FILE] [--fullscreen] [--debug] [--version]"
                 );
+                println!("  -V, --version показать версию сборки (тег релиза)");
                 println!("  --mute     отключить вывод звука через PipeWire");
                 println!("  --audio    выводить звук и в headless-режиме (реальное время)");
                 println!("  --wav FILE сохранить звук в WAV-файл");
