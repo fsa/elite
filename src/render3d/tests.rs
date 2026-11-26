@@ -144,6 +144,41 @@ fn krait_arrow_is_titanium() {
     assert!(left > 0 && right > 0, "стрелка должна быть залита с обеих сторон изгиба: {left}/{right}");
 }
 
+/// Треугольники в носу Kladov Scout заливаются тёплым металлом.
+#[test]
+fn kladov_scout_nose_triangles_are_titanium() {
+    const TITANIUM: u32 = 0xFF34_281C;
+
+    let ship = shipdata::find("stru_63AF").expect("модель Kladov Scout не найдена");
+    assert_eq!(ship.face_style(12), FaceStyle::Color(TITANIUM));
+    assert_eq!(ship.face_style(13), FaceStyle::Color(TITANIUM));
+
+    let screen = Screen {
+        cx: 200.0,
+        cy: 200.0,
+        k: 400.0,
+        bx: 0.0,
+        by: 0.0,
+    };
+    let count = |rot: Rotation| {
+        let mut f = Frame::new(400, 400);
+        f.clear(0xFFFF_0000); // контрастный фон: незакрытый вырез остался бы красным
+        draw_ship_tinted(&mut f, ship, &rot, [0.0, 0.0, 512.0], &screen, SHIP_COLOR, None);
+        f.pixels().iter().filter(|&&p| p == TITANIUM).count()
+    };
+
+    let pi = std::f32::consts::PI;
+    let quarter = std::f32::consts::FRAC_PI_2;
+    assert!(
+        count(Rotation::axis_angle([0.0, 1.0, 0.0], pi)) > 0,
+        "передний треугольник должен быть залит тёплым металлом"
+    );
+    assert!(
+        count(Rotation::axis_angle([1.0, 0.0, 0.0], -quarter)) > 0,
+        "верхний треугольник должен быть залит тёплым металлом"
+    );
+}
+
 /// Обломки корабля (`d_Alloys`) в ROM не имеют нормалей, поэтому без
 /// добавленных граней они оставались белым каркасом. Теперь они заливаются
 /// обычным цветом корпуса — в том числе после поворота на 180°.

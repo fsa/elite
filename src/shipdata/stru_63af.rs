@@ -4,7 +4,7 @@
 //! канонического названия; подпись `Kladov Scout` для витрины задана
 //! локально, в ROM имени нет.
 
-use super::{Edge, Face, Ship, Stats, Vertex};
+use super::{Edge, Face, FaceStyle, Ship, Stats, Vertex};
 
 pub(super) static SHIP_STRU_63AF: Ship = Ship {
     name: "stru_63AF",
@@ -71,10 +71,21 @@ pub(super) static SHIP_STRU_63AF: Ship = Ship {
         Edge { lod: 0x1f, v: [20, 19], faces: 0xb9 },
         Edge { lod: 0x1f, v: [21, 18], faces: 0xba },
         Edge { lod: 0x1f, v: [21, 19], faces: 0xba },
-        Edge { lod: 0x1d, v: [1, 22], faces: 0x0 },
-        Edge { lod: 0x1d, v: [0, 22], faces: 0x0 },
-        Edge { lod: 0x1d, v: [1, 23], faces: 0x99 },
-        Edge { lod: 0x1d, v: [0, 23], faces: 0x99 },
+        // Треугольники в носу: остаются в гранях 0/9 и заливаются гранями 12/13.
+        Edge { lod: 0x1d, v: [1, 22], faces: 0xc0 },
+        Edge { lod: 0x1d, v: [0, 22], faces: 0xc0 },
+        Edge { lod: 0x1d, v: [1, 23], faces: 0x9d },
+        Edge { lod: 0x1d, v: [0, 23], faces: 0x9d },
+        // Конструктивное замыкание контуров новых граней.
+        Edge { lod: 0x0, v: [1, 0], faces: 0xdc },
+        // Модификация модели: невидимые закрывающие рёбра для боковых граней 1-8.
+        // Они нужны только для контура заливки; lod=0 скрывает линию.
+        Edge { lod: 0x0, v: [4, 6], faces: 0x31 },   // грани 1, 3
+        Edge { lod: 0x0, v: [5, 7], faces: 0x42 },   // грани 2, 4
+        Edge { lod: 0x0, v: [8, 10], faces: 0x53 },  // грани 3, 5
+        Edge { lod: 0x0, v: [9, 11], faces: 0x64 },  // грани 4, 6
+        Edge { lod: 0x0, v: [12, 14], faces: 0x75 }, // грани 5, 7
+        Edge { lod: 0x0, v: [13, 15], faces: 0x86 }, // грани 6, 8
     ],
     faces: &[
         Face { nx: 0, ny: 0, nz: 90, flags: 0x1f },
@@ -89,6 +100,13 @@ pub(super) static SHIP_STRU_63AF: Ship = Ship {
         Face { nx: 0, ny: 80, nz: -5, flags: 0x3f },
         Face { nx: 0, ny: -80, nz: -5, flags: 0x7e },
         Face { nx: 0, ny: 0, nz: -60, flags: 0x3f },
+        // Локальные дополнения: нормали повторяют грани 0 и 9, чтобы
+        // треугольники в носу заливались при тех же ракурсах.
+        Face { nx: 0, ny: 0, nz: 90, flags: 0x1f },
+        Face { nx: 0, ny: 80, nz: -5, flags: 0x3f },
     ],
-    face_styles: &[],
+    face_styles: &[
+        (12, FaceStyle::Color(0xFF34_281C)),
+        (13, FaceStyle::Color(0xFF34_281C)),
+    ],
 };

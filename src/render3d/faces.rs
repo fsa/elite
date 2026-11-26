@@ -5,6 +5,8 @@ use super::*;
 
 /// Контур обращённой к камере грани в экранных координатах.
 pub(super) struct FaceShape {
+    /// Индекс грани в модели, для детерминированного порядка при равной глубине.
+    pub(super) fi: usize,
     /// Рёбра контура в индексах вершин модели (петель может быть несколько,
     /// например вырезы двигателей).
     pub(super) edges: Vec<(usize, usize)>,
@@ -206,29 +208,118 @@ pub(super) fn face_shapes(ship: &Ship, scr: &[(f32, f32, f32)], vis: &[bool]) ->
             }),
             None => f32::MAX,
         };
-        let (mut x0, mut y0, mut x1, mut y1) = (f32::MAX, f32::MAX, f32::MIN, f32::MIN);
-        for &(i, j) in &edges {
-            for k in [i, j] {
-                x0 = x0.min(scr[k].0);
-                x1 = x1.max(scr[k].0);
-                y0 = y0.min(scr[k].1);
-                y1 = y1.max(scr[k].1);
+        let style = ship.face_style(fi);
+        // Непланарный четырёхугольник даёт мерцание painter's sort: делим на
+        // два треугольника для заливки, сохраняя общий стиль/грань.
+        if vs.len() == 4 && plane_error > 0.002 {
+            if let Some(cycle) = trace_cycle(&edges) {
+                if cycle.len() == 4 {
+                    for tri in [ [cycle[0], cycle[1], cycle[2]], [cycle[0], cycle[2], cycle[3]] ] {
+                        let tedges = vec![(tri[0], tri[1]), (tri[1], tri[2]), (tri[2], tri[0])];
+                        push_shape(&mut out, fi, tedges, scr, style);
+                    }
+                    continue;
+                }
             }
         }
-        let invz = pts.iter().map(|&(_, _, i)| i).sum::<f32>() / pts.len() as f32;
-        out.push(FaceShape {
-            edges,
-            x0,
-            x1,
-            y0,
-            y1,
-            plane,
-            plane_error,
-            style: ship.face_style(fi),
-            invz,
-        });
+        push_shape_with(&mut out, fi, edges, scr, style, plane, plane_error);
     }
     out
+}
+
+fn trace_cycle(edges: &[(usize, usize)]) -> Option<Vec<usize>> {
+    if edges.is_empty() {
+        return None;
+    }
+    let mut adj: std::collections::HashMap<usize, Vec<usize>> = std::collections::HashMap::new();
+    for &(a, b) in edges {
+        adj.entry(a).or_default().push(b);
+        adj.entry(b).or_default().push(a);
+    }
+    if adj.values().any(|n| n.len() != 2) {
+        return None;
+    }
+    let start = *adj.keys().min()?;
+    let mut cycle = vec![start];
+    let mut prev = usize::MAX;
+    let mut cur = start;
+    for _ in 0..adj.len() {
+        let nexts = adj.get(&cur)?;
+        let &next = nexts.iter().find(|&&n| n != prev)?;
+        if next == start {
+            break;
+        }
+        cycle.push(next);
+        prev = cur;
+        cur = next;
+    }
+    (cycle.len() == adj.len()).then_some(cycle)
+}
+
+fn push_shape(
+    out: &mut Vec<FaceShape>,
+    fi: usize,
+    edges: Vec<(usize, usize)>,
+    scr: &[(f32, f32, f32)],
+    style: FaceStyle,
+) {
+    let mut vs: Vec<usize> = edges.iter().flat_map(|&(a, b)| [a, b]).collect();
+    vs.sort_unstable();
+    vs.dedup();
+    let pts: Vec<(f32, f32, f32)> = vs.iter().map(|&i| scr[i]).collect();
+    let plane = fit_plane(&pts);
+    let plane_error = match plane {
+        Some((aa, bb, cc)) => pts
+            .iter()
+            .fold(0.0f32, |e, &(x, y, iz)| e.max((aa * x + bb * y + cc - iz).abs() / iz)),
+        None => f32::MAX,
+    };
+    push_shape_with(out, fi, edges, scr, style, plane, plane_error);
+}
+
+fn push_shape_with(
+    out: &mut Vec<FaceShape>,
+    fi: usize,
+    edges: Vec<(usize, usize)>,
+    scr: &[(f32, f32, f32)],
+    style: FaceStyle,
+    plane: Option<(f32, f32, f32)>,
+    plane_error: f32,
+) {
+    let mut vs: Vec<usize> = edges.iter().flat_map(|&(a, b)| [a, b]).collect();
+    vs.sort_unstable();
+    vs.dedup();
+    let pts: Vec<(f32, f32, f32)> = vs.iter().map(|&i| scr[i]).collect();
+    let (mut x0, mut y0, mut x1, mut y1) = (f32::MAX, f32::MAX, f32::MIN, f32::MIN);
+    for &(i, j) in &edges {
+        for k in [i, j] {
+            x0 = x0.min(scr[k].0);
+            x1 = x1.max(scr[k].0);
+            y0 = y0.min(scr[k].1);
+            y1 = y1.max(scr[k].1);
+        }
+    }
+    let invz = pts.iter().map(|&(_, _, i)| i).sum::<f32>() / pts.len() as f32;
+    // Небольшой сдвиг вперёд для выделенных граней: они часто лежат в том
+    // же контуре/плоскости, что и корпус, и при равной средней глубине
+    // painter's sort может мерцать.
+    let invz = if matches!(style, FaceStyle::Hull) {
+        invz
+    } else {
+        invz * 1.0001
+    };
+    out.push(FaceShape {
+        fi,
+        edges,
+        x0,
+        x1,
+        y0,
+        y1,
+        plane,
+        plane_error,
+        style,
+        invz,
+    });
 }
 
 /// Цвет заливки грани с учётом оттенка корабля.
@@ -278,7 +369,9 @@ pub(super) fn fill_faces(
                     FaceStyle::EngineGlow => 2,
                 }
             }
-            prio(a.style).cmp(&prio(b.style))
+            prio(a.style)
+                .cmp(&prio(b.style))
+                .then_with(|| a.fi.cmp(&b.fi))
         })
     });
     for shape in order {
