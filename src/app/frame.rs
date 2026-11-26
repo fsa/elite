@@ -410,8 +410,8 @@ impl App<'_> {
                             if self.pending_station_native.is_some() {
                                 self.forward_input();
                             } else if self.pending_key.is_some() {
-                                // `F1` над закупкой: экран остаётся видимым до
-                                // начала вылета, но клавишу `1` должен увидеть Z80.
+                                // Отложенная клавиша уходит в Z80 только в кадре
+                                // с шагом эмуляции, иначе игра её не заметит.
                                 self.forward_pending_key();
                             } else {
                                 self.machine.release_all_keys();

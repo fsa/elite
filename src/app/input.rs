@@ -74,51 +74,32 @@ impl App<'_> {
         let in_cockpit = flight::z80_in_cockpit(mem);
         let in_transition = flight::z80_in_transition(mem);
 
-        // При вылете со станции текущий нативный экран должен остаться на месте
-        // до тех пор, пока Z80 не начнёт переход: иначе кадр между нажатием и
-        // шагом эмуляции показывал бы экран эмулятора вместо вылета. Сам экран
-        // закроется в `open_flight()` вместе с открытием анимации.
-        let launch_from_station = docked && code == KeyCode::F1;
-        if !launch_from_station {
-            self.shop.close();
-            self.close_status();
-            self.close_sysinfo();
-            self.close_market();
-        }
+        // Любой переход на другой экран закрывает текущую страницу сразу.
+        // В частности, `F1` со станции не должен оставлять закупку/карту/инвентарь
+        // поверх уже открытого нативного вида вылета.
+        self.shop.close();
+        self.close_status();
+        self.close_sysinfo();
+        self.close_market();
         self.pending_status = false;
         self.pending_sysinfo = false;
         self.pending_shop = false;
         self.pending_market = false;
         self.menu = false;
         if docked {
-            // На станции из F1-F4 доступен только `F1` (вылет): включает
-            // нативный вид сразу с анимацией вылета. Закупка вынесена на `F5`.
+            // На станции из F1-F4 доступен только `F1` (вылет). Нативный вид
+            // открывается сразу, даже если Z80 ещё не начал переход: иначе
+            // окно закупки/карты оставалось бы поверх начавшегося вылета.
             if code == KeyCode::F1 {
                 // Вылет возвращает управление эмулятору: он должен получить
                 // клавишу `1`, иначе Z80 останется замороженным на станции.
                 self.cancel_pending_station();
                 self.station_native = false;
                 self.station_emulator = true;
-                // Если управление было передано эмулятору через `` ` ``,
-                // нативного экрана нет. Открываем экран капитана напрямую,
-                // без `L`: Z80 должен дойти до вылета по клавише `1`.
-                let native_overlay = self.hdmap.active
-                    || self.shop.active
-                    || self.inventory.is_active()
-                    || self.status.active
-                    || self.sysinfo.active
-                    || self.market.native
-                    || self.docked.is_active();
-                if !in_cockpit && !native_overlay {
-                    self.status
-                        .open(&self.machine.mem, crate::status::KLADOV_STATUS);
-                }
-            }
-            if code == KeyCode::F1 && in_cockpit {
-                // Снимок/переход, где станция уже отдала полётный экран.
                 self.show_flight(dir);
-            } else if code == KeyCode::F1 {
-                self.pending_flight = Some(dir);
+                // `show_flight` сбрасывает отложенные переходы, а признак
+                // вылета нужен `switch_to_flight_on_transition()`, чтобы не
+                // принять вылет за стыковку.
                 self.pending_launch = true;
             } else {
                 self.pending_flight = None;
@@ -1210,8 +1191,8 @@ impl App<'_> {
                 }
                 KeyCode::ArrowUp => self.shop.move_selection(-1),
                 KeyCode::ArrowDown => self.shop.move_selection(1),
-                // F1 — клавиша 1 оригинала: закупка закрывается и нажатие
-                // уходит игре (смена экрана по Fn).
+                // F1 — клавиша 1 оригинала: закупка закрывается, открывается
+                // нативный вид и нажатие уходит игре для вылета.
                 KeyCode::F1 if !repeat => {
                     self.function_key(code);
                 }

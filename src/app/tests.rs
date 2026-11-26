@@ -561,16 +561,18 @@ use crate::world::{
         assert!(!app.hdmap.active, "F5 не переключил экран");
         assert!(app.shop.active, "F5 не открыл закупку");
         assert!(app.station_native, "закупка не оставила нативный режим");
-        // Переключение на вылет оставляет закупку видимой до старта перехода,
-        // чтобы между нажатием и шагом Z80 не мелькнул экран эмулятора.
+        // Вылет сразу закрывает закупку и открывает нативный вид F1.
         app.key_event(KeyCode::F1, true, false);
-        assert!(app.shop.active, "F1 закрыл закупку до начала вылета");
+        assert!(!app.shop.active, "F1 не закрыл закупку");
+        assert!(app.flight.active, "F1 не открыл нативный вид вылета");
         assert!(!app.station_native, "F1 не передал управление эмулятору");
         assert!(app.station_emulator, "F1 не включил режим эмулятора");
         assert_eq!(app.machine.mem[flight::Z80_WHAT_ON_SCREEN], prev_screen);
 
         // После возврата в нативный режим карта открывается снова и курсор
         // остаётся на сохранённой цели гиперпрыжка.
+        app.flight.close();
+        app.station_emulator = false;
         app.enter_native_station();
         assert!(!app.shop.active, "возврат на станцию не закрыл закупку");
         app.key_event(KeyCode::F6, true, false);
@@ -1726,7 +1728,7 @@ use crate::world::{
         app.machine.mem[flight::Z80_FLG_JUMP_DOCKING] = 0;
 
         app.key_event(KeyCode::F1, true, false);
-        assert!(!app.flight.active, "F1 включил вид до начала вылета");
+        assert!(app.flight.active, "F1 не открыл нативный вид на станции");
         assert!(app.pending_launch, "F1 на станции не запомнил вылет");
         app.apply_input();
         let (row, bit) = matrix_pos(KeyCode::Digit1).expect("1 в матрице");
@@ -1741,7 +1743,7 @@ use crate::world::{
         app.machine.mem[flight::Z80_IND_DANGER] = 4;
         app.machine.mem[flight::Z80_JUMP_DOCKING] = 1;
         app.machine.mem[flight::Z80_FLG_JUMP_DOCKING] = 1;
-        app.open_pending_flight();
+        app.switch_to_flight_on_transition();
         assert!(app.flight.active, "F1 не открыл нативный вид на вылете");
         assert_eq!(
             app.flight.transition_kind(),
@@ -2049,13 +2051,13 @@ use crate::world::{
         app.key_event(KeyCode::F1, true, false);
         assert!(!app.station_native, "F1 не снял нативный режим станции");
         assert!(app.pending_launch, "F1 не запомнил вылет");
-        // До начала перехода остаётся нативный экран капитана: кадр между
-        // нажатием и шагом Z80 не должен показывать эмулятор.
+        // Нативный вид открывается сразу, до шага Z80: кадр между нажатием и
+        // эмуляцией не показывает ни эмулятор, ни экран капитана.
         app.sync_state();
         assert_eq!(
             app.state.screen,
-            crate::state::Screen::PilotStatus,
-            "F1 показал экран эмулятора до начала вылета"
+            crate::state::Screen::Flight,
+            "F1 не открыл нативный вид до начала вылета"
         );
 
         // Кадр рендера без шага Z80: ввод не переносится в эмулятор, но
@@ -2082,10 +2084,10 @@ use crate::world::{
         assert_eq!(app.flight.transition_kind(), Some(flight::TransitionKind::Launch));
     }
 
-    /// `F1` из нативной закупки тоже должен отправить клавишу `1` в Z80 и
-    /// не показывать экран эмулятора до начала анимации вылета.
+    /// `F1` из нативной закупки закрывает окно, открывает нативный вид и
+    /// отправляет клавишу `1` в Z80.
     #[test]
-    fn f1_launch_from_shop_keeps_native_screen_and_sends_key() {
+    fn f1_launch_from_shop_closes_shop_and_sends_key() {
         let opts = kladov_options();
         let mut m = boot_kladov();
         let (intro, game) = scene_markers();
@@ -2106,10 +2108,12 @@ use crate::world::{
 
         app.key_event(KeyCode::F1, true, false);
         app.sync_state();
+        assert!(!app.shop.active, "F1 не закрыл закупку");
+        assert!(app.flight.active, "F1 из закупки не открыл нативный вид");
         assert_eq!(
             app.state.screen,
-            crate::state::Screen::EquipShop,
-            "F1 из закупки показал экран эмулятора"
+            crate::state::Screen::Flight,
+            "F1 из закупки не переключил экран на полёт"
         );
         assert!(app.pending_launch, "F1 из закупки не запомнил вылет");
 
@@ -2128,10 +2132,80 @@ use crate::world::{
         assert!(!app.shop.active, "закупка не закрылась при вылете");
     }
 
-    /// После явного выхода в эмулятор на станции `F1` должен снова показать
-    /// нативный экран и отправить клавишу `1`, а не оставить экран Z80.
+    /// `F1` закрывает любое нативное окно станции, сразу открывает вид F1 и
+    /// передаёт игре клавишу `1`: окно не должно остаться поверх вылета.
     #[test]
-    fn f1_after_emulator_handoff_opens_native_status_and_sends_key() {
+    fn f1_launch_closes_every_station_overlay() {
+        let opts = kladov_options();
+        for overlay in 0..8 {
+            let mut app = station_app(&opts);
+            match overlay {
+                0 => app.open_shop(),
+                1 => app.open_inventory(),
+                2 => app.open_status(),
+                3 => app.open_planet_info(),
+                4 => app.open_market(),
+                5 => app.open_sysinfo(),
+                6 => app.open_hdmap(),
+                7 => app.docked.show(),
+                _ => unreachable!(),
+            }
+            app.sync_state();
+            assert_ne!(
+                app.state.screen,
+                crate::state::Screen::Flight,
+                "подготовка: окно {overlay} не открылось"
+            );
+
+            app.key_event(KeyCode::F1, true, false);
+            app.sync_state();
+            assert_eq!(
+                app.state.screen,
+                crate::state::Screen::Flight,
+                "F1 не открыл вид F1 из окна {overlay}"
+            );
+            assert!(
+                !app.shop.active
+                    && !app.inventory.is_active()
+                    && !app.status.active
+                    && !app.sysinfo.active
+                    && !app.market.native
+                    && !app.hdmap.active
+                    && !app.docked.is_active(),
+                "F1 оставил окно {overlay} открытым"
+            );
+            assert!(app.pending_launch, "F1 из окна {overlay} не запомнил вылет");
+            assert!(
+                app.pending_key.is_some(),
+                "F1 из окна {overlay} не подготовил клавишу 1"
+            );
+
+            app.apply_input();
+            let (row, bit) = matrix_pos(KeyCode::Digit1).expect("1 в матрице");
+            assert_eq!(
+                app.machine.keyboard[row] & (1 << bit),
+                0,
+                "F1 из окна {overlay} не передал игре клавишу 1"
+            );
+            // Синтетическая станция не исполняет код вылета, поэтому флаги
+            // перехода ставим так же, как это сделал бы Z80.
+            app.machine.mem[flight::Z80_WHAT_ON_SCREEN] = 0;
+            app.machine.mem[flight::Z80_IND_DANGER] = 4;
+            app.machine.mem[flight::Z80_JUMP_DOCKING] = 1;
+            app.machine.mem[flight::Z80_FLG_JUMP_DOCKING] = 1;
+            app.switch_to_flight_on_transition();
+            assert_eq!(
+                app.flight.transition_kind(),
+                Some(flight::TransitionKind::Launch),
+                "вылет из окна {overlay} показан не как вылет"
+            );
+        }
+    }
+
+    /// После явного выхода в эмулятор на станции `F1` должен открыть нативный
+    /// вид и отправить клавишу `1`, а не оставить экран Z80.
+    #[test]
+    fn f1_after_emulator_handoff_opens_native_flight_and_sends_key() {
         let opts = kladov_options();
         let mut m = boot_kladov();
         let (intro, game) = scene_markers();
@@ -2156,9 +2230,10 @@ use crate::world::{
         app.sync_state();
         assert_eq!(
             app.state.screen,
-            crate::state::Screen::PilotStatus,
-            "F1 после выхода в эмулятор не открыл нативный экран"
+            crate::state::Screen::Flight,
+            "F1 после выхода в эмулятор не открыл нативный вид"
         );
+        assert!(app.flight.active, "F1 не открыл полёт после выхода в эмулятор");
         assert!(app.station_emulator, "F1 не запустил эмулятор");
         app.apply_input();
         let (row, bit) = matrix_pos(KeyCode::Digit1).expect("1 в матрице");
@@ -2203,16 +2278,20 @@ use crate::world::{
 
         let mut app = App::new(m, &opts);
         app.key_event(KeyCode::F1, true, false);
-        assert!(!app.flight.active, "F1 включил вид до вылета");
+        assert!(app.flight.active, "F1 не открыл нативный вид сразу");
+        assert!(
+            app.flight.transition_kind().is_none(),
+            "анимация вылета началась до шага Z80"
+        );
         app.apply_input();
 
-        // Ждём, пока оригинал начнёт переход вылета: нативный вид должен
-        // включиться сразу с анимацией, не дожидаясь её конца.
+        // Ждём, пока оригинал начнёт переход вылета: нативный вид уже открыт,
+        // остаётся запустить анимацию, не дожидаясь её конца.
         let mut frames = 0;
-        while frames < 1500 && !app.flight.active {
+        while frames < 1500 && app.flight.transition_kind().is_none() {
             app.machine.run_frame();
-            // Как в настоящем кадре: сначала приложение распознаёт переход,
-            // и только потом открывает отложенный вид.
+            // Как в настоящем кадре: приложение распознаёт переход и запускает
+            // анимацию сразу с первым шагом Z80.
             app.switch_to_flight_on_transition();
             app.open_pending_flight();
             frames += 1;
@@ -2332,6 +2411,18 @@ use crate::world::{
 
     fn kladov_options() -> Options {
         test_options()
+    }
+
+    /// Игра на станционном экране без открытых наложений.
+    fn station_app(opts: &Options) -> App<'_> {
+        let mut m = boot();
+        m.intro_seen = false;
+        m.mem[flight::Z80_WHAT_ON_SCREEN] = 0x0B;
+        m.mem[flight::Z80_IND_DANGER] = 0;
+        m.mem[flight::Z80_JUMP_DOCKING] = 0;
+        m.mem[flight::Z80_FLG_JUMP_DOCKING] = 0;
+        m.mem[flight::Z80_JUMP_COUNTDOWN] = 0;
+        App::new(m, opts)
     }
 
     /// На заставке нативные экраны не открываются: F6/F5 игнорируются, пока
