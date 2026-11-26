@@ -142,6 +142,9 @@ pub struct Spectrum {
     /// [`native::request_load`] ждёт ближайшего `GameMain`/цикла заставки и
     /// уводит игру на станцию с загруженным командиром.
     pub load_requested: bool,
+    /// Символ, который нативный диалог миссии отдаёт original вместо чтения
+    /// `PressKeyPrnSymbol` (`0xFF` — ответа ещё нет).
+    pub mission_answer: u8,
     /// HD-слой нативного рендера (см. [`display::Frame`]): поверхность в
     /// разрешении области показа окна. ZX-кадр (256x192) показывается
     /// целым множителем, а нативные хуки рисуют в этот слой поверх него
@@ -211,6 +214,7 @@ impl Spectrum {
             frame_target: u64::MAX,
             save_requested: false,
             load_requested: false,
+            mission_answer: 0xFF,
             hd: display::Frame::new(display::ZX_W, display::ZX_H),
             game_msg: GameMsgTap::default(),
         }

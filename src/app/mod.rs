@@ -67,6 +67,41 @@ enum StationNativePending {
     Screen,
 }
 
+/// Фаза короткого сеанса, в котором нативный рынок даёт оригиналу выполнить
+/// миссионные проверки клавишами `2`/`3`.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum MarketMissionStep {
+    /// Отправить `2`/`3` в матрицу Z80.
+    Press,
+    /// Ждать, пока original дойдёт до запроса `Y/N` (`sub_E1F7`).
+    WaitPrompt,
+    /// Запрос начался: Z80 стоит в цикле ожидания, показан нативный диалог.
+    Prompt,
+    /// Ответ принят в диалоге, клавиша `Y`/`N` уже отдана эмулятору.
+    Answer,
+    /// Ждать выхода original в инвентарь (`WhatOnScreen = 0x0C`).
+    WaitInventory,
+}
+
+/// Сеанс выдачи/сдачи первой миссии из нативного рынка.
+#[derive(Clone, Copy)]
+struct MarketMission {
+    buy: bool,
+    step: MarketMissionStep,
+    /// Ответ нативного диалога: `true` — `Y`.
+    accept: bool,
+    frames: u16,
+}
+
+/// Нативный диалог `Y/N`, показанный поверх оригинального экрана миссии.
+#[derive(Clone, Copy)]
+struct MissionPrompt {
+    /// Что сейчас выбрано: `true` — `Y`.
+    accept: bool,
+    /// Ранг определяет текст original: беженцы или десант.
+    marines: bool,
+}
+
 /// Частота кадров ZX Spectrum: 50 кадров в секунду (кадр каждые 20 мс).
 const Z80_FRAME_TIME: Duration = Duration::from_micros(1_000_000 / 50);
 /// Целевая частота отображения. Держим 50 Гц, чтобы 1 кадр рендера = 1 кадр
@@ -179,6 +214,10 @@ struct App<'a> {
     /// После кадра эмулятора открыть нативный экран цен: сначала игра
     /// должна обработать `K` и перейти в режим рынка.
     pending_market: bool,
+    /// Идёт короткий сеанс миссионных проверок original из нативного рынка.
+    market_mission: Option<MarketMission>,
+    /// Нативный диалог `Y/N` поверх экрана миссии Z80.
+    mission_prompt: Option<MissionPrompt>,
     /// Экран полёта (F1) — нативный рендер по данным Z80. Пока он активен,
     /// окно занимает вид из кабины и нативная приборная панель; эмулятор
     /// продолжает работать и задаёт мир, поэтому ввод идёт в игру.
@@ -326,6 +365,8 @@ impl<'a> App<'a> {
             loading,
             market: market::Market::new(),
             pending_market: false,
+            market_mission: None,
+            mission_prompt: None,
             flight: flight::Flight::new(),
             splash: splash::Splash::with_debug(opts.debug),
             splash_emulator,

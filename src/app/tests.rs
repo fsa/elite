@@ -34,7 +34,6 @@ use crate::world::{
     scene_markers,
 };
 
-
     /// Boot the real game image with the real ROM, as `main` does.
     fn boot() -> Spectrum {
         let base = env!("CARGO_MANIFEST_DIR");
@@ -3870,5 +3869,144 @@ use crate::world::{
         assert!(
             app.machine.hd.pixels().iter().any(|&p| p != display::TRANSPARENT),
             "индикатор пропал в анимации перехода"
+        );
+    }
+
+
+    /// Нативный рынок отдаёт `2` оригиналу, ловит запрос `Y/N`, показывает
+    /// нативный диалог и после ответа уходит в нативный инвентарь.
+    #[test]
+    fn market_mission_native_prompt_accepts_first_mission() {
+        let opts = test_options();
+        let mut m = boot();
+        let (intro, game) = scene_markers();
+        m.intro_range = intro;
+        m.game_marker = game;
+        for _ in 0..30 {
+            m.run_frame();
+        }
+        let mut app = App::new(m, &opts);
+        native::start_game(&mut app.machine, save_layout_kladov());
+        for _ in 0..5000 {
+            app.machine.run_frame();
+            if !app.machine.intro_seen {
+                break;
+            }
+        }
+        assert!(!app.machine.intro_seen, "подготовка: игра не запустилась");
+
+        let layout = market::KLADOV_MARKET;
+        app.machine.mem[layout.quantities] = 2;
+        app.machine.mem[layout.pilot as usize + 40] = 10;
+        app.machine.mem[layout.pilot as usize + 20..layout.pilot as usize + 22]
+            .copy_from_slice(&1000u16.to_le_bytes());
+        app.key_event(KeyCode::F8, true, false);
+        app.machine.run_frame();
+        app.finish_pending_station_native();
+        assert!(app.market.native, "подготовка: рынок не открыт");
+
+        // Условия `GoMission1`: первая миссия не взята, пилот в зоне боев.
+        app.machine.mem[0xD081] = 0;
+        app.machine.mem[0xD0B0] = 0;
+        app.machine.mem[0xD062] = 0x80;
+        app.machine.mem[0xD08F] = 0x02;
+        app.machine.mem[0xD06A] = 0;
+        app.machine.mem[0xD097] = 0x40;
+        app.machine.mem[0xD099] = 0;
+        app.machine.mem[0xD09A] = 0;
+
+        app.key_event(KeyCode::ArrowRight, true, false);
+        assert!(app.market_mission.is_some(), "сеанс миссии не начался");
+        let mut prompt_frames = 0;
+        while app.mission_prompt.is_none() && prompt_frames < 30 {
+            app.step_market_mission(1);
+            prompt_frames += 1;
+        }
+        let prompt = app.mission_prompt.expect("нативный запрос миссии не показан");
+        assert!(prompt.accept, "по умолчанию выбрано Y");
+        assert!(!prompt.marines, "ранг 0x80 предлагает беженцев");
+
+        app.key_event(KeyCode::Enter, true, false);
+        for _ in 0..40 {
+            app.step_market_mission(1);
+            if app.market_mission.is_none() {
+                break;
+            }
+        }
+        assert!(app.market_mission.is_none(), "сеанс миссии не завершился");
+        assert!(app.mission_prompt.is_none(), "диалог не закрылся");
+        app.sync_state();
+        assert_eq!(app.game_state().screen, Screen::Inventory);
+        assert!(
+            app.inventory.is_active(),
+            "нативный инвентарь не открылся после миссии"
+        );
+        assert_ne!(
+            app.machine.mem[0xD0B0] & 0x20,
+            0,
+            "original не поставил бит 5 при согласии"
+        );
+    }
+
+
+    /// Отказ от миссии через нативный диалог тоже возвращает в инвентарь,
+    /// но не занимает трюм пассажирами.
+    #[test]
+    fn market_mission_native_prompt_refuses() {
+        let opts = test_options();
+        let mut m = boot();
+        let (intro, game) = scene_markers();
+        m.intro_range = intro;
+        m.game_marker = game;
+        for _ in 0..30 {
+            m.run_frame();
+        }
+        let mut app = App::new(m, &opts);
+        native::start_game(&mut app.machine, save_layout_kladov());
+        for _ in 0..5000 {
+            app.machine.run_frame();
+            if !app.machine.intro_seen {
+                break;
+            }
+        }
+        let layout = market::KLADOV_MARKET;
+        app.machine.mem[layout.quantities] = 2;
+        app.machine.mem[layout.pilot as usize + 40] = 10;
+        app.machine.mem[layout.pilot as usize + 20..layout.pilot as usize + 22]
+            .copy_from_slice(&1000u16.to_le_bytes());
+        app.key_event(KeyCode::F8, true, false);
+        app.machine.run_frame();
+        app.finish_pending_station_native();
+
+        app.machine.mem[0xD081] = 0;
+        app.machine.mem[0xD0B0] = 0;
+        app.machine.mem[0xD062] = 0x80;
+        app.machine.mem[0xD08F] = 0x02;
+        app.machine.mem[0xD06A] = 0;
+        app.machine.mem[0xD097] = 0x40;
+        app.machine.mem[0xD099] = 0;
+        app.machine.mem[0xD09A] = 0;
+
+        app.key_event(KeyCode::ArrowRight, true, false);
+        for _ in 0..30 {
+            app.step_market_mission(1);
+            if app.mission_prompt.is_some() {
+                break;
+            }
+        }
+        assert!(app.mission_prompt.is_some(), "нативный запрос миссии не показан");
+        app.key_event(KeyCode::KeyN, true, false);
+        for _ in 0..40 {
+            app.step_market_mission(1);
+            if app.market_mission.is_none() {
+                break;
+            }
+        }
+        app.sync_state();
+        assert_eq!(app.game_state().screen, Screen::Inventory);
+        assert_eq!(
+            app.machine.mem[0xD0B0] & 0x20,
+            0,
+            "original занял трюм после отказа"
         );
     }

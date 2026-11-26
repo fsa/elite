@@ -783,6 +783,31 @@ impl App<'_> {
             }
         }
 
+        // Нативный диалог миссии: original уже ждёт символ `Y/N`, остальной
+        // ввод не должен менять нативные экраны или передавать клавишу в Z80.
+        if self.mission_prompt.is_some() {
+            if !repeat {
+                match code {
+                    KeyCode::KeyY => self.answer_mission_prompt(true),
+                    KeyCode::KeyN => self.answer_mission_prompt(false),
+                    KeyCode::ArrowLeft | KeyCode::ArrowRight => self.toggle_mission_prompt(),
+                    KeyCode::Enter => {
+                        let accept = self.mission_prompt.map_or(true, |p| p.accept);
+                        self.answer_mission_prompt(accept);
+                    }
+                    _ => {}
+                }
+            }
+            if let Some((row, bit)) = matrix_pos(code) {
+                self.matrix[row][bit as usize] = false;
+            }
+            return;
+        }
+        // Пока Z80 исполняет миссионные проверки, нативные экраны не переключаются.
+        if self.market_mission.is_some() {
+            return;
+        }
+
         // В режиме анимации (вылет, гиперпереход, стыковка) не работают ни
         // переключения экранов, ни органы управления. Отсчёт гиперпрыжка ещё
         // не анимация: до обнуления счётчика экраны переключаются, а число
@@ -971,6 +996,9 @@ impl App<'_> {
                     || flight::z80_is_docked(&self.machine.mem);
                 if delta != 0 {
                     self.market.move_selection(delta);
+                } else if self.station_native && self.start_market_mission(buy) {
+                    // Original получит `2`/`3` и сам решит, выдаётся ли миссия.
+                    // Если её нет, сеанс отменится и сделку применим нативно.
                 } else if buy {
                     self.market.buy(&mut self.machine.mem, docked);
                 } else {

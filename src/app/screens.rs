@@ -2,7 +2,7 @@
 
 use winit::keyboard::KeyCode;
 
-use super::{App, StationNativePending};
+use super::{App, MarketMission, MarketMissionStep, MissionPrompt, StationNativePending};
 use crate::equip;
 use crate::flight;
 use crate::galaxy;
@@ -12,6 +12,27 @@ use crate::market;
 use crate::native;
 use crate::status;
 use crate::world;
+
+/// Диапазон PC цикла ожидания `Y/N` в `sub_E1F7` (`loc_E1FD`..`ret`).
+const MISSION_PROMPT_PC: std::ops::RangeInclusive<u16> = 0xE1FD..=0xE205;
+/// `PressKeyPrnSymbol`: original ждёт не-`0xFF` в этом байте.
+const PRESS_KEY_SYMBOL: usize = 0xFC0D;
+/// PC команды `ld a,(PressKeyPrnSymbol)` в цикле `sub_E1F7`.
+const MISSION_PROMPT_READ_PC: u16 = 0xE1FD;
+/// Сколько кадров ждать запроса миссии/выхода в инвентарь.
+const MISSION_WAIT_FRAMES: u16 = 30;
+/// Перехват чтения `PressKeyPrnSymbol` в цикле `sub_E1F7`.
+///
+/// Обычный опрос матрицы успевает перезаписать символ до того, как Z80
+/// прочитает его, поэтому во время миссионного сеанса original читает ответ
+/// из нативного состояния. `hook_yield` нужен, потому что это не `CALL`:
+/// возврат из `sub_E1F7` к своей команде делаем сами.
+fn mission_prompt_key(cpu: &mut crate::z80::Z80, m: &mut crate::machine::Spectrum) -> u64 {
+    cpu.a = m.mission_answer;
+    cpu.pc = MISSION_PROMPT_READ_PC + 3;
+    m.hook_yield = true;
+    4
+}
 
 impl App<'_> {
     /// Закрыть все нативные экраны и отложенные переходы. Используется при
@@ -32,6 +53,10 @@ impl App<'_> {
         self.pending_flight = None;
         self.pending_launch = false;
         self.pending_key = None;
+        self.market_mission = None;
+        self.mission_prompt = None;
+        self.machine.mission_answer = 0xFF;
+        self.machine.remove_hook(MISSION_PROMPT_READ_PC);
     }
 
     /// Запросить нативный режим станции, сначала отдав эмулятору `L`.
@@ -748,6 +773,163 @@ impl App<'_> {
         self.market.disable();
         self.pending_market = false;
         self.pending_key = None;
+    }
+
+    /// Начать короткий сеанс миссионных проверок из нативного рынка.
+    ///
+    /// Нативный слой не решает, выдаст ли миссию original: он только видит,
+    /// что первая миссия ещё не взята и трюм не занят пассажирами. Саму зону
+    /// боев и ранг проверяет `GoMission1` на Z80 после клавиши `2`/`3`.
+    pub(super) fn start_market_mission(&mut self, buy: bool) -> bool {
+        if self.market_mission.is_some()
+            || self.menu
+            || self.machine.intro_seen
+            || !self.station_native
+            || !flight::z80_is_docked(&self.machine.mem)
+        {
+            return false;
+        }
+        let mem = self.machine.game_state();
+        let mission1 = mem.get(0xD081).copied().unwrap_or(0);
+        let ext = mem.get(0xD0B0).copied().unwrap_or(0);
+        // `GoMission1` → `TestPilotInZoneCombat` → `TestPilotInZoneWar`
+        // сразу возвращают CY=0 вне первой галактики и до начала войны.
+        let galaxy = mem.get(0xD06A).copied().unwrap_or(0);
+        let war = mem.get(0xD08F).copied().unwrap_or(0);
+        if mission1 != 0 || ext & 0x20 != 0 || galaxy != 0 || war < 2 {
+            return false;
+        }
+        self.machine.mission_answer = 0xFF;
+        self.machine.install_hook(MISSION_PROMPT_READ_PC, mission_prompt_key, 4);
+        self.market_mission = Some(MarketMission {
+            buy,
+            step: MarketMissionStep::Press,
+            accept: true,
+            frames: 0,
+        });
+        self.pending_key = matrix_pos(if buy {
+            KeyCode::Digit2
+        } else {
+            KeyCode::Digit3
+        });
+        true
+    }
+
+    /// Один кадр сеанса. Возвращает `true`, если Z80 исполнялся.
+    pub(super) fn step_market_mission(&mut self, z80_frames: u64) -> bool {
+        let Some(mut session) = self.market_mission else {
+            return false;
+        };
+        if z80_frames == 0 && session.step != MarketMissionStep::Prompt {
+            return false;
+        }
+        match session.step {
+            MarketMissionStep::Press => {
+                // Один короткий импульс: original не должен обработать клавишу
+                // несколько раз и сам уйти в обычную торговлю.
+                self.forward_pending_key();
+                self.machine.run_frames(1);
+                self.machine.release_all_keys();
+                session.step = MarketMissionStep::WaitPrompt;
+                session.frames = 0;
+            }
+            MarketMissionStep::WaitPrompt => {
+                self.machine.release_all_keys();
+                self.machine.run_frames(1);
+                session.frames += 1;
+                if self.at_mission_prompt() {
+                    let marines = self.machine.mem[0xD062] >= 0x84;
+                    self.mission_prompt = Some(MissionPrompt {
+                        accept: true,
+                        marines,
+                    });
+                    session.step = MarketMissionStep::Prompt;
+                } else if session.frames >= MISSION_WAIT_FRAMES {
+                    // Миссии нет: original успел открыть обычное меню. `L`
+                    // закрывает его, а сделку применяет нативный экран.
+                    self.pending_key = matrix_pos(KeyCode::KeyL);
+                    self.forward_pending_key();
+                    self.machine.run_frames(2);
+                    self.machine.release_all_keys();
+                    self.apply_market_trade(session.buy);
+                    self.end_market_mission();
+                    return true;
+                }
+            }
+            MarketMissionStep::Prompt => {
+                // Диалог ждёт ответа: Z80 стоит в цикле `sub_E1F7`.
+                return false;
+            }
+            MarketMissionStep::Answer => {
+                self.machine.release_all_keys();
+                // Ответ уже лежит в `Spectrum::mission_answer`: хук подставит его вместо
+                // чтения `PressKeyPrnSymbol` в цикле `sub_E1F7`.
+                self.machine.mission_answer = if session.accept { 0x59 } else { 0x4E };
+                self.machine.run_frames(1);
+                session.step = MarketMissionStep::WaitInventory;
+                session.frames = 0;
+            }
+            MarketMissionStep::WaitInventory => {
+                self.machine.release_all_keys();
+                self.machine.run_frames(1);
+                session.frames += 1;
+                if self.machine.mem[flight::Z80_WHAT_ON_SCREEN]
+                    == flight::Z80_SCREEN_INVENTORY
+                    || session.frames >= MISSION_WAIT_FRAMES
+                {
+                    self.end_market_mission();
+                    self.open_inventory();
+                    return true;
+                }
+            }
+        }
+        self.market_mission = Some(session);
+        true
+    }
+
+    /// Ответ нативного диалога: передать `Y`/`N` original на следующем кадре.
+    pub(super) fn answer_mission_prompt(&mut self, accept: bool) {
+        if let Some(prompt) = self.mission_prompt.as_mut() {
+            prompt.accept = accept;
+        }
+        if let Some(session) = self.market_mission.as_mut() {
+            session.accept = accept;
+            session.step = MarketMissionStep::Answer;
+        }
+    }
+
+    /// Завершить сеанс и снять перехват чтения символа ответа.
+    fn end_market_mission(&mut self) {
+        self.machine.remove_hook(MISSION_PROMPT_READ_PC);
+        self.machine.mission_answer = 0xFF;
+        self.mission_prompt = None;
+        self.market_mission = None;
+    }
+
+    /// Переключить подсветку в диалоге стрелками.
+    pub(super) fn toggle_mission_prompt(&mut self) {
+        if let Some(prompt) = self.mission_prompt.as_mut() {
+            prompt.accept = !prompt.accept;
+        }
+    }
+
+    /// Original стоит в цикле ожидания символа `sub_E1F7`.
+    fn at_mission_prompt(&self) -> bool {
+        MISSION_PROMPT_PC.contains(&self.machine.cpu.pc)
+            && self.machine.mem.get(PRESS_KEY_SYMBOL).copied() == Some(0xFF)
+    }
+
+    /// Применить сделку нативным экраном, когда миссионный сеанс её не выполнил.
+    fn apply_market_trade(&mut self, buy: bool) {
+        let docked = flight::z80_is_docked(&self.machine.mem);
+        let system = self.state.system.clone();
+        self.market
+            .refresh(&self.machine.mem, market::KLADOV_MARKET, docked, &system);
+        if buy {
+            self.market.buy(&mut self.machine.mem, docked);
+        } else {
+            self.market.sell(&mut self.machine.mem, docked);
+        }
     }
 
     /// Открыть нативный экран цен, отложенный до выхода оригинала в

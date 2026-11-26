@@ -324,6 +324,13 @@ impl App<'_> {
             self.machine.release_joystick();
             self.pending_key = None;
             self.play_frame_audio(false);
+        } else if self.market_mission.is_some() {
+            // Нативный рынок на несколько кадров отдаёт Z80 клавишу `2`/`3`.
+            // Пока original показывает запрос миссии, эмулятор снова стоит:
+            // ответ `Y/N` приходит из нативного диалога.
+            let ran = self.step_market_mission(z80_frames);
+            emulator_ran = ran;
+            self.play_frame_audio(ran);
         } else if self.station_native {
             self.machine.release_all_keys();
             self.machine.release_joystick();
@@ -661,7 +668,9 @@ impl App<'_> {
                         self.state.is_docked(),
                         &self.state.system,
                     );
-                    self.market.draw(&mut self.machine.hd, ZX_FONT);
+                    if self.market_mission.is_none() {
+                        self.market.draw(&mut self.machine.hd, ZX_FONT);
+                    }
                     self.draw_danger_half();
                     self.draw_jump_countdown();
                     if self.state.menu && self.save_screen.is_none() {
@@ -716,6 +725,11 @@ impl App<'_> {
                 }
                 storage::SaveScreen::Load(list) => draw_load_list(&mut self.machine.hd, &list),
             }
+        }
+
+        // Диалог миссии — самый верхний слой: под ним остаётся экран original.
+        if let Some(prompt) = self.mission_prompt {
+            crate::ui::mission::draw_prompt(&mut self.machine.hd, prompt.accept, prompt.marines);
         }
 
         self.present(&window, &layout);

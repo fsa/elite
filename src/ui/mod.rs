@@ -2,5 +2,6 @@
 
 pub mod menu;
 pub mod message;
+pub mod mission;
 pub mod present;
 pub mod saves;
