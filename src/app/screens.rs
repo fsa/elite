@@ -1037,7 +1037,18 @@ impl App<'_> {
             return;
         };
         let in_transition = flight::z80_in_transition(&self.machine.mem);
-        if flight::z80_in_cockpit(&self.machine.mem) || in_transition {
+        let in_cockpit = flight::z80_in_cockpit(&self.machine.mem);
+        let docked = flight::z80_is_docked(&self.machine.mem);
+
+        // После стыковки Z80 ещё несколько кадров показывает кокпит при
+        // IndDanger==0, прежде чем перейти на экран станции. В этом окне
+        // клавиша '1' означает вид вперёд, а не вылет; ждём, пока Z80 дойдёт
+        // до станционного экрана.
+        if self.pending_launch && docked && in_cockpit && !in_transition {
+            return;
+        }
+
+        if in_cockpit || in_transition {
             if !self.flight.active {
                 let launch = self.pending_launch;
                 self.open_flight(dir);
@@ -1051,10 +1062,17 @@ impl App<'_> {
             }
             return;
         }
+
+        // На станции запуск откладывается до готовности Z80: отправляем '1'
+        // только когда он уже на станционном экране, но переход ещё не начался.
+        if self.pending_launch && docked && !in_transition {
+            self.pending_key = matrix_pos(KeyCode::Digit1);
+            return;
+        }
+
         // Переход закончился, но полёт так и не начался (например, стыковка
-        // привела на станцию): запрос больше не нужен. Запрос на вылет
-        // (`F1` на станции) ждёт, пока игра действительно начнёт переход.
-        if flight::z80_is_docked(&self.machine.mem) && !self.pending_launch {
+        // привела на станцию): запрос больше не нужен.
+        if docked && !self.pending_launch {
             self.pending_flight = None;
         }
     }

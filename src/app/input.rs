@@ -87,10 +87,24 @@ impl App<'_> {
         self.pending_market = false;
         self.menu = false;
         if docked {
-            // На станции из F1-F4 доступен только `F1` (вылет). Нативный вид
-            // открывается сразу, даже если Z80 ещё не начал переход: иначе
-            // окно закупки/карты оставалось бы поверх начавшегося вылета.
+            // На станции из F1-F4 доступен только `F1` (вылет).
             if code == KeyCode::F1 {
+                // После стыковки Z80 может ещё несколько кадров показывать
+                // кокпит (IndDanger уже 0, но экран станции 0x0B ещё не
+                // наступил). В этом состоянии '1' означает вид вперёд, а не
+                // вылет. Даём Z80 дойти до экрана станции, не открывая
+                // нативный полёт и не отправляя клавишу.
+                if in_cockpit {
+                    self.cancel_pending_station();
+                    self.station_native = false;
+                    self.station_emulator = true;
+                    self.flight.close();
+                    self.flight_emulator = false;
+                    self.pending_flight = Some(dir);
+                    self.pending_launch = true;
+                    self.pending_key = None;
+                    return;
+                }
                 // Вылет возвращает управление эмулятору: он должен получить
                 // клавишу `1`, иначе Z80 останется замороженным на станции.
                 self.cancel_pending_station();

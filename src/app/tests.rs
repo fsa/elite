@@ -1069,6 +1069,9 @@ use crate::world::{
         let opts = test_options();
         let mut app = App::new(boot(), &opts);
         assert!(!app.flight.active);
+        app.machine.mem[flight::Z80_WHAT_ON_SCREEN] = 0x0B;
+        app.machine.mem[flight::Z80_IND_DANGER] = 0;
+        app.sync_state();
         app.key_event(KeyCode::F1, true, false);
         assert!(app.flight.active, "F1 не открыл экран полёта");
         assert!(!app.hdmap.active && !app.shop.active);
@@ -1132,6 +1135,7 @@ use crate::world::{
         assert!(!app.flight.active, "Backquote не закрыл экран полёта");
 
         // F1 снова включает экран полёта (и остаётся включённым).
+        app.machine.mem[flight::Z80_WHAT_ON_SCREEN] = 0;
         app.key_event(KeyCode::F1, true, false);
         assert!(app.flight.active);
         app.key_event(KeyCode::F1, true, false);
@@ -2370,6 +2374,9 @@ use crate::world::{
     fn flight_forwards_input_to_emulator() {
         let opts = test_options();
         let mut app = App::new(boot(), &opts);
+        app.machine.mem[flight::Z80_WHAT_ON_SCREEN] = 0x0B;
+        app.machine.mem[flight::Z80_IND_DANGER] = 0;
+        app.sync_state();
         app.key_event(KeyCode::F1, true, false);
         assert!(app.flight.active);
         // S — тангаж вверх в матрице (полуряд 1, бит 1).
