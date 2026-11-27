@@ -138,7 +138,10 @@ impl App<'_> {
     /// экрана закупки.
     fn station_native_command(&mut self, code: KeyCode) -> bool {
         if self.shop.mount_open()
-            && matches!(code, KeyCode::Digit1 | KeyCode::Digit2 | KeyCode::Digit3)
+            && matches!(
+                code,
+                KeyCode::Digit1 | KeyCode::Digit2 | KeyCode::Digit3 | KeyCode::Digit4
+            )
         {
             return false;
         }
@@ -1189,8 +1192,20 @@ impl App<'_> {
                         self.menu_sel = 0;
                     }
                 }
-                KeyCode::ArrowUp => self.shop.move_selection(-1),
-                KeyCode::ArrowDown => self.shop.move_selection(1),
+                KeyCode::ArrowUp => {
+                    if self.shop.mount_open() {
+                        self.shop.move_mount_selection(-1);
+                    } else {
+                        self.shop.move_selection(-1);
+                    }
+                }
+                KeyCode::ArrowDown => {
+                    if self.shop.mount_open() {
+                        self.shop.move_mount_selection(1);
+                    } else {
+                        self.shop.move_selection(1);
+                    }
+                }
                 // F1 — клавиша 1 оригинала: закупка закрывается, открывается
                 // нативный вид и нажатие уходит игре для вылета.
                 KeyCode::F1 if !repeat => {

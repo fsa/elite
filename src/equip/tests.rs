@@ -252,7 +252,7 @@ fn mouse_hover_and_click_buy_row() {
 }
 
 /// Клавиатура: стрелки выбирают строку, Enter покупает выбранную; в окне
-/// крепления цифра 0-3 выбирает слот (покупка по номеру товара отключена).
+/// крепления цифры 1-4 выбирают слот (0-3 принимаются для совместимости).
 #[test]
 fn enter_buys_selected_row_and_mount_digit_selects_slot() {
     let (mut shop, mut mem) = opened();
@@ -271,10 +271,10 @@ fn enter_buys_selected_row_and_mount_digit_selects_slot() {
     let before = cash_of(&mem);
     shop.confirm(&mut mem);
     assert!(shop.mount.is_some(), "должно открыться окно крепления");
-    // Цифры вне 0-3 игнорируются, 3 выбирает RIGHT.
+    // Цифры вне 1-4/0 игнорируются, 4 выбирает RIGHT.
     shop.input_digit(&mut mem, 9);
     assert!(shop.mount.is_some());
-    shop.input_digit(&mut mem, 3);
+    shop.input_digit(&mut mem, 4);
     assert!(shop.mount.is_none());
     assert_eq!(mem[shop.pilot() + OFF_LASERS + 3], 1);
     assert_eq!(cash_of(&mem), before - 4000);

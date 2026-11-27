@@ -304,11 +304,13 @@ impl Shop {
         );
         for i in 0..4u8 {
             let r = self.mount_rect(i);
-            if self.mount_hover == Some(i) {
+            if self.mount_sel == i {
                 f.fill_rect(r.0, r.1, r.2, r.3, CURSOR_BG);
+            } else if self.mount_hover == Some(i) {
+                f.fill_rect(r.0, r.1, r.2, r.3, HOVER_BG);
             }
             let cur = laser_name(self.lasers[i as usize]);
-            let s = format!("{}  {:<6} {}", i, MOUNTS[i as usize], cur);
+            let s = format!("{}  {:<6} {}", i + 1, MOUNTS[i as usize], cur);
             let ty = r.1 + (r.3 as i32 - line) / 2;
             f.draw_text(font, r.0 + ch, ty, &s, TEXT, ts);
         }
@@ -317,7 +319,7 @@ impl Shop {
             font,
             mx + 2 * ch,
             hy,
-            "0-3 select   Esc cancel",
+            "1-4/Arrows select   Enter/Click buy   Esc cancel",
             TEXT_DIM,
             ts,
         );

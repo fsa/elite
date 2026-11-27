@@ -17,17 +17,24 @@ impl Shop {
         self.cursor = cur.clamp(0, n - 1) as usize;
     }
 
-    /// Цифра в модалке крепления лазера (`0..3`) выбирает позицию — как в
-    /// оригинале (`cp 30h; cp 34h`). Покупка по номеру товара отключена.
+    /// Цифра в модалке крепления лазера: `1..4` = FRONT/REAR/LEFT/RIGHT.
+    /// `0..3` тоже принимаются для совместимости с оригинальной раскладкой.
     pub fn input_digit(&mut self, mem: &mut [u8], d: u8) {
-        if self.mount.is_some() && d < 4 {
-            self.choose_mount(mem, d);
+        if self.mount.is_some() {
+            let slot = match d {
+                1..=4 => d - 1,
+                0 => 0,
+                _ => return,
+            };
+            self.mount_sel = slot;
+            self.choose_mount(mem, slot);
         }
     }
 
-    /// Enter: купить выбранную строку.
+    /// Enter: в модалке — подтвердить выбранное крепление, иначе купить строку.
     pub fn confirm(&mut self, mem: &mut [u8]) {
         if self.mount.is_some() {
+            self.choose_mount(mem, self.mount_sel);
             return;
         }
         if let Some(&number) = self.rows.get(self.cursor) {
@@ -35,10 +42,19 @@ impl Shop {
         }
     }
 
+    /// Сдвинуть выбор крепления в модалке.
+    pub fn move_mount_selection(&mut self, delta: i32) {
+        if self.mount.is_none() {
+            return;
+        }
+        self.mount_sel = (self.mount_sel as i32 + delta).clamp(0, 3) as u8;
+    }
+
     /// Клик мыши: покупка строки под указателем либо выбор крепления.
     pub fn click(&mut self, mem: &mut [u8]) {
         if self.mount.is_some() {
             if let Some(m) = self.mount_hover {
+                self.mount_sel = m;
                 self.choose_mount(mem, m);
             }
             return;
@@ -53,6 +69,7 @@ impl Shop {
     /// Отмена окна выбора крепления (деньги ещё не списаны — просто закрыть).
     pub fn cancel_mount(&mut self) {
         self.mount = None;
+        self.mount_sel = 0;
         self.mount_hover = None;
     }
 
@@ -140,6 +157,7 @@ impl Shop {
                     return;
                 }
                 self.mount = Some(number);
+                self.mount_sel = 0;
                 self.mount_hover = None;
             }
         }
@@ -155,6 +173,7 @@ impl Shop {
         let Some(number) = self.mount.take() else {
             return;
         };
+        self.mount_sel = 0;
         self.mount_hover = None;
         let Kind::Laser(laser) = ITEMS[(number - 1) as usize].kind else {
             return;

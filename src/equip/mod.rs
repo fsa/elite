@@ -97,6 +97,8 @@ pub struct Shop {
     hover: Option<usize>,
     /// Some(номер товара-лазера): открыто окно выбора крепления.
     mount: Option<u8>,
+    /// Выбранное крепление в модальном окне (0..3 = FRONT..RIGHT).
+    mount_sel: u8,
     /// Вариант крепления под указателем мыши.
     mount_hover: Option<u8>,
     /// Текст тоста и оставшиеся кадры показа.
@@ -125,6 +127,7 @@ impl Shop {
             cursor: 0,
             hover: None,
             mount: None,
+            mount_sel: 0,
             mount_hover: None,
             toast: None,
             toast_frames: 0,
@@ -148,6 +151,7 @@ impl Shop {
         self.cursor = 0;
         self.hover = None;
         self.mount = None;
+        self.mount_sel = 0;
         self.mount_hover = None;
         self.toast = None;
         self.toast_frames = 0;
