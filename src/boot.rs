@@ -1,16 +1,13 @@
 //! Загрузка образа игры и начальное состояние эмулятора.
 //!
-//! Версия Кладова грузится как 128K-образ: восемь банков ОЗУ по 16K из
-//! `zx_src/kladov128.snapshot`. Образ и ROM 48K встроены в исполняемый файл
-//! (`src/assets.rs`), поэтому запуск не зависит от внешних файлов. Образ
-//! получен `tools/make_kladov_image.py` и хранится как `zx_bin/kladov128.bin`.
-//! По умолчанию запускается GS-версия (`zx_bin/kladov128gs.bin`), собранная
-//! `tools/make_kladov_gs_image.py`: это тот же образ состояния игры с патчами
-//! General Sound. Точка старта и регистры остаются прежними.
-//! Файл `ELITE3  C` на дискете — слепок уже работающей игры, без согласованной
-//! точки холодного старта, поэтому мы не проходим загрузчик, а возобновляем
-//! исполнение ровно там, где был прерван обработчик прерывания в снапшоте:
-//! IM2, `I=0xFD`, обработчик 0xFEFE (таблица векторов уже в образе).
+//! Обычный запуск — холодный старт с готового 128K-образа. `tools/make_cold_image.py`
+//! один раз применяет загрузчик с `Elite3GS.trd` офлайн и пересобирает
+//! `zx_bin/kladov128gs.bin`. В рантайме образ просто кладётся в ОЗУ, выставляются
+//! регистры точки входа `0x7394` и игра получает управление. TR-DOS-диски в
+//! исполняемый файл не входят и во время работы не читаются; единственное
+//! исключение — импорт 102 байт сохранения commander-а.
+//!
+//! Подробности — в `docs/architecture/game-integration.md`.
 
 use std::env;
 
@@ -20,24 +17,56 @@ use crate::machine::Spectrum;
 use crate::native;
 use crate::world;
 
-pub const KLADOV_I: u8 = 0xFD;
+/// Точка входа в игру, куда приходит готовый загрузчик после `OUT (C),A; RET`.
+pub const GAME_ENTRY: u16 = 0x7394;
+/// Порт пейджинга в момент старта: банк 0 по `0xC000`, экран из банка 5.
+const COLD_PAGE_REG: u8 = 0x10;
+/// Регистры на входе в `0x7394` после однократной работы загрузчика GS-диска.
+/// Они сохраняются в образе холодного старта, чтобы обычный запуск не исполнял загрузчик.
+const COLD_AF: u16 = 0x1041;
+const COLD_BC: u16 = 0x7FFD;
+const COLD_DE: u16 = 0x5B00;
+const COLD_HL: u16 = 0xFC94;
+const COLD_SP: u16 = 0x4120;
+const COLD_IX: u16 = 0x6170;
+const COLD_IY: u16 = 0xFFFF;
+const COLD_I: u8 = 0xFD;
+const COLD_R: u8 = 0x0A;
+
+#[cfg(test)]
+const KLADOV_I: u8 = 0xFD;
 /// Регистры из заголовка SNA-снапшота `kladov128.snapshot`.
-pub const KLADOV_STATE_PC: u16 = 0xFEFE;
-pub const KLADOV_STATE_SP: u16 = 0x4112;
-pub const KLADOV_STATE_AF: u16 = 0x1101;
-pub const KLADOV_STATE_BC: u16 = 0x0000;
-pub const KLADOV_STATE_DE: u16 = 0x3D08;
-pub const KLADOV_STATE_HL: u16 = 0xD045;
-pub const KLADOV_STATE_IX: u16 = 0x6159;
-pub const KLADOV_STATE_IY: u16 = 0x62B2;
-pub const KLADOV_STATE_R: u8 = 0x7D;
-pub const KLADOV_STATE_A: u8 = (KLADOV_STATE_AF >> 8) as u8;
-pub const KLADOV_STATE_F: u8 = (KLADOV_STATE_AF & 0xFF) as u8;
+#[cfg(test)]
+const KLADOV_STATE_PC: u16 = 0xFEFE;
+#[cfg(test)]
+const KLADOV_STATE_SP: u16 = 0x4112;
+#[cfg(test)]
+const KLADOV_STATE_AF: u16 = 0x1101;
+#[cfg(test)]
+const KLADOV_STATE_BC: u16 = 0x0000;
+#[cfg(test)]
+const KLADOV_STATE_DE: u16 = 0x3D08;
+#[cfg(test)]
+const KLADOV_STATE_HL: u16 = 0xD045;
+#[cfg(test)]
+const KLADOV_STATE_IX: u16 = 0x6159;
+#[cfg(test)]
+const KLADOV_STATE_IY: u16 = 0x62B2;
+#[cfg(test)]
+const KLADOV_STATE_R: u8 = 0x7D;
+#[cfg(test)]
+const KLADOV_STATE_A: u8 = (KLADOV_STATE_AF >> 8) as u8;
+#[cfg(test)]
+const KLADOV_STATE_F: u8 = (KLADOV_STATE_AF & 0xFF) as u8;
 /// Альтернативный набор регистров (после `EXX`/`EX AF,AF'`).
-pub const KLADOV_STATE_AF_ALT: u16 = 0xC99A;
-pub const KLADOV_STATE_BC_ALT: u16 = 0x0221;
-pub const KLADOV_STATE_DE_ALT: u16 = 0x0060;
-pub const KLADOV_STATE_HL_ALT: u16 = 0x0240;
+#[cfg(test)]
+const KLADOV_STATE_AF_ALT: u16 = 0xC99A;
+#[cfg(test)]
+const KLADOV_STATE_BC_ALT: u16 = 0x0221;
+#[cfg(test)]
+const KLADOV_STATE_DE_ALT: u16 = 0x0060;
+#[cfg(test)]
+const KLADOV_STATE_HL_ALT: u16 = 0x0240;
 
 /// Загрузить 128K-образ Кладова в уже созданную машину.
 #[cfg(test)]
@@ -45,12 +74,8 @@ pub fn load_kladov_image(machine: &mut Spectrum) {
     machine.load_game_image(assets::KLADOV_IMAGE, assets::KLADOV_PAGE_REG);
 }
 
-/// Загрузить GS-версию Кладова (используется при обычном запуске игры).
-pub fn load_kladov_gs_image(machine: &mut Spectrum) {
-    machine.load_game_image(assets::KLADOV_GS_IMAGE, assets::KLADOV_PAGE_REG);
-}
-
 /// Выставить регистры из заголовка снапшота, включая альтернативный набор.
+#[cfg(test)]
 pub fn set_kladov_cpu(machine: &mut Spectrum) {
     let c = &mut machine.cpu;
     c.a = KLADOV_STATE_A;
@@ -82,11 +107,54 @@ pub fn set_kladov_cpu(machine: &mut Spectrum) {
     c.iff2 = true;
 }
 
+/// Выставить регистры готового холодного старта.
+///
+/// `ei_pending` остаётся взведённым: загрузчик исполнил `EI`, но ни одной
+/// команды после него до точки входа ещё не было. Отладочные такты обнуляются,
+/// чтобы первые кадры после старта не съедали время загрузчика.
+fn set_cold_cpu(machine: &mut Spectrum) {
+    let c = &mut machine.cpu;
+    c.a = (COLD_AF >> 8) as u8;
+    c.f = (COLD_AF & 0xFF) as u8;
+    c.b = (COLD_BC >> 8) as u8;
+    c.c = (COLD_BC & 0xFF) as u8;
+    c.d = (COLD_DE >> 8) as u8;
+    c.e = (COLD_DE & 0xFF) as u8;
+    c.h = (COLD_HL >> 8) as u8;
+    c.l = (COLD_HL & 0xFF) as u8;
+    // Альтернативный набор после загрузчика остался нулевым.
+    c.a_ = 0;
+    c.f_ = 0;
+    c.b_ = 0;
+    c.c_ = 0;
+    c.d_ = 0;
+    c.e_ = 0;
+    c.h_ = 0;
+    c.l_ = 0;
+    c.ix = COLD_IX;
+    c.iy = COLD_IY;
+    c.sp = COLD_SP;
+    c.pc = GAME_ENTRY;
+    c.i = COLD_I;
+    c.r = COLD_R;
+    c.im = 2;
+    c.iff1 = true;
+    c.iff2 = true;
+    c.halted = false;
+    c.ei_pending = true;
+    c.index_iy = false;
+    c.cycles = 0;
+    machine.frame_start = 0;
+}
+
 /// Настроить машину с загруженной игрой под версию Кладова.
 pub fn machine(opts: &Options) -> Spectrum {
     let mut machine = Spectrum::new(Some(assets::ROM_48));
-    load_kladov_gs_image(&mut machine);
-    set_kladov_cpu(&mut machine);
+
+    // Готовый образ уже содержит результат работы загрузчика. Нативные хуки и
+    // маркеры сцены ставятся после загрузки ОЗУ: образ записал бы их поверх.
+    machine.load_game_image(assets::COLD_IMAGE, COLD_PAGE_REG);
+    set_cold_cpu(&mut machine);
 
     if opts.native || env::var("ELITE_NATIVE").is_ok() {
         native::install(&mut machine);
@@ -98,11 +166,10 @@ pub fn machine(opts: &Options) -> Spectrum {
     machine.game_marker = game_start;
     machine.snapshot_marker = Some(world::snapshot_marker());
     machine.transition_snapshot_marker = Some(world::transition_snapshot_marker());
-    // Образ снапшота уже содержит `IndDanger = 0`, то есть формально корабль
-    // «пристыкован», хотя эмулятор ещё не исполнил ни одного кадра интро.
-    // Без явного признака заставки приложение захватило бы управление станцией
-    // до первого кадра и заморозило Z80 на заставке. Объявляем её сразу;
-    // флаг снимается только входом в `GameMain` по `Space`.
+    // Образ приведён к точке `0x7394`, но ни одного кадра интро ещё не
+    // исполнено. Без явного признака заставки приложение захватило бы
+    // управление станцией до первого кадра и заморозило Z80. Флаг снимается
+    // только входом в `GameMain` по `Space`.
     machine.intro_seen = true;
 
     // Нативный сейв/лоад командира: конфигурация сохранения должна быть
@@ -181,5 +248,54 @@ fn install_debug_env(machine: &mut Spectrum) {
     if let Ok(v) = env::var("ELITE_PROFILE") {
         machine.profile = vec![0u32; 0x1_0000];
         machine.profile_top = v.parse().unwrap_or(40).clamp(1, 512);
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// Готовый образ действительно содержит разложенный по банкам код игры,
+    /// а не пустую RAM с точкой входа `0x7394` случайным образом.
+    #[test]
+    fn cold_image_places_game_code() {
+        let mut machine = Spectrum::new(Some(assets::ROM_48));
+        machine.load_game_image(assets::COLD_IMAGE, COLD_PAGE_REG);
+
+        // Заглушка `OUT (C),A; RET` по `0x4000` возвращает в `0x7394`.
+        assert_eq!(&machine.mem[0x4000..0x4003], &[0xED, 0x79, 0xC9]);
+        assert_eq!(&machine.mem[0x411E..0x4120], &[0x94, 0x73]);
+        // Начало интро и код в банках 2 и 0.
+        assert_eq!(&machine.mem[0x7394..0x7398], &[0xAF, 0x32, 0xE3, 0x70]);
+        assert_eq!(machine.mem[0x8000], 0x38);
+        // Код банка 0, который загрузчик положил по `0xC000..0xFFFF`.
+        assert_eq!(machine.mem[0xD100], 0xF1);
+        // Хвостовой код загрузчика остался в банке 3.
+        assert_eq!(assets::COLD_IMAGE[0xC000], 0xED);
+        // Хвостовой блок загрузчика перенесён в `0x5B00`.
+        assert_eq!(machine.mem[0x5B00], 0x07);
+    }
+
+    /// Старт всегда приходит в `0x7394` с зафиксированным состоянием CPU.
+    #[test]
+    fn cold_start_cpu_state() {
+        let mut machine = Spectrum::new(Some(assets::ROM_48));
+        set_cold_cpu(&mut machine);
+        let c = &machine.cpu;
+
+        assert_eq!(c.pc, GAME_ENTRY);
+        assert_eq!(c.sp, 0x4120);
+        assert_eq!((c.a as u16) << 8 | c.f as u16, 0x1041);
+        assert_eq!(c.bc(), 0x7FFD);
+        assert_eq!(c.de(), 0x5B00);
+        assert_eq!(c.hl(), 0xFC94);
+        assert_eq!(c.ix, 0x6170);
+        assert_eq!(c.iy, 0xFFFF);
+        assert_eq!(c.i, 0xFD);
+        assert_eq!(c.r, 0x0A);
+        assert_eq!(c.im, 2);
+        assert!(c.iff1 && c.iff2);
+        assert!(c.ei_pending);
+        assert_eq!(c.cycles, 0);
     }
 }

@@ -2897,10 +2897,25 @@ use crate::world::{
         assert!(cleared, "SPACE не запустил игру");
     }
 
-    /// Холодный старт: снапшот уже имеет `IndDanger = 0`, но игра должна
-    /// начинаться на заставке. Нативный режим станции включается только после
-    /// `Space` и выхода Z80 из заставки. Конфигурация сохранения ставится до
-    /// запуска игры, чтобы на станции можно было сразу сохраниться.
+    /// Готовый cold-образ ставит машину на `0x7394`, но игра должна начинаться
+    /// на заставке. Нативный режим станции включается только после `Space` и
+    /// выхода Z80 из заставки. Конфигурация сохранения ставится до запуска игры,
+    /// чтобы на станции можно было сразу сохраниться.
+    #[test]
+    fn cold_start_image_reaches_intro() {
+        let opts = test_options();
+        let machine = crate::boot::machine(&opts);
+        assert_eq!(machine.cpu.pc, crate::boot::GAME_ENTRY);
+        assert_eq!(machine.cpu.sp, 0x4120);
+        assert_eq!(machine.cpu.i, 0xFD);
+        assert_eq!(machine.cpu.ix, 0x6170);
+        assert!(machine.intro_seen);
+        assert!(
+            machine.hooks.contains_key(&save_layout_kladov().menu_save_load),
+            "конфигурация сохранения должна быть установлена до старта"
+        );
+    }
+
     #[test]
     fn cold_start_shows_intro_and_space_enters_station() {
         let opts = test_options();
