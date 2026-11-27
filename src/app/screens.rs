@@ -670,7 +670,10 @@ impl App<'_> {
         // Ролик станции и гиперпрыжок — разные анимации. Ещё не сбросившийся
         // ролик вылета/стыковки не должен мешать началу прыжка: иначе выбранный
         // во время отсчёта боковой вид останется и после тоннеля.
-        if !hyperspace && self.flight.in_animation_mode() {
+        if self.flight.in_animation_mode()
+            && (!hyperspace
+                || self.flight.transition_kind() == Some(flight::TransitionKind::Hyperspace))
+        {
             return;
         }
         // Пока идёт отсчёт, informational-экран не трогаем: он показывает число.
@@ -1146,6 +1149,7 @@ impl App<'_> {
         // игрок: синхронизация с `WhatOnScreen` сбросила бы F2-F4 вперёд.
         if self.flight.active
             && !self.flight.in_animation_mode()
+            && !self.flight.post_warp_view_held()
             && !flight::z80_in_transition(&self.machine.mem)
         {
             let dir = match self.machine.mem[flight::Z80_WHAT_ON_SCREEN] {

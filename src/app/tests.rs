@@ -1936,6 +1936,184 @@ use crate::world::{
         assert_eq!(app.flight.view_dir, flight::ViewDir::Forward);
     }
 
+    /// Настоящий прыжок: после сброса флагов снимок сцены ещё несколько кадров
+    /// хранит переход. Нативный вид не должен закрываться и открываться заново —
+    /// это сбрасывает скорость и звёздное поле, и планета на выходе сменяется
+    /// быстрым пролётом звёзд.
+    #[test]
+    fn hyperspace_exit_keeps_native_view_until_snapshot_catches_up() {
+        // `byte_9522` из `sub_96A9`: звук выхода ещё идёт — управление не передано.
+        const EXIT_SFX_STATE: usize = 0x9522;
+        let opts = test_options();
+        let mut m = boot();
+        m.intro_range = Some((0x739E, 0x73FD));
+        m.game_marker = Some(0x7471);
+        m.snapshot_marker = Some(0x81A9);
+        m.transition_snapshot_marker = Some(world::transition_snapshot_marker());
+        for _ in 0..30 {
+            m.run_frame();
+        }
+        native::start_game(&mut m, native::KLADOV_SAVE);
+        for _ in 0..4000 {
+            m.run_frame();
+            if !m.intro_seen {
+                break;
+            }
+        }
+        for _ in 0..20 {
+            m.run_frame();
+        }
+        m.mem[0xFC0A] |= 1;
+        for _ in 0..1240 {
+            m.run_frame();
+        }
+        let mut app = App::new(m, &opts);
+        app.sync_state();
+        app.show_flight(flight::ViewDir::Forward);
+        app.sync_state();
+
+        app.machine.mem[0xD082] = 0x46;
+        app.machine.mem[0xD08D] = 1;
+        for key in [KeyCode::KeyG, KeyCode::KeyH] {
+            if let Some((row, bit)) = matrix_pos(key) {
+                app.matrix[row][bit as usize] = true;
+            }
+        }
+        let mut keys_released = false;
+        let mut exit_frame = None;
+        let mut tunnel_frames = 0;
+        let mut saw_post_warp_hold = false;
+        for i in 0..1400 {
+            app.forward_input();
+            app.machine.run_frames(1);
+            if !keys_released && app.machine.mem[flight::Z80_JUMP_COUNTDOWN] > 0 {
+                for key in [KeyCode::KeyG, KeyCode::KeyH] {
+                    if let Some((row, bit)) = matrix_pos(key) {
+                        app.matrix[row][bit as usize] = false;
+                    }
+                }
+                app.key_event(KeyCode::F3, false, false);
+                keys_released = true;
+            }
+            app.switch_to_flight_on_transition();
+            app.sync_flight_after_frames(1);
+            app.track_jump_countdown();
+            app.ensure_native_flight_in_space();
+            app.sync_state();
+
+            let active = app.machine.mem[flight::Z80_JUMP_DOCKING] != 0
+                || app.machine.mem[flight::Z80_FLG_JUMP_DOCKING] != 0;
+            if active && app.machine.mem[flight::Z80_JUMP_COUNTDOWN] == 0 {
+                tunnel_frames += 1;
+            }
+            saw_post_warp_hold |= app.flight.post_warp_view_held();
+            if exit_frame.is_none() && keys_released && !active {
+                exit_frame = Some(i);
+            }
+            if let Some(start) = exit_frame {
+                if app.machine.mem[EXIT_SFX_STATE] != 0 {
+                    assert!(
+                        app.flight.post_warp_view_held(),
+                        "фиксация снята во время звука на кадре +{}",
+                        i - start
+                    );
+                }
+                assert!(
+                    app.flight.active,
+                    "нативный вид закрылся на кадре +{} после выхода",
+                    i - start
+                );
+                assert_eq!(
+                    app.flight.view_dir,
+                    flight::ViewDir::Forward,
+                    "вид ушёл вбок на кадре +{} после выхода",
+                    i - start
+                );
+                assert!(
+                    app.flight.transition_kind().is_none(),
+                    "переход не закончился на выходе"
+                );
+                if i - start > 80 {
+                    assert!(tunnel_frames > 100, "тоннель не проигрался до конца");
+                    assert!(saw_post_warp_hold, "устаревший снимок не был замечен");
+                    assert_eq!(app.machine.mem[EXIT_SFX_STATE], 0, "звук не закончился");
+                    assert!(
+                        !app.flight.post_warp_view_held(),
+                        "фиксация залипла после получения управления"
+                    );
+                    return;
+                }
+            }
+        }
+        panic!("no exit");
+    }
+
+    /// Пока снимок сцены не догнал живую память, конец кадра не должен брать
+    /// вид из `WhatOnScreen` и сбрасывать скорость с полем звёзд.
+    #[test]
+    fn hyperspace_exit_keeps_forward_view_until_snapshot_catches_up() {
+        let opts = test_options();
+        let mut app = App::new(boot(), &opts);
+        app.show_flight(flight::ViewDir::Forward);
+        app.machine.mem[flight::Z80_WHAT_ON_SCREEN] = 0;
+        app.machine.mem[flight::Z80_IND_DANGER] = 1;
+        app.machine.mem[flight::Z80_JUMP_DOCKING] = 0;
+        app.machine.mem[flight::Z80_FLG_JUMP_DOCKING] = 0;
+        app.machine.mem[flight::Z80_JUMP_COUNTDOWN] = 0;
+
+        app.key_event(KeyCode::F4, true, false);
+        assert_eq!(app.flight.view_dir, flight::ViewDir::Right);
+
+        // Игрок выбрал боковой вид во время отсчёта.
+        app.machine.mem[flight::Z80_WHAT_ON_SCREEN] = 2;
+        app.machine.mem[flight::Z80_JUMP_DOCKING] = 2;
+        app.machine.mem[flight::Z80_FLG_JUMP_DOCKING] = 1;
+        app.machine.mem[flight::Z80_JUMP_COUNTDOWN] = 0x15;
+        app.track_jump_countdown();
+        app.follow_flight_screen();
+        assert_eq!(
+            app.flight.view_dir,
+            flight::ViewDir::Right,
+            "отсчёт не должен сбрасывать выбранный вид"
+        );
+
+        // Тоннель всегда передний.
+        app.machine.mem[flight::Z80_JUMP_COUNTDOWN] = 0;
+        app.switch_to_flight_on_transition();
+        app.flight.sync_transition_from_live(&app.machine.mem);
+        assert!(app.flight.in_animation_mode(), "тоннель не начался");
+        assert_eq!(app.flight.view_dir, flight::ViewDir::Forward);
+
+        // Живые флаги сброшены, но снимок ещё держит переход и боковой вид.
+        app.machine.mem[flight::Z80_JUMP_DOCKING] = 0;
+        app.machine.mem[flight::Z80_FLG_JUMP_DOCKING] = 0;
+        let mut stale_scene = vec![0u8; app.machine.mem.len()];
+        stale_scene[flight::Z80_WHAT_ON_SCREEN] = 2;
+        stale_scene[flight::Z80_JUMP_DOCKING] = 2;
+        stale_scene[flight::Z80_FLG_JUMP_DOCKING] = 1;
+        app.flight
+            .follow_z80_screen(&app.machine.mem, &stale_scene, false);
+        assert!(app.flight.active, "вид закрылся по устаревшему снимку");
+        assert!(app.flight.post_warp_view_held(), "фиксация не взведена");
+        app.ensure_native_flight_in_space();
+        app.key_event(KeyCode::F3, true, false);
+        assert_eq!(
+            app.flight.view_dir,
+            flight::ViewDir::Forward,
+            "вид ушёл вбок до обновления снимка"
+        );
+
+        // Когда снимок догнал живую память, выбор `WhatOnScreen` снова вступает в силу.
+        app.flight
+            .follow_z80_screen(&app.machine.mem, &app.machine.mem, false);
+        assert!(
+            !app.flight.post_warp_view_held(),
+            "фиксация залипла после обновления снимка"
+        );
+        app.ensure_native_flight_in_space();
+        assert_eq!(app.flight.view_dir, flight::ViewDir::Left);
+    }
+
     /// Запрос вылета, оставшийся после предыдущей станции, не должен
     /// переклассифицировать новый гиперпрыжок в ролик вылета. Иначе боковой
     /// вид, выбранный во время отсчёта, остаётся и после тоннеля, и звёзды

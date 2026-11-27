@@ -208,6 +208,11 @@ pub struct Flight {
     system_color: u32,
     /// Нативная анимация вылета/прыжка/стыковки вместо ZX-ролика.
     transition: TransitionState,
+    /// Хвост гиперпрыжка: живая память уже сбросила флаги перехода, а снимок
+    /// сцены ещё хранит их. В этот промежуток вид остаётся передним и не
+    /// переоткрывается: повторное открытие сбрасывает скорость и поле звёзд,
+    /// вместо планеты получается быстрый пролёт мимо неё.
+    post_warp_view_hold: bool,
     /// После стыковки оригинал сбрасывает флаги перехода раньше, чем уходит
     /// с кабинного экрана, а `IndDanger = 0` может записать ещё позже. В этот
     /// промежуток вид должен оставаться тёмным: обычная сцена показывалась бы
@@ -255,6 +260,7 @@ impl Flight {
             planet_color: PLANET_COLOR,
             system_color: 0,
             transition: TransitionState::new(),
+            post_warp_view_hold: false,
             docking_blackout: false,
             combat: Combat::new(),
             explosions: Explosions::new(),
@@ -292,6 +298,7 @@ impl Flight {
         self.star_accum = 0.0;
         self.star_interval = 1.0 / 5.5;
         self.transition.reset();
+        self.post_warp_view_hold = false;
         self.docking_blackout = false;
         self.combat.reset();
         self.explosions.reset();
@@ -311,6 +318,7 @@ impl Flight {
     /// показывать — уход станции или тоннель.
     pub fn start_transition(&mut self, launch: bool, mem: &[u8]) {
         self.transition.start(launch, mem);
+        self.post_warp_view_hold = false;
         self.docking_blackout = false;
         if self.transition.station_kind() == Some(StationKind::Launch) {
             self.speed_resync = true;
@@ -324,6 +332,7 @@ impl Flight {
     /// гиперпрыжка, отсчёт которого уже закончился к моменту открытия F1).
     pub fn start_transition_kind(&mut self, kind: TransitionKind, countdown: u8) {
         self.transition.start_kind(kind, countdown);
+        self.post_warp_view_hold = false;
         self.docking_blackout = false;
         if kind == TransitionKind::Launch {
             self.speed_resync = true;
@@ -354,6 +363,12 @@ impl Flight {
         self.transition.in_animation()
     }
 
+    /// Держит ли хвост гиперпрыжка передний вид, пока снимок сцены не догнал
+    /// живую память.
+    pub fn post_warp_view_held(&self) -> bool {
+        self.post_warp_view_hold
+    }
+
     /// Переключить вид по сторонам (F1-F4 в нативном полёте): те же клавиши
     /// 1-4, которыми оригинал меняет `WhatOnScreen`.
     ///
@@ -362,7 +377,7 @@ impl Flight {
         if !self.active {
             return;
         }
-        if self.in_animation_mode() {
+        if self.in_animation_mode() || self.post_warp_view_held() {
             self.view_dir = ViewDir::Forward;
             return;
         }
@@ -456,6 +471,7 @@ impl Flight {
             if self.transition.hyperspace.is_none() {
                 // Присоединяемся к уже идущему прыжку. Ролик станции, если он
                 // ещё висел на старом снимке, прыжком не продолжается.
+                self.post_warp_view_hold = false;
                 self.transition.start_hyperspace(countdown);
             }
             return;
@@ -477,6 +493,7 @@ impl Flight {
             let need_restart = station_kind.is_none()
                 || (launch && station_kind != Some(StationKind::Launch));
             if need_restart {
+                self.post_warp_view_hold = false;
                 self.transition.start_station(if launch {
                     StationKind::Launch
                 } else {
@@ -495,12 +512,23 @@ impl Flight {
         let was_docking = station_kind == Some(StationKind::Docking);
         let was_launch = station_kind == Some(StationKind::Launch);
         let hyperspace_was_warp = self.transition.hyperspace.is_some_and(|t| t.warp);
+        // Снимок сцены снимается в конце прохода Z80 и на выходе из тоннеля
+        // ещё может хранить уже сброшенные в живой памяти флаги перехода.
+        // Проверка кабины по такому снимку ложно закрывает нативный вид, после
+        // чего `ensure_native_flight_in_space` открывает его заново: сброс
+        // скорости и поля звёзд выглядит как быстрый пролёт мимо планеты.
+        if hyperspace_was_warp && screen < 4 && memory::z80_in_transition(scene_mem) {
+            self.post_warp_view_hold = true;
+        }
         self.transition.reset_station();
         self.transition.reset_hyperspace();
+        if self.post_warp_view_hold && (screen >= 4 || memory::z80_in_cockpit(scene_mem)) {
+            self.post_warp_view_hold = false;
+        }
         if hyperspace_was_warp && self.active {
-            // Тоннель прыжка всегда передний. Фиксируем вид на выходе, чтобы
-            // последующая синхронизация с `WhatOnScreen` не вернула боковой
-            // вид, выбранный во время отсчёта.
+            // Тоннель прыжка всегда передний. Хвост фиксации не даёт
+            // синхронизации с `WhatOnScreen` вернуть боковой вид, выбранный
+            // во время отсчёта, пока снимок сцены не догонит живую память.
             self.view_dir = ViewDir::Forward;
         }
         if was_launch {
@@ -519,7 +547,7 @@ impl Flight {
         if !self.active {
             return;
         }
-        if !memory::z80_in_cockpit(scene_mem) {
+        if !memory::z80_in_cockpit(scene_mem) && !self.post_warp_view_hold {
             // `0x0B` — экран станции. После запуска со станции Z80 держит его
             // несколько кадров, пока идёт анимация вылета; уже открытый экран
             // не закрываем до первого настоящего полётного кадра. Пока ждём
@@ -566,7 +594,7 @@ impl Flight {
         // Живая память может показать конец отсчёта раньше снимка сцены.
         // Тоннель всегда передний, даже если во время отсчёта был выбран другой
         // вид.
-        if self.in_animation_mode() {
+        if self.in_animation_mode() || self.post_warp_view_held() {
             self.view_dir = ViewDir::Forward;
         }
     }
@@ -641,9 +669,9 @@ impl Flight {
             // заставляло бы звёзды лететь дальше, хотя камера уже стоит.
             self.speed = 0.0;
         }
-        if self.game_over || self.in_animation_mode() {
-            // При взрыве корабля и в режиме анимации (вылет/гиперпереход)
-            // показывается только передний вид.
+        if self.game_over || self.in_animation_mode() || self.post_warp_view_held() {
+            // При взрыве корабля, в режиме анимации (вылет/гиперпереход) и на
+            // хвосте гиперпрыжка показывается только передний вид.
             self.view_dir = ViewDir::Forward;
         }
 
@@ -651,7 +679,7 @@ impl Flight {
 
         // Переход в режим анимации гиперперехода мог произойти на этом шаге
         // (например, отсчёт закончился и начался тоннель) — фиксируем вид.
-        if self.in_animation_mode() {
+        if self.in_animation_mode() || self.post_warp_view_held() {
             self.view_dir = ViewDir::Forward;
         }
 

@@ -6,10 +6,10 @@ use crate::render3d::{ENGINE_IDLE, Rotation, Screen};
 use super::explosions::EXPLOSION_TIME;
 use super::memory::{
     ext_slot_base, read_signed24, read_signed8, Z80_DAMAGE_FRONT_SHIELD, Z80_FLG_OBJ_NEAR,
-    Z80_IN_FREE_SPACE, Z80_LASER_MOUNTS, Z80_OBJ_CORIOLIS, Z80_OBJ_MISSILE, Z80_OBJ_SLOT0,
-    Z80_OENERG_DESTROYED, Z80_PLANET_CRD, Z80_SHIELD_FRONT, Z80_SHIELD_REAR, Z80_SLOT_OACCEL,
-    Z80_SLOT_OADRDATA, Z80_SLOT_OENERG, Z80_SLOT_SIZE, Z80_STARS_TABLE, Z80_SUN_CRD,
-    Z80_TEMP_LASER,
+    Z80_IN_FREE_SPACE, Z80_LASER_MOUNTS, Z80_OBJ_CORIOLIS, Z80_OBJ_MISSILE,
+    Z80_OBJ_SLOT0, Z80_OENERG_DESTROYED, Z80_PLANET_CRD, Z80_SHIELD_FRONT, Z80_SHIELD_REAR,
+    Z80_SLOT_OACCEL, Z80_SLOT_OADRDATA, Z80_SLOT_OENERG, Z80_SLOT_SIZE, Z80_STARS_TABLE,
+    Z80_SUN_CRD, Z80_TEMP_LASER,
 };
 use super::messages::{
     countdown_number, view_label, BOTTOM_MSG_TTL, DOCKING_BLINK_ON_FRAMES, DOCKING_BLINK_PERIOD,
@@ -2156,6 +2156,49 @@ fn hyperspace_exit_does_not_turn_stars_into_a_fast_side_flight() {
         }
     }
     panic!("нативный тоннель гиперпрыжка не закончился");
+}
+
+/// На выходе из тоннеля живая память уже сбросила флаги перехода, а снимок
+/// сцены ещё нет. Пока он не обновится, вид не должен закрываться и открываться
+/// заново: это сбрасывает скорость и звёздное поле, и вместо планеты получается
+/// быстрый пролёт звёзд. Передний вид держится до обновления снимка.
+#[test]
+fn hyperspace_exit_survives_stale_scene_snapshot() {
+    let mut f = open();
+    f.speed = 12.0;
+    let stars_before = f.stars.stars.clone();
+    let mut mem = vec![0u8; 0x10000];
+    mem[Z80_SPEED_GAUGE] = 65;
+    mem[Z80_JUMP_DOCKING] = 2;
+    mem[Z80_FLG_JUMP_DOCKING] = 1;
+    f.follow_z80_screen(&mem, &mem, false);
+    assert_eq!(f.view_dir, ViewDir::Forward);
+    assert!(!f.post_warp_view_held(), "фиксация не нужна во время тоннеля");
+
+    // Живые флаги сброшены, снимок ещё держит переход и боковой вид.
+    mem[Z80_JUMP_DOCKING] = 0;
+    mem[Z80_FLG_JUMP_DOCKING] = 0;
+    mem[Z80_WHAT_ON_SCREEN] = 2;
+    let mut stale_scene = mem.clone();
+    stale_scene[Z80_JUMP_DOCKING] = 2;
+    stale_scene[Z80_FLG_JUMP_DOCKING] = 1;
+    f.follow_z80_screen(&mem, &stale_scene, false);
+
+    assert!(f.active, "вид закрылся по устаревшему снимку");
+    assert!(f.post_warp_view_held(), "фиксация не взведена");
+    assert_eq!(f.speed, 12.0, "скорость сброшена на выходе");
+    assert_eq!(f.stars.stars.len(), stars_before.len());
+    for (now, before) in f.stars.stars.iter().zip(&stars_before) {
+        assert_eq!(now.pos, before.pos, "поле звёзд пересоздано на выходе");
+    }
+    f.set_view_dir(ViewDir::Right);
+    assert_eq!(f.view_dir, ViewDir::Forward, "вид ушёл вбок до обновления снимка");
+
+    // Когда снимок догнал живые флаги, выбор `WhatOnScreen` снова вступает в силу.
+    f.follow_z80_screen(&mem, &mem, false);
+    assert!(!f.post_warp_view_held(), "фиксация залипла после обновления снимка");
+    f.set_view_dir(ViewDir::Right);
+    assert_eq!(f.view_dir, ViewDir::Right);
 }
 
 #[test]
