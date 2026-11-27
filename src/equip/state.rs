@@ -1,10 +1,10 @@
 //! Чтение и запись состояния командира: список товаров, цены и деньги.
 
 use super::Shop;
-use super::items::{MAX_ITEMS, TOAST_FRAMES};
+use super::items::{BAY_TONS, MAX_ITEMS, TOAST_FRAMES};
 use super::layout::{
-    FLAG_BASE, OFF_CASH1, OFF_CASH2, OFF_COBRA, OFF_FREE_CARGO, OFF_FUEL, OFF_LASERS,
-    OFF_MISSILES, OFF_TECH,
+    BASE_CARGO_TONS, FLAG_BASE, OFF_CASH1, OFF_CASH2, OFF_COBRA, OFF_FREE_CARGO, OFF_FUEL,
+    OFF_LASERS, OFF_MISSILES, OFF_TECH,
 };
 
 impl Shop {
@@ -28,6 +28,13 @@ impl Shop {
         for n in 1..=MAX_ITEMS as u8 {
             self.fitted[n as usize] = self.flag_fitted(mem, n);
         }
+        // Вместимость трюма: как `SetMaxTonnage` в оригинале — 20 тонн базово,
+        // плюс 15 за каждый установленный большой грузовой отсек.
+        self.cargo_cap = if self.fitted[3] {
+            BASE_CARGO_TONS.saturating_add(BAY_TONS)
+        } else {
+            BASE_CARGO_TONS
+        };
         self.cursor = self.cursor.min(self.rows.len().saturating_sub(1));
         // Наведение переживает перерисовку (после клика список обновляется,
         // но указатель остаётся на той же строке).

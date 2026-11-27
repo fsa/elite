@@ -10,6 +10,8 @@ pub(super) const OFF_CASH2: usize = 18;
 pub(super) const OFF_CASH1: usize = 20;
 /// `PilotFreeCargo`: свободные тонны трюма.
 pub(super) const OFF_FREE_CARGO: usize = 40;
+/// Базовая вместимость трюма без большого грузового отсека (тонн).
+pub(super) const BASE_CARGO_TONS: u8 = 20;
 /// `PilotFrontLaser`: крепления лазеров FRONT/REAR/LEFT/RIGHT.
 pub(super) const OFF_LASERS: usize = 41;
 /// `Pilot_Fuel`.

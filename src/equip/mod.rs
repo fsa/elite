@@ -83,6 +83,7 @@ pub struct Shop {
     fuel: u8,
     missiles: u8,
     free_cargo: u8,
+    cargo_cap: u8,
     tech: u8,
     /// Типы лазеров в креплениях FRONT/REAR/LEFT/RIGHT (0 — нет).
     lasers: [u8; 4],
@@ -116,6 +117,7 @@ impl Shop {
             fuel: 0,
             missiles: 0,
             free_cargo: 0,
+            cargo_cap: 0,
             tech: 0,
             lasers: [0; 4],
             system: String::new(),

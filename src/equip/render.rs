@@ -172,7 +172,12 @@ impl Shop {
                     TEXT_DIM,
                 ),
                 (
-                    format!("{:<9}{} T", "Cargo", self.free_cargo),
+                    format!(
+                        "{:<9}{}/{} T",
+                        "Cargo",
+                        self.cargo_cap.saturating_sub(self.free_cargo),
+                        self.cargo_cap
+                    ),
                     TEXT_DIM,
                 ),
                 ("Lasers".to_string(), TEXT),
