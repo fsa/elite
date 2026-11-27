@@ -5,15 +5,17 @@ on:
     tags:
       - 'v*'
 
+permissions:
+  contents: read
+
+env:
+  ELITE_VERSION: ${{ github.ref_name }}
+
 jobs:
   build:
-    name: ${{ matrix.target }}
+    name: Build ${{ matrix.target }}
     runs-on: ${{ matrix.os }}
-    permissions:
-      contents: read
-    env:
-      # Вшивается в бинарник через option_env!("ELITE_VERSION") в cli.rs.
-      ELITE_VERSION: ${{ github.ref_name }}
+
     strategy:
       fail-fast: false
       matrix:
@@ -21,10 +23,10 @@ jobs:
           - os: ubuntu-latest
             target: x86_64-unknown-linux-gnu
             binary: elite
-            # PipeWire остаётся основным бэкендом, cpal/ALSA — фоллбек.
             features: --features audio-cpal
             cache-key: linux-pipewire-alsa
             archive: elite-${{ github.ref_name }}-linux-x86_64.tar.gz
+
           - os: windows-latest
             target: x86_64-pc-windows-msvc
             binary: elite.exe
@@ -35,6 +37,14 @@ jobs:
     steps:
       - name: Checkout
         uses: actions/checkout@v4
+
+      - name: Validate version tag
+        shell: bash
+        run: |
+          if [[ ! "$ELITE_VERSION" =~ ^v(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)(-[0-9A-Za-z.-]+)?(\+[0-9A-Za-z.-]+)?$ ]]; then
+            echo "Invalid version tag: $ELITE_VERSION"
+            exit 1
+          fi
 
       - name: Install Rust
         uses: dtolnay/rust-toolchain@stable
@@ -55,10 +65,12 @@ jobs:
         if: runner.os == 'Linux'
         run: |
           sudo apt-get update
-          sudo apt-get install -y libpipewire-0.3-dev libclang-dev libasound2-dev pkg-config
-          # В .cargo/config.toml зашиты пути clang/gcc хоста разработчика;
-          # на раннере они мешают bindgen. Cargo не перезаписывает уже
-          # заданную переменную окружения, если force = true не указано.
+          sudo apt-get install -y \
+            libpipewire-0.3-dev \
+            libclang-dev \
+            libasound2-dev \
+            pkg-config
+
           echo "BINDGEN_EXTRA_CLANG_ARGS=" >> "$GITHUB_ENV"
 
       - name: Tests
@@ -68,7 +80,9 @@ jobs:
           cargo test --release --target ${{ matrix.target }} ${{ matrix.features }}
 
       - name: Build
-        run: cargo build --release --target ${{ matrix.target }} ${{ matrix.features }}
+        shell: bash
+        run: |
+          cargo build --release --target ${{ matrix.target }} ${{ matrix.features }}
 
       - name: Check embedded version
         shell: bash
@@ -79,6 +93,7 @@ jobs:
 
       - name: Package (Linux)
         if: runner.os == 'Linux'
+        shell: bash
         run: |
           tar -czf "${{ matrix.archive }}" \
             -C "target/${{ matrix.target }}/release" "${{ matrix.binary }}" \
@@ -88,7 +103,9 @@ jobs:
         if: runner.os == 'Windows'
         shell: pwsh
         run: |
-          Compress-Archive -Path "target/${{ matrix.target }}/release/${{ matrix.binary }}", "${{ github.workspace }}/README.md" -DestinationPath "${{ matrix.archive }}"
+          Compress-Archive `
+            -Path "target/${{ matrix.target }}/release/${{ matrix.binary }}", "${{ github.workspace }}/README.md" `
+            -DestinationPath "${{ matrix.archive }}"
 
       - name: Upload artifact
         uses: actions/upload-artifact@v4
@@ -98,11 +115,13 @@ jobs:
           if-no-files-found: error
 
   release:
-    name: Publish release
+    name: Publish GitHub Release
     needs: build
     runs-on: ubuntu-latest
+
     permissions:
       contents: write
+
     steps:
       - name: Download artifacts
         uses: actions/download-artifact@v4
@@ -114,11 +133,12 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
           TAG: ${{ github.ref_name }}
+        shell: bash
         run: |
           args=(--title "$TAG" --generate-notes)
-          # Стабильный релиз — только vX.Y.Z; v0.1.0alpha, v0.1.0-beta.1
-          # и прочие варианты публикуются как pre-release.
+
           if [[ ! "$TAG" =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
             args+=(--prerelease)
           fi
+
           gh release create "$TAG" dist/* "${args[@]}"
