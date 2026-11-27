@@ -1936,6 +1936,62 @@ use crate::world::{
         assert_eq!(app.flight.view_dir, flight::ViewDir::Forward);
     }
 
+    /// Запрос вылета, оставшийся после предыдущей станции, не должен
+    /// переклассифицировать новый гиперпрыжок в ролик вылета. Иначе боковой
+    /// вид, выбранный во время отсчёта, остаётся и после тоннеля, и звёзды
+    /// идут поперёк экрана.
+    #[test]
+    fn lingering_launch_request_does_not_turn_jump_into_launch() {
+        let opts = test_options();
+        let mut app = App::new(boot(), &opts);
+        app.machine.mem[flight::Z80_WHAT_ON_SCREEN] = 0;
+        app.machine.mem[flight::Z80_IND_DANGER] = 1;
+        app.machine.mem[flight::Z80_JUMP_DOCKING] = 0;
+        app.machine.mem[flight::Z80_FLG_JUMP_DOCKING] = 0;
+        app.machine.mem[flight::Z80_JUMP_COUNTDOWN] = 0;
+
+        app.key_event(KeyCode::F4, true, false);
+        assert_eq!(app.flight.view_dir, flight::ViewDir::Right);
+        // Нативный запрос вылета ещё не сброшен после предыдущей станции.
+        app.pending_launch = true;
+
+        app.machine.mem[flight::Z80_JUMP_DOCKING] = 2;
+        app.machine.mem[flight::Z80_FLG_JUMP_DOCKING] = 1;
+        app.machine.mem[flight::Z80_JUMP_COUNTDOWN] = 0x15;
+        app.track_jump_countdown();
+        app.follow_flight_screen();
+        assert_eq!(
+            app.flight.transition_kind(),
+            Some(flight::TransitionKind::Hyperspace),
+            "прыжок с оставшимся запросом вылета показан как вылет"
+        );
+        assert_eq!(
+            app.flight.view_dir,
+            flight::ViewDir::Right,
+            "отсчёт не должен сбрасывать выбранный вид"
+        );
+
+        app.machine.mem[flight::Z80_JUMP_COUNTDOWN] = 0;
+        app.switch_to_flight_on_transition();
+        app.flight.sync_transition_from_live(&app.machine.mem);
+        assert_eq!(
+            app.flight.transition_kind(),
+            Some(flight::TransitionKind::Hyperspace),
+            "тоннель заменён роликом вылета"
+        );
+        assert_eq!(app.flight.view_dir, flight::ViewDir::Forward);
+
+        app.machine.mem[flight::Z80_JUMP_DOCKING] = 0;
+        app.machine.mem[flight::Z80_FLG_JUMP_DOCKING] = 0;
+        app.follow_flight_screen();
+        assert!(!app.flight.in_transition(), "прыжок не закончился");
+        assert_eq!(
+            app.flight.view_dir,
+            flight::ViewDir::Forward,
+            "после прыжка остался боковой вид"
+        );
+    }
+
     /// Стыковка при открытом нативном виде: рендер показывает тоннель, а
     /// после посадки закрывается и не оставляет запроса на возврат.
     #[test]

@@ -657,7 +657,7 @@ impl App<'_> {
     /// Стыковка и вылет не имеют отсчёта, поэтому их анимация включается сразу
     /// по флагу `JumpDocking`, в том числе поверх экрана эмулятора.
     pub(super) fn switch_to_flight_on_transition(&mut self) {
-        if self.menu || self.flight.in_animation_mode() || self.emulator_transition_lock {
+        if self.menu || self.emulator_transition_lock {
             return;
         }
         let mem = &self.machine.mem;
@@ -667,6 +667,12 @@ impl App<'_> {
         let countdown = mem.get(flight::Z80_JUMP_COUNTDOWN).copied().unwrap_or(0);
         let intergalactic = mem.get(flight::Z80_JUMP_DOCKING).copied() == Some(2);
         let hyperspace = self.saw_jump_countdown || countdown > 0 || intergalactic;
+        // Ролик станции и гиперпрыжок — разные анимации. Ещё не сбросившийся
+        // ролик вылета/стыковки не должен мешать началу прыжка: иначе выбранный
+        // во время отсчёта боковой вид останется и после тоннеля.
+        if !hyperspace && self.flight.in_animation_mode() {
+            return;
+        }
         // Пока идёт отсчёт, informational-экран не трогаем: он показывает число.
         if hyperspace && countdown > 0 {
             return;
@@ -1029,7 +1035,10 @@ impl App<'_> {
             self.machine.game_state(),
             launch,
         );
-        if launch && self.flight.transition_kind() == Some(flight::TransitionKind::Launch) {
+        // Запрос вылета поглощается любым переходом: если Z80 начал прыжок или
+        // стыковку, отложенный вылет больше не нужен и не должен влиять на
+        // следующий переход.
+        if launch && self.flight.in_transition() {
             self.pending_launch = false;
         }
     }

@@ -97,7 +97,7 @@ fn tick_positions(mem: &[u8]) -> TickPositions {
         planet,
     }
 }
-use self::transition::TransitionState;
+use self::transition::{StationKind, TransitionState};
 
 mod combat;
 mod explosions;
@@ -312,7 +312,7 @@ impl Flight {
     pub fn start_transition(&mut self, launch: bool, mem: &[u8]) {
         self.transition.start(launch, mem);
         self.docking_blackout = false;
-        if launch {
+        if self.transition.station_kind() == Some(StationKind::Launch) {
             self.speed_resync = true;
             self.just_launched = true;
         }
@@ -439,11 +439,33 @@ impl Flight {
         if screen < 4 {
             self.seen_flight_screen = true;
         }
-        let waiting_for_launch_snapshot =
-            self.transition.kind() == Some(TransitionKind::Launch);
-        let in_transition = memory::z80_in_transition(live_mem)
+        let live_transition = memory::z80_in_transition(live_mem);
+        // Гиперпрыжок живёт в своей анимации и здесь не обрабатывается: его
+        // отсчёт и тоннель синхронизируются из живой памяти отдельно.
+        let countdown = live_mem.get(Z80_JUMP_COUNTDOWN).copied().unwrap_or(0);
+        let intergalactic = live_mem.get(Z80_JUMP_DOCKING).copied() == Some(2);
+        // Запрос вылета не делает прыжок вылетом: `pending_launch` может ещё
+        // висеть после предыдущей станции. По живой памяти прыжок узнаётся по
+        // отсчёту или межзвёздному `JumpDocking == 2` и обрабатывается своей
+        // анимацией независимо от флага `launch`.
+        let hyperspace_now = countdown > 0
+            || intergalactic
+            || (self.transition.hyperspace.is_some() && !launch);
+
+        if live_transition && hyperspace_now {
+            if self.transition.hyperspace.is_none() {
+                // Присоединяемся к уже идущему прыжку. Ролик станции, если он
+                // ещё висел на старом снимке, прыжком не продолжается.
+                self.transition.start_hyperspace(countdown);
+            }
+            return;
+        }
+
+        let station_kind = self.transition.station_kind();
+        let waiting_for_launch_snapshot = station_kind == Some(StationKind::Launch);
+        let station_now = live_transition && !hyperspace_now
             || (waiting_for_launch_snapshot && memory::z80_in_transition(scene_mem));
-        if in_transition {
+        if station_now {
             // Ролик теперь рисуем сами: нативный вид остаётся открытым и
             // получает состояние перехода. Если вид временно скрыт (показ
             // эмулятора), состояние перехода всё равно поддерживаем, чтобы F1
@@ -452,12 +474,15 @@ impl Flight {
             // нативный ролик может ещё не сброситься, а живые флаги Z80 уже
             // взвели новый переход. Оставить старую стыковку — значит
             // закончить вылет без `speed_resync` и показать ложный J-драйв.
-            let need_restart = !self.transition.in_transition()
-                || (launch && self.transition.kind() != Some(TransitionKind::Launch));
+            let need_restart = station_kind.is_none()
+                || (launch && station_kind != Some(StationKind::Launch));
             if need_restart {
-                self.transition.reset();
-                self.transition.start(launch, live_mem);
-                if self.transition.kind() == Some(TransitionKind::Launch) {
+                self.transition.start_station(if launch {
+                    StationKind::Launch
+                } else {
+                    StationKind::Docking
+                });
+                if launch {
                     self.speed_resync = true;
                     self.just_launched = true;
                 }
@@ -467,9 +492,17 @@ impl Flight {
             }
             return;
         }
-        let was_docking = matches!(self.transition.kind(), Some(TransitionKind::Docking));
-        let was_launch = matches!(self.transition.kind(), Some(TransitionKind::Launch));
-        self.transition.reset();
+        let was_docking = station_kind == Some(StationKind::Docking);
+        let was_launch = station_kind == Some(StationKind::Launch);
+        let hyperspace_was_warp = self.transition.hyperspace.is_some_and(|t| t.warp);
+        self.transition.reset_station();
+        self.transition.reset_hyperspace();
+        if hyperspace_was_warp && self.active {
+            // Тоннель прыжка всегда передний. Фиксируем вид на выходе, чтобы
+            // последующая синхронизация с `WhatOnScreen` не вернула боковой
+            // вид, выбранный во время отсчёта.
+            self.view_dir = ViewDir::Forward;
+        }
         if was_launch {
             // После вылета снимки интерполяции относятся к станции/старой сцене.
             // Сбрасываем их, чтобы первый реальный кадр полёта не смешивался с
@@ -524,9 +557,9 @@ impl Flight {
 
     /// Применить отсчёт и флаг тоннеля из переданной памяти.
     fn apply_transition_sync(&mut self, mem: &[u8]) {
-        self.transition.sync(mem);
-        if let Some(t) = &mut self.transition.current {
-            if t.kind == TransitionKind::Hyperspace && t.warp && t.warp_initial_speed.is_none() {
+        self.transition.sync_hyperspace(mem);
+        if let Some(t) = &mut self.transition.hyperspace {
+            if t.warp && t.warp_initial_speed.is_none() {
                 t.warp_initial_speed = Some(self.speed);
             }
         }
@@ -806,16 +839,12 @@ impl Flight {
         if self.game_over {
             return;
         }
-        if let Some(t) = self.transition.current {
-            if t.kind == TransitionKind::Hyperspace && t.warp {
-                let initial_speed = t.warp_initial_speed.unwrap_or(self.speed);
-                // Длительность совпадает с тоннелем: звёзды возвращаются к
-                // исходной скорости к моменту, когда кольцо уходит за экран.
-                let progress = t.warp_elapsed / render::transition::HYPERSPACE_EXIT_TIME;
-                self.stars.advance_hyperspace(dt, initial_speed, progress);
-            } else {
-                self.stars.advance(dt, self.speed);
-            }
+        if let Some(t) = self.transition.hyperspace.filter(|t| t.warp) {
+            let initial_speed = t.warp_initial_speed.unwrap_or(self.speed);
+            // Длительность совпадает с тоннелем: звёзды возвращаются к
+            // исходной скорости к моменту, когда кольцо уходит за экран.
+            let progress = t.warp_elapsed / render::transition::HYPERSPACE_EXIT_TIME;
+            self.stars.advance_hyperspace(dt, initial_speed, progress);
         } else {
             self.stars.advance(dt, self.speed);
         }

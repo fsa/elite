@@ -59,102 +59,90 @@ pub(super) fn draw(f: &mut Flight, frame: &mut Frame, geom: &CockpitGeom, font: 
     let (vx, vy, vw, vh) = (view.x, view.y, view.w.max(0), view.h.max(0));
     frame.set_clip(vx, vy, vw as usize, vh as usize);
 
-    let current = f.transition.current;
-    match current {
-        Some(t) if t.kind == super::TransitionKind::Launch => {
-            // Звёзды идут под кольцами трубы. В первых 0x24 проходах оригинал
-            // рисует только звёзды, в последних 0x0B добавляет пересчитанные
-            // солнце и планету. Центральный выход ограничивает обзор сцены, пока
-            // не уйдёт за край экрана.
-            scene::draw_stars_view(
-                frame,
-                &screen,
-                &f.render_stars(),
-                &view_rot,
-                f.stars.streak(),
-            );
-            if t.elapsed >= transition::STATION_REAL_SCENE_TIME {
-                scene::draw_bodies_view(f, frame, &screen, &view_rot, s);
-                if let Some(r) = transition::station_aperture_radius(vw, vh, t.elapsed) {
-                    transition::mask_outside_aperture(
-                        frame,
-                        vx,
-                        vy,
-                        vw,
-                        vh,
-                        vx + vw / 2,
-                        vy + vh / 2,
-                        r,
+    if let Some(t) = f.transition.station {
+        match t.kind {
+            super::transition::StationKind::Launch => {
+                // Звёзды идут под кольцами трубы. В первых 0x24 проходах оригинал
+                // рисует только звёзды, в последних 0x0B добавляет пересчитанные
+                // солнце и планету. Центральный выход ограничивает обзор сцены,
+                // пока не уйдёт за край экрана.
+                scene::draw_stars_view(
+                    frame,
+                    &screen,
+                    &f.render_stars(),
+                    &view_rot,
+                    f.stars.streak(),
+                );
+                if t.elapsed >= transition::STATION_REAL_SCENE_TIME {
+                    scene::draw_bodies_view(f, frame, &screen, &view_rot, s);
+                    if let Some(r) = transition::station_aperture_radius(vw, vh, t.elapsed) {
+                        transition::mask_outside_aperture(
+                            frame,
+                            vx,
+                            vy,
+                            vw,
+                            vh,
+                            vx + vw / 2,
+                            vy + vh / 2,
+                            r,
+                        );
+                    }
+                    // Кольца рисуются последними: планета не должна перекрывать
+                    // последнее кольцо, пока оно не ушло за край экрана.
+                    transition::draw_station(frame, vx, vy, vw, vh, s, t.elapsed, false, 0);
+                } else {
+                    transition::draw_station(
+                        frame, vx, vy, vw, vh, s, t.elapsed, true, f.planet_color,
                     );
                 }
-                // Кольца рисуются последними: планета не должна перекрывать
-                // последнее кольцо, пока оно не ушло за край экрана.
-                transition::draw_station(frame, vx, vy, vw, vh, s, t.elapsed, false, 0);
-            } else {
-                transition::draw_station(frame, vx, vy, vw, vh, s, t.elapsed, true, f.planet_color);
+                // Ролик рисует только трубу: подпись Front View уходит вместе с
+                // обычной сценой, поэтому её нужно нарисовать поверх анимации.
+                draw_view_label(f, frame, font, vx, vy, vw, s);
             }
-            // Ролик рисует только трубу: подпись Front View уходит вместе с
-            // обычной сценой, поэтому её нужно нарисовать поверх анимации.
-            draw_view_label(f, frame, font, vx, vy, vw, s);
-        }
-        Some(t) if t.kind == super::TransitionKind::Hyperspace => {
-            // Во время прыжка игра рисует обычное пространство, а тоннель
-            // ограничивает вид центральным кольцом. До нуля отсчёта
-            // показываем ещё и цифру.
-            scene::draw_flight_scene(f, frame, &screen, &view_rot, view_bottom, s);
-            if t.warp {
-                transition::draw_hyperspace(
+            super::transition::StationKind::Docking => {
+                // Стыковка — тот же белый тоннель, но без планеты в конце.
+                transition::draw_station(
                     frame,
                     vx,
                     vy,
                     vw,
                     vh,
                     s,
-                    t.warp_elapsed,
+                    t.elapsed,
+                    false,
+                    f.planet_color,
                 );
-                // Звёзды прыжка поверх тоннеля: видны и поверх колец, и вне
-                // центрального кольца.
-                let stars = f.render_stars();
-                scene::draw_stars_view(frame, &screen, &stars, &view_rot, f.stars.streak());
-                // Тоннель закрашивает верх строки обычного вида, поэтому
-                // подпись рисуется последней, как на экране F1.
-                draw_view_label(f, frame, font, vx, vy, vw, s);
-            } else {
-                // Во время отсчёта верхнюю надпись рисуем сами (подпись вида):
-                // перехваченные игра печатает в поле зрения цифры, их здесь не
-                // показываем. Само число идёт слева в той же строке, что и
-                // подпись вида.
-                draw_view_label(f, frame, font, vx, vy, vw, s);
-                draw_jump_countdown(frame, font, vx, vy, s, t.countdown);
-            }
-        }
-        Some(t) if t.kind == super::TransitionKind::Docking => {
-            // Стыковка — тот же белый тоннель, но без планеты в конце.
-            transition::draw_station(
-                frame,
-                vx,
-                vy,
-                vw,
-                vh,
-                s,
-                t.warp_elapsed,
-                false,
-                f.planet_color,
-            );
-            draw_view_label(f, frame, font, vx, vy, vw, s);
-        }
-        Some(_) => {
-            // Остальные переходы (на данный момент их нет) — обычный вид.
-            scene::draw_flight_scene(f, frame, &screen, &view_rot, view_bottom, s);
-            draw_view_label(f, frame, font, vx, vy, vw, s);
-        }
-        None => {
-            scene::draw_flight_scene(f, frame, &screen, &view_rot, view_bottom, s);
-            if f.game_over {
-                draw_game_over(frame, font, vx, vy, vw, vh, s);
-            } else {
                 draw_view_label(f, frame, font, vx, vy, vw, s);
             }
+        }
+    } else if let Some(t) = f.transition.hyperspace {
+        // Во время прыжка игра рисует обычное пространство, а тоннель
+        // ограничивает вид центральным кольцом. До нуля отсчёта показываем
+        // ещё и цифру.
+        scene::draw_flight_scene(f, frame, &screen, &view_rot, view_bottom, s);
+        if t.warp {
+            transition::draw_hyperspace(frame, vx, vy, vw, vh, s, t.warp_elapsed);
+            // Звёзды прыжка поверх тоннеля: видны и поверх колец, и вне
+            // центрального кольца.
+            let stars = f.render_stars();
+            scene::draw_stars_view(frame, &screen, &stars, &view_rot, f.stars.streak());
+            // Тоннель закрашивает верх строки обычного вида, поэтому
+            // подпись рисуется последней, как на экране F1.
+            draw_view_label(f, frame, font, vx, vy, vw, s);
+        } else {
+            // Во время отсчёта верхнюю надпись рисуем сами (подпись вида):
+            // перехваченные игра печатает в поле зрения цифры, их здесь не
+            // показываем. Само число идёт слева в той же строке, что и
+            // подпись вида.
+            draw_view_label(f, frame, font, vx, vy, vw, s);
+            draw_jump_countdown(frame, font, vx, vy, s, t.countdown);
+        }
+    } else {
+        scene::draw_flight_scene(f, frame, &screen, &view_rot, view_bottom, s);
+        if f.game_over {
+            draw_game_over(frame, font, vx, vy, vw, vh, s);
+        } else {
+            draw_view_label(f, frame, font, vx, vy, vw, s);
         }
     }
 
@@ -285,7 +273,7 @@ mod tests {
         f.open(0);
         f.planet_color = PLANET;
         f.start_transition_kind(TransitionKind::Launch, 0);
-        f.transition.current.as_mut().unwrap().elapsed = elapsed;
+        f.transition.station.as_mut().unwrap().elapsed = elapsed;
 
         let geom = cockpit::panel_geometry(W as u32, H as u32);
         let mut frame = Frame::new(W, H);
@@ -323,7 +311,7 @@ mod tests {
         let mut f = Flight::new();
         f.open(PLANET);
         f.start_transition_kind(TransitionKind::Launch, 0);
-        f.transition.current.as_mut().unwrap().elapsed = elapsed;
+        f.transition.station.as_mut().unwrap().elapsed = elapsed;
         // Планета закрывает весь вид: кольцо всё равно должно быть поверх неё.
         f.bodies.push(Body {
             source: BODY_SRC_PLANET,

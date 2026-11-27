@@ -29,7 +29,7 @@ use super::stars::{
     STAR_FIELD_RADIUS,
 };
 use super::teleports::TELEPORT_TRAIL_TIME;
-use super::transition::Transition;
+use super::transition::StationKind;
 use super::view;
 
 /// Тёмно-зелёный пиксель планеты: красный и синий нулевые, зелёный заметен.
@@ -1955,27 +1955,79 @@ fn hyperspace_scene_snapshot_lags_countdown_at_start() {
 fn hyperspace_countdown_uses_live_memory_over_stale_scene_snapshot() {
     let mut f = open();
     let mut live = vec![0u8; Z80_JUMP_COUNTDOWN + 1];
-    let snapshot = vec![0u8; Z80_JUMP_COUNTDOWN + 1];
+    let mut snapshot = vec![0u8; Z80_JUMP_COUNTDOWN + 1];
     live[Z80_JUMP_DOCKING] = 2;
     live[Z80_FLG_JUMP_DOCKING] = 1;
     live[Z80_JUMP_COUNTDOWN] = 0x15;
-    // Снимок сцены ещё не содержит новый проход.
+    // Снимок сцены ещё не содержит новый проход, но в нём уже стоят флаги
+    // перехода: по ним включается тоннель до прихода отсчёта.
+    snapshot[Z80_JUMP_DOCKING] = 2;
+    snapshot[Z80_FLG_JUMP_DOCKING] = 1;
     f.start_transition(false, &live);
     f.sync_from_z80(&snapshot);
     assert!(
-        f.transition.current.expect("переход пропал").warp,
+        f.transition.hyperspace.expect("переход пропал").warp,
         "подготовка: снимок без отсчёта должен включать тоннель"
     );
 
     f.sync_transition_from_live(&live);
-    let t = f.transition.current.expect("переход пропал");
+    let t = f.transition.hyperspace.expect("переход пропал");
     assert_eq!(t.countdown, 0x15, "отсчёт не взят из живой памяти");
     assert!(!t.warp, "тоннель начался до конца отсчёта");
 
+    // Живая память может сбросить отсчёт раньше, чем флаги перехода. Нативный
+    // тоннель должен идти до сброса флагов, иначе на выходе не зафиксируется
+    // передний вид и звёзды уйдут в боковую проекцию.
     live[Z80_JUMP_COUNTDOWN] = 0;
     f.sync_transition_from_live(&live);
-    let t = f.transition.current.expect("переход пропал");
+    let t = f.transition.hyperspace.expect("переход пропал");
     assert!(t.warp, "тоннель не начался после обнуления отсчёта");
+}
+
+#[test]
+fn hyperspace_and_station_animations_do_not_share_state() {
+    let mut f = open();
+    let mut mem = vec![0u8; Z80_JUMP_COUNTDOWN + 1];
+
+    // Запрос вылета при активном отсчёте не должен превращать прыжок в вылет.
+    mem[Z80_JUMP_DOCKING] = 2;
+    mem[Z80_FLG_JUMP_DOCKING] = 1;
+    mem[Z80_JUMP_COUNTDOWN] = 0x15;
+    f.follow_z80_screen(&mem, &mem, true);
+    assert!(f.transition.station.is_none(), "прыжок запустил ролик станции");
+    assert!(f.transition.hyperspace.is_some(), "прыжок не запустился");
+
+    // А запуск ролика станции сбрасывает только прыжок.
+    f.transition.start_station(StationKind::Launch);
+    assert!(f.transition.hyperspace.is_none());
+    assert_eq!(f.transition.station_kind(), Some(StationKind::Launch));
+}
+
+#[test]
+fn hyperspace_exit_keeps_the_forward_view() {
+    let mut f = open();
+    f.set_view_dir(ViewDir::Right);
+    let mut mem = vec![0u8; Z80_JUMP_COUNTDOWN + 1];
+    mem[Z80_JUMP_DOCKING] = 2;
+    mem[Z80_FLG_JUMP_DOCKING] = 1;
+    f.follow_z80_screen(&mem, &mem, false);
+    f.sync_transition_from_live(&mem);
+    assert_eq!(f.view_dir, ViewDir::Forward, "тоннель не сбросил боковой вид");
+
+    // Отсчёт уже обнулился, но флаги перехода ещё взведены: тоннель жив,
+    // поэтому следующий снимок с боковым видом не должен менять камеру.
+    f.sync_transition_from_live(&mem);
+    assert!(f.transition.hyperspace.is_some_and(|t| t.warp));
+    let mut scene = mem.clone();
+    scene[Z80_WHAT_ON_SCREEN] = 2;
+    f.follow_z80_screen(&mem, &scene, false);
+    assert_eq!(f.view_dir, ViewDir::Forward, "снимок вернул боковой вид");
+
+    mem[Z80_JUMP_DOCKING] = 0;
+    mem[Z80_FLG_JUMP_DOCKING] = 0;
+    f.follow_z80_screen(&mem, &mem, false);
+    assert!(!f.in_transition(), "прыжок не закончился");
+    assert_eq!(f.view_dir, ViewDir::Forward, "выход вернул боковой вид");
 }
 
 /// Флаги перехода взводятся уже на отсчёте, но блокировать ввод и переключение
@@ -2037,18 +2089,69 @@ fn hyperspace_tunnel_uses_new_system_from_transition_snapshot() {
                 "снимок на входе в тоннель хранит прежнюю систему"
             );
             assert!(
-                f.transition.current.is_some_and(|t| t.warp),
+                f.transition.hyperspace.is_some_and(|t| t.warp),
                 "нативный тоннель не начался вместе с Z80-роликом"
             );
             new_planet = Some(crd);
         }
-        if new_planet.is_some() && f.transition.current.is_none() {
+        if new_planet.is_some() && f.transition.hyperspace.is_none() {
             assert_eq!(m.mem[Z80_JUMP_DOCKING], 0, "ролик Z80 ещё не закончился");
             assert_eq!(
                 planet_crd(m.game_state()),
                 new_planet.unwrap(),
                 "на выходе из тоннеля показывается прежняя система"
             );
+            return;
+        }
+    }
+    panic!("нативный тоннель гиперпрыжка не закончился");
+}
+
+#[test]
+fn hyperspace_exit_does_not_turn_stars_into_a_fast_side_flight() {
+    let mut m = launch_kladov();
+    m.mem[0xD082] = 0x46;
+    m.mem[0xD08D] = 1;
+    for key in [winit::keyboard::KeyCode::KeyG, winit::keyboard::KeyCode::KeyH] {
+        if let Some((row, bit)) = crate::keys::matrix_pos(key) {
+            m.keyboard[row] &= !(1 << bit);
+        }
+    }
+    let mut f = open();
+    let mut after_end = 0;
+    let mut keys_released = false;
+    let mut saw_warp_with_zero_countdown = false;
+    for _ in 0..1400 {
+        m.run_frame();
+        if !keys_released && m.mem[Z80_JUMP_COUNTDOWN] > 0 {
+            m.release_all_keys();
+            keys_released = true;
+        }
+        f.follow_z80_screen(&m.mem, m.game_state(), false);
+        // Игрок успел выбрать боковой вид во время отсчёта. Тоннель обязан
+        // переключить камеру вперёд и не вернуть её обратно на выходе.
+        if m.mem[Z80_JUMP_COUNTDOWN] > 0 {
+            f.set_view_dir(ViewDir::Right);
+        }
+        let active = m.mem[Z80_FLG_JUMP_DOCKING] != 0 || m.mem[Z80_JUMP_DOCKING] != 0;
+        f.observe_live_fast_scroll(&m.mem);
+        f.sync_from_z80(m.game_state());
+        f.sync_transition_from_live(&m.mem);
+        saw_warp_with_zero_countdown |= m.mem[Z80_JUMP_COUNTDOWN] == 0
+            && active
+            && f.transition.hyperspace.is_some_and(|t| t.warp);
+        f.tick(0.02);
+        if !active && f.transition.hyperspace.is_none() {
+            after_end += 1;
+        }
+        if after_end > 12 {
+            assert!(
+                saw_warp_with_zero_countdown,
+                "тоннель не дожил до сброса флагов перехода"
+            );
+            assert_eq!(f.view_dir, ViewDir::Forward, "на выходе остался боковой вид");
+            assert!(!f.stars.boost, "на выходе включился ложный J-драйв");
+            assert_eq!(f.stars.streak(), 0.0, "на выходе осталось растяжение звёзд");
             return;
         }
     }
@@ -2198,6 +2301,23 @@ fn jump_countdown_shows_ten_to_one() {
     assert_eq!(countdown_number(0), 0);
 }
 
+/// Запустить нужную анимацию с заданной фазой для проверки отрисовки.
+fn start_animation(f: &mut Flight, kind: TransitionKind, warp: bool, elapsed: f32) {
+    match kind {
+        TransitionKind::Launch => f.transition.start_station(StationKind::Launch),
+        TransitionKind::Docking => f.transition.start_station(StationKind::Docking),
+        TransitionKind::Hyperspace => f.transition.start_hyperspace(0),
+    }
+    if let Some(t) = &mut f.transition.station {
+        t.elapsed = elapsed;
+    }
+    if let Some(t) = &mut f.transition.hyperspace {
+        t.warp = warp;
+        t.warp_elapsed = elapsed;
+        t.elapsed = elapsed;
+    }
+}
+
 #[test]
 fn transitions_draw_their_animations() {
     let mut f = open();
@@ -2209,11 +2329,8 @@ fn transitions_draw_their_animations() {
         (TransitionKind::Hyperspace, 0.2),
         (TransitionKind::Docking, 0.2),
     ] {
-        let mut t = Transition::new(kind, 0);
-        t.warp = true;
-        t.warp_elapsed = elapsed;
-        t.elapsed = elapsed;
-        f.transition.current = Some(t);
+        f.transition.reset();
+        start_animation(&mut f, kind, true, elapsed);
 
         let mut frame = Frame::new(640, 480);
         f.draw(&mut frame, &geom, &font);
@@ -2256,11 +2373,8 @@ fn transitions_keep_front_view_label() {
         (TransitionKind::Hyperspace, false),
         (TransitionKind::Hyperspace, true),
     ] {
-        let mut t = Transition::new(kind, 0);
-        t.warp = warp;
-        t.warp_elapsed = 0.2;
-        t.elapsed = 0.2;
-        f.transition.current = Some(t);
+        f.transition.reset();
+        start_animation(&mut f, kind, warp, 0.2);
         f.view_dir = ViewDir::Forward;
 
         let mut frame = Frame::new(640, 480);
@@ -2281,11 +2395,11 @@ fn hyperspace_countdown_keeps_normal_flight_until_zero() {
     mem[Z80_JUMP_COUNTDOWN] = 0x15;
     f.start_transition(false, &mem);
     assert_eq!(f.transition_kind(), Some(TransitionKind::Hyperspace));
-    assert!(!f.transition.current.expect("переход не создан").warp);
+    assert!(!f.transition.hyperspace.expect("переход не создан").warp);
 
     mem[Z80_JUMP_COUNTDOWN] = 0;
     f.sync_from_z80(&mem);
-    assert!(f.transition.current.expect("переход пропал").warp);
+    assert!(f.transition.hyperspace.expect("переход пропал").warp);
 }
 
 /// Собрать строку в перехватчике так, как это делает хук печати.
