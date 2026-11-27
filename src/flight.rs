@@ -167,6 +167,11 @@ pub struct Flight {
     /// ещё хранит прежнее значение. Это не J-драйв, и разгон звёзд по такому
     /// расхождению включать нельзя.
     speed_resync: bool,
+    /// Первый снимок после вылета ещё может хранить скорости до служебного 7.
+    just_launched: bool,
+    /// Последняя скорость, прочитанная из живой памяти Z80. Снимок может
+    /// отставать от неё на несколько кадров.
+    live_high_delta_speed: Option<u8>,
     /// У игрока Cobra Mk IV (`byte_D08E`) — фиолетовые клетки панели.
     cobra_mk4: bool,
     /// Типы лазеров в креплениях FRONT/REAR/LEFT/RIGHT (`0` — нет лазера).
@@ -228,6 +233,8 @@ impl Flight {
             z80_fast_scroll: false,
             speed: 0.0,
             speed_resync: false,
+            just_launched: false,
+            live_high_delta_speed: None,
             cobra_mk4: false,
             lasers: [0; 4],
             game_over: false,
@@ -266,6 +273,8 @@ impl Flight {
         self.z80_fast_scroll = false;
         self.speed = 0.0;
         self.speed_resync = false;
+        self.just_launched = false;
+        self.live_high_delta_speed = None;
         self.cobra_mk4 = false;
         self.lasers = [0; 4];
         self.game_over = false;
@@ -305,6 +314,7 @@ impl Flight {
         self.docking_blackout = false;
         if launch {
             self.speed_resync = true;
+            self.just_launched = true;
         }
         self.explosions.reset();
         self.teleports.reset();
@@ -317,6 +327,7 @@ impl Flight {
         self.docking_blackout = false;
         if kind == TransitionKind::Launch {
             self.speed_resync = true;
+            self.just_launched = true;
         }
         self.explosions.reset();
         self.teleports.reset();
@@ -407,20 +418,50 @@ impl Flight {
     /// `launch` передаёт приложение: по памяти в момент перехода вылет и
     /// стыковку различить нельзя (`JumpDocking` у обоих равен `1`, а
     /// `IndDanger` к моменту проверки уже изменён обеими сторонами).
-    pub fn follow_z80_screen(&mut self, mem: &[u8], launch: bool) {
-        let Some(&screen) = mem.get(Z80_WHAT_ON_SCREEN) else {
+    ///
+    /// `live_mem` нужен, чтобы заметить начало перехода: снимок сцены может
+    /// ещё не содержать флаги, если кадр эмулятора закончился до `PrintCompass`.
+    /// Конец вылета ждём и в живой памяти, и в снимке: `sub_9296` крутит ролик
+    /// внутри одного прохода `GameMain`, поэтому пока снимок старый, в нём
+    /// лежат станция и настоящая скорость. Показать их хотя бы один кадр —
+    /// это и есть мигание планеты, а ранний сброс `speed_resync` по старой
+    /// скорости даёт ложный J-драйв на первом же настоящем такте. Остальные
+    /// переходы заканчиваются по живой памяти: их снимок специально снят на
+    /// входе в ролик и может не обновляться до выхода из него.
+    ///
+    /// Даже свежий снимок после сброса флагов может хранить скорость до
+    /// служебного значения `7`: игра пишет его позже. Такой снимок помечает
+    /// [`Self::just_launched`], чтобы не снимать защиту по старой скорости.
+    pub fn follow_z80_screen(&mut self, live_mem: &[u8], scene_mem: &[u8], launch: bool) {
+        let Some(&screen) = scene_mem.get(Z80_WHAT_ON_SCREEN) else {
             return;
         };
         if screen < 4 {
             self.seen_flight_screen = true;
         }
-        if memory::z80_in_transition(mem) {
+        let waiting_for_launch_snapshot =
+            self.transition.kind() == Some(TransitionKind::Launch);
+        let in_transition = memory::z80_in_transition(live_mem)
+            || (waiting_for_launch_snapshot && memory::z80_in_transition(scene_mem));
+        if in_transition {
             // Ролик теперь рисуем сами: нативный вид остаётся открытым и
             // получает состояние перехода. Если вид временно скрыт (показ
             // эмулятора), состояние перехода всё равно поддерживаем, чтобы F1
             // вернул ту же анимацию.
-            if !self.transition.in_transition() {
-                self.transition.start(launch, mem);
+            // Запрос вылета важнее уже идущей анимации: после стыковки
+            // нативный ролик может ещё не сброситься, а живые флаги Z80 уже
+            // взвели новый переход. Оставить старую стыковку — значит
+            // закончить вылет без `speed_resync` и показать ложный J-драйв.
+            let need_restart = !self.transition.in_transition()
+                || (launch && self.transition.kind() != Some(TransitionKind::Launch));
+            if need_restart {
+                self.transition.reset();
+                self.transition.start(launch, live_mem);
+                if self.transition.kind() == Some(TransitionKind::Launch) {
+                    self.speed_resync = true;
+                    self.just_launched = true;
+                }
+                self.z80_fast_scroll = false;
                 self.explosions.reset();
                 self.teleports.reset();
             }
@@ -445,7 +486,7 @@ impl Flight {
         if !self.active {
             return;
         }
-        if !memory::z80_in_cockpit(mem) {
+        if !memory::z80_in_cockpit(scene_mem) {
             // `0x0B` — экран станции. После запуска со станции Z80 держит его
             // несколько кадров, пока идёт анимация вылета; уже открытый экран
             // не закрываем до первого настоящего полётного кадра. Пока ждём
@@ -464,7 +505,7 @@ impl Flight {
         // признаком «пристыкован» пользоваться нельзя: между сбросом флагов
         // и уходом на информационный экран нативный вид рисовал бы обычный
         // космос. Держим чёрный фон до смены экрана Z80.
-        if was_docking && memory::z80_in_cockpit(mem) {
+        if was_docking && memory::z80_in_cockpit(scene_mem) {
             self.docking_blackout = true;
         }
     }
@@ -478,6 +519,7 @@ impl Flight {
         if live_mem[Z80_STARS_FAST_SCROLL] == 1 {
             self.z80_fast_scroll = true;
         }
+        self.live_high_delta_speed = live_mem.get(Z80_HIGH_DELTA_SPEED).copied();
     }
 
     /// Применить отсчёт и флаг тоннеля из переданной памяти.
@@ -529,12 +571,31 @@ impl Flight {
         // настоящей скоростью: до этого расхождение с индикатором — не J-драйв.
         // Пока идёт сам ролик вылета, совпадение тоже ничего не значит: в его
         // конце игра ещё раз пишет служебное значение.
-        let launching = matches!(self.transition.kind(), Some(TransitionKind::Launch));
-        if self.speed_resync
-            && !launching
-            && mem[Z80_HIGH_DELTA_SPEED] as i32 == self.speed.round() as i32
-        {
-            self.speed_resync = false;
+        //
+        // Снимок может оказаться снятым уже после сброса флагов перехода, но
+        // до первого полётного такта: в нём нет признаков вылета, а скорость
+        // ещё настоящая. Такой снимок тоже нельзя считать концом resync —
+        // иначе следующий такт со служебной скоростью включит J-драйв.
+        // Требуем совпадения и в живой памяти: после повторного вылета снимок
+        // несколько кадров ещё хранит настоящую скорость 12, хотя игра уже
+        // записала служебную 7. Сброс по такому снимку давал ложный J-драйв,
+        // когда снимок наконец доходил до 7.
+        let live_speed_matches = match self.live_high_delta_speed {
+            Some(live) => live as i32 == self.speed.round() as i32,
+            None => true,
+        };
+        if self.speed_resync && mem[Z80_SPEED_GAUGE] != 0 && live_speed_matches {
+            if mem[Z80_HIGH_DELTA_SPEED] as i32 == self.speed.round() as i32 {
+                if self.just_launched && self.transition.kind() != Some(TransitionKind::Launch) {
+                    self.just_launched = false;
+                }
+                if !self.just_launched {
+                    self.speed_resync = false;
+                    // Флаг, пойманный во время ролика, относится к служебному
+                    // состоянию вылета и не должен доживать до первого такта полёта.
+                    self.z80_fast_scroll = false;
+                }
+            }
         }
         self.cobra_mk4 = mem.get(Z80_COBRA_MK4).is_some_and(|&b| b != 0);
         for (mount, laser) in self.lasers.iter_mut().enumerate() {
@@ -629,11 +690,13 @@ impl Flight {
             // временно перезаписывает `HighDeltaSpeed`. Ловим и сам флаг, и
             // этот след, если флаг не попал в кадр опроса. При гибели игра
             // сама обнуляет `HighDeltaSpeed`, это не J-драйв: иначе звёзды
-            // получают ложное ускорение.
+            // получают ложное ускорение. После вылета `speed_resync` запрещает
+            // и расхождение, и флаг: `StarsFastScroll` мог остаться от
+            // последнего кадра ролика.
             let fast = !self.game_over
+                && !self.speed_resync
                 && (self.z80_fast_scroll
-                    || (!self.speed_resync
-                        && mem[Z80_HIGH_DELTA_SPEED] as i32 != self.speed.round() as i32));
+                    || mem[Z80_HIGH_DELTA_SPEED] as i32 != self.speed.round() as i32);
             if self.game_over {
                 // При гибели оригинал обнуляет скорость и блокирует управление:
                 // камера стоит. Обломки из слотов Z80 уносятся своей скоростью,

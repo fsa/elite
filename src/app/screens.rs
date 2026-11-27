@@ -1024,7 +1024,11 @@ impl App<'_> {
             return;
         }
         let launch = self.pending_launch;
-        self.flight.follow_z80_screen(&self.machine.mem, launch);
+        self.flight.follow_z80_screen(
+            &self.machine.mem,
+            self.machine.game_state(),
+            launch,
+        );
         if launch && self.flight.transition_kind() == Some(flight::TransitionKind::Launch) {
             self.pending_launch = false;
         }

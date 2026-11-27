@@ -96,7 +96,13 @@ pub(crate) fn draw_stars_view(
     }
 }
 
-fn draw_bodies_view(f: &Flight, frame: &mut Frame, screen: &Screen, view_rot: &Rotation, s: i32) {
+pub(super) fn draw_bodies_view(
+    f: &Flight,
+    frame: &mut Frame,
+    screen: &Screen,
+    view_rot: &Rotation,
+    s: i32,
+) {
     let cam = view_rot.transpose();
     let render_bodies = f.render_bodies();
     // Дальние объекты рисуются первыми, ближние перекрывают их.

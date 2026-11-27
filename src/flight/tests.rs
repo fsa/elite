@@ -648,6 +648,95 @@ fn launch_service_speed_does_not_trigger_j_drive() {
 }
 
 #[test]
+fn launch_fast_scroll_flag_does_not_trigger_j_drive() {
+    let mut f = open();
+    let mut mem = vec![0u8; Z80_MEM_MIN];
+    mem[Z80_SPEED_GAUGE] = 0x41; // скорость 12
+    mem[Z80_HIGH_DELTA_SPEED] = 12;
+    f.sync_from_z80(&mem);
+
+    // Флаг J-драйва, застрявший в кадре вылета, не должен ускорить звёзды ни
+    // во время ролика, ни после него, пока скорость не пришла в норму.
+    f.start_transition(true, &mem);
+    game_tick(&mut mem);
+    mem[Z80_STARS_FAST_SCROLL] = 1;
+    f.observe_live_fast_scroll(&mem);
+    f.sync_from_z80(&mem);
+    assert!(
+        !f.stars.boost,
+        "флаг вылета включил J-драйв во время ролика"
+    );
+
+    // Переход закончился; оригинал сбросил флаг и вернул настоящую скорость.
+    f.transition.reset();
+    game_tick(&mut mem);
+    mem[Z80_STARS_FAST_SCROLL] = 0;
+    mem[Z80_HIGH_DELTA_SPEED] = 12;
+    f.sync_from_z80(&mem);
+    game_tick(&mut mem);
+    f.sync_from_z80(&mem);
+    assert!(
+        !f.stars.boost,
+        "J-драйв ошибочно показан после вылета со станции"
+    );
+
+    // Настоящий J-драйв после вылета по-прежнему распознаётся.
+    mem[Z80_STARS_FAST_SCROLL] = 1;
+    f.observe_live_fast_scroll(&mem);
+    game_tick(&mut mem);
+    f.sync_from_z80(&mem);
+    assert!(f.stars.boost, "J-драйв перестал распознаваться");
+}
+
+#[test]
+fn launch_waits_for_fresh_snapshot_before_ending() {
+    let mut f = open();
+    let mut live = vec![0u8; 0x10000];
+    live[Z80_WHAT_ON_SCREEN] = 0;
+    live[Z80_SPEED_GAUGE] = 0x41; // скорость 12
+    live[Z80_HIGH_DELTA_SPEED] = 12;
+    // Снимок взят на входе в ролик: там ещё стоят флаги вылета и настоящая
+    // скорость. Живая память уже вышла из ролика и записала служебное 7.
+    let mut scene = live.clone();
+    scene[Z80_JUMP_DOCKING] = 1;
+    scene[Z80_FLG_JUMP_DOCKING] = 1;
+    f.follow_z80_screen(&scene, &scene, true);
+    assert_eq!(f.transition_kind(), Some(TransitionKind::Launch));
+    assert!(f.speed_resync, "вылет через follow_z80_screen без resync");
+
+    live[Z80_JUMP_DOCKING] = 0;
+    live[Z80_FLG_JUMP_DOCKING] = 0;
+    live[Z80_HIGH_DELTA_SPEED] = 7;
+    f.follow_z80_screen(&live, &scene, true);
+    assert!(
+        f.in_animation_mode(),
+        "ролик закончился по старому снимку — кадр станции мелькнёт в космосе"
+    );
+    f.sync_from_z80(&scene);
+    assert!(f.speed_resync, "resync сброшен по старой скорости 12");
+
+    // Только новый снимок после `PrintCompass` подтверждает конец вылета.
+    scene[Z80_JUMP_DOCKING] = 0;
+    scene[Z80_FLG_JUMP_DOCKING] = 0;
+    scene[Z80_HIGH_DELTA_SPEED] = 7;
+    f.follow_z80_screen(&live, &scene, true);
+    assert!(!f.in_animation_mode(), "ролик не закончился после свежего снимка");
+    game_tick(&mut scene);
+    f.sync_from_z80(&scene);
+    assert!(
+        !f.stars.boost,
+        "служебная скорость 7 после вылета включила J-драйв"
+    );
+    assert!(f.speed_resync, "resync сброшен до настоящей скорости");
+
+    scene[Z80_HIGH_DELTA_SPEED] = 12;
+    game_tick(&mut scene);
+    f.sync_from_z80(&scene);
+    assert!(!f.speed_resync, "resync застрял после вылета");
+    assert!(!f.stars.boost, "J-драйв показан после вылета");
+}
+
+#[test]
 fn stars_stay_in_view_after_many_turns() {
     // После длительного вращения и полёта ни одна звезда не должна
     // оказаться в бесконечности или NaN — иначе на экране появляются
@@ -1353,7 +1442,7 @@ fn game_over_keeps_native_view_and_sets_flag() {
     );
 
     let mut f = open();
-    f.follow_z80_screen(&mem, false);
+    f.follow_z80_screen(&mem, &mem, false);
     assert!(f.active, "нативный вид закрылся при гибели");
     f.set_view_dir(ViewDir::Right);
     f.sync_from_z80(&mem);
@@ -1934,7 +2023,7 @@ fn hyperspace_tunnel_uses_new_system_from_transition_snapshot() {
     let mut new_planet = None;
     for _ in 0..700 {
         m.run_frame();
-        f.follow_z80_screen(&m.mem, false);
+        f.follow_z80_screen(&m.mem, m.game_state(), false);
         f.sync_from_z80(m.game_state());
         f.sync_transition_from_live(&m.mem);
         f.tick(0.02);
@@ -2836,4 +2925,139 @@ fn departing_object_draws_cold_rings_not_explosion() {
         !after.pixels().iter().any(|&p| is_warm(p)),
         "уход объекта нарисован тёплым взрывом"
     );
+}
+
+#[test]
+fn launch_resync_waits_for_fresh_scene_speed() {
+    let mut f = open();
+    let mut live = vec![0u8; 0x10000];
+    live[Z80_WHAT_ON_SCREEN] = 0;
+    live[Z80_SPEED_GAUGE] = 0x41; // скорость 12
+    live[Z80_HIGH_DELTA_SPEED] = 12;
+    f.sync_from_z80(&live);
+    f.start_transition(true, &live);
+
+    // Конец ролика: живые флаги уже нулевые, снимок ещё хранит вход в вылет.
+    live[Z80_JUMP_DOCKING] = 0;
+    live[Z80_FLG_JUMP_DOCKING] = 0;
+    live[Z80_HIGH_DELTA_SPEED] = 7;
+    let mut scene = live.clone();
+    scene[Z80_JUMP_DOCKING] = 1;
+    scene[Z80_FLG_JUMP_DOCKING] = 1;
+    scene[Z80_HIGH_DELTA_SPEED] = 12;
+    f.follow_z80_screen(&live, &scene, true);
+    assert_eq!(f.transition_kind(), Some(TransitionKind::Launch));
+    game_tick(&mut scene);
+    f.sync_from_z80(&scene);
+    assert!(f.speed_resync, "resync сброшен по скорости из старого снимка");
+}
+
+#[test]
+fn launch_resync_survives_scene_without_transition_flags() {
+    let mut f = open();
+    let mut mem = vec![0u8; 0x10000];
+    mem[Z80_WHAT_ON_SCREEN] = 0;
+    mem[Z80_SPEED_GAUGE] = 0x41; // скорость 12
+    mem[Z80_HIGH_DELTA_SPEED] = 12;
+    f.sync_from_z80(&mem);
+    f.start_transition(true, &mem);
+
+    // Снимок взят после сброса флагов, но до первого настоящего игрового
+    // такта: он уже не похож на вылет, хотя скорость всё ещё служебная.
+    mem[Z80_JUMP_DOCKING] = 0;
+    mem[Z80_FLG_JUMP_DOCKING] = 0;
+    mem[Z80_HIGH_DELTA_SPEED] = 12;
+    game_tick(&mut mem);
+    f.sync_from_z80(&mem);
+    assert!(f.speed_resync, "resync сброшен до служебной скорости");
+
+    mem[Z80_HIGH_DELTA_SPEED] = 7;
+    game_tick(&mut mem);
+    f.sync_from_z80(&mem);
+    assert!(
+        !f.stars.boost,
+        "служебная скорость после вылета включила J-драйв"
+    );
+}
+
+#[test]
+fn launch_request_replaces_stale_docking_animation() {
+    let mut f = open();
+    let mut mem = vec![0u8; 0x10000];
+    mem[Z80_WHAT_ON_SCREEN] = 0;
+    mem[Z80_SPEED_GAUGE] = 0x41; // скорость 12
+    mem[Z80_HIGH_DELTA_SPEED] = 12;
+    mem[Z80_JUMP_DOCKING] = 1;
+    mem[Z80_FLG_JUMP_DOCKING] = 1;
+    f.sync_from_z80(&mem);
+    f.start_transition_kind(TransitionKind::Docking, 0);
+    assert_eq!(f.transition_kind(), Some(TransitionKind::Docking));
+
+    // F1 на станции запросил вылет, пока нативная анимация стыковки ещё шла.
+    f.follow_z80_screen(&mem, &mem, true);
+    assert_eq!(
+        f.transition_kind(),
+        Some(TransitionKind::Launch),
+        "вылет остался показан как стыковка"
+    );
+    assert!(f.speed_resync, "вылет после стыковки без защиты скорости");
+
+    // Конец ролика: и живая память, и снимок уже без флагов, но скорость
+    // служебная. J-драйва быть не должно.
+    mem[Z80_JUMP_DOCKING] = 0;
+    mem[Z80_FLG_JUMP_DOCKING] = 0;
+    mem[Z80_HIGH_DELTA_SPEED] = 7;
+    f.follow_z80_screen(&mem, &mem, true);
+    game_tick(&mut mem);
+    f.sync_from_z80(&mem);
+    assert!(!f.stars.boost, "вылет после стыковки включил J-драйв");
+}
+
+#[test]
+fn repeated_launch_stale_snapshot_does_not_trigger_j_drive() {
+    let mut f = open();
+    let mut live = vec![0u8; 0x10000];
+    live[Z80_WHAT_ON_SCREEN] = 0;
+    live[Z80_SPEED_GAUGE] = 0x41; // скорость 12
+    live[Z80_HIGH_DELTA_SPEED] = 12;
+    f.sync_from_z80(&live);
+    f.start_transition(true, &live);
+
+    // Конец ролика: живая память уже записала служебную 7, а снимок ещё
+    // хранит настоящую скорость 12.
+    live[Z80_JUMP_DOCKING] = 0;
+    live[Z80_FLG_JUMP_DOCKING] = 0;
+    live[Z80_HIGH_DELTA_SPEED] = 7;
+    let mut scene = live.clone();
+    scene[Z80_HIGH_DELTA_SPEED] = 12;
+    f.follow_z80_screen(&live, &scene, true);
+    f.observe_live_fast_scroll(&live);
+    f.sync_from_z80(&scene);
+    assert!(f.speed_resync, "resync сброшен по устаревшему снимку");
+
+    // Снимок дошёл до служебной 7, а живая память уже вернула 12. Именно так
+    // чередование фаз давало ложный J-драйв после повторного вылета.
+    scene[Z80_HIGH_DELTA_SPEED] = 7;
+    live[Z80_HIGH_DELTA_SPEED] = 12;
+    f.observe_live_fast_scroll(&live);
+    f.sync_from_z80(&scene);
+    assert!(f.speed_resync, "resync сброшен до возврата настоящей скорости");
+    game_tick(&mut scene);
+    f.sync_from_z80(&scene);
+    assert!(!f.stars.boost, "служебная скорость включила J-драйв");
+
+    // Когда и живая память, и снимок показывают настоящую скорость, защита
+    // снимается, а настоящий J-драйв по-прежнему распознаётся.
+    scene[Z80_HIGH_DELTA_SPEED] = 12;
+    f.observe_live_fast_scroll(&live);
+    game_tick(&mut scene);
+    f.sync_from_z80(&scene);
+    assert!(!f.speed_resync, "resync застрял после вылета");
+    assert!(!f.stars.boost, "J-драйв показан без запроса");
+
+    scene[Z80_STARS_FAST_SCROLL] = 1;
+    f.observe_live_fast_scroll(&scene);
+    game_tick(&mut scene);
+    f.sync_from_z80(&scene);
+    assert!(f.stars.boost, "настоящий J-драйв перестал распознаваться");
 }

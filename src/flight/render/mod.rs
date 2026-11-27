@@ -62,7 +62,37 @@ pub(super) fn draw(f: &mut Flight, frame: &mut Frame, geom: &CockpitGeom, font: 
     let current = f.transition.current;
     match current {
         Some(t) if t.kind == super::TransitionKind::Launch => {
-            transition::draw_station(frame, vx, vy, vw, vh, s, t.elapsed, true, f.planet_color);
+            // Звёзды идут под кольцами трубы. В первых 0x24 проходах оригинал
+            // рисует только звёзды, в последних 0x0B добавляет пересчитанные
+            // солнце и планету. Центральный выход ограничивает обзор сцены, пока
+            // не уйдёт за край экрана.
+            scene::draw_stars_view(
+                frame,
+                &screen,
+                &f.render_stars(),
+                &view_rot,
+                f.stars.streak(),
+            );
+            if t.elapsed >= transition::STATION_REAL_SCENE_TIME {
+                scene::draw_bodies_view(f, frame, &screen, &view_rot, s);
+                if let Some(r) = transition::station_aperture_radius(vw, vh, t.elapsed) {
+                    transition::mask_outside_aperture(
+                        frame,
+                        vx,
+                        vy,
+                        vw,
+                        vh,
+                        vx + vw / 2,
+                        vy + vh / 2,
+                        r,
+                    );
+                }
+                // Кольца рисуются последними: планета не должна перекрывать
+                // последнее кольцо, пока оно не ушло за край экрана.
+                transition::draw_station(frame, vx, vy, vw, vh, s, t.elapsed, false, 0);
+            } else {
+                transition::draw_station(frame, vx, vy, vw, vh, s, t.elapsed, true, f.planet_color);
+            }
             // Ролик рисует только трубу: подпись Front View уходит вместе с
             // обычной сценой, поэтому её нужно нарисовать поверх анимации.
             draw_view_label(f, frame, font, vx, vy, vw, s);
@@ -233,4 +263,93 @@ fn draw_bottom_label(
         VIEW_LABEL_COLOR,
         s.max(1) as usize,
     );
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use super::super::palette::STATION_RING_COLOR;
+    use crate::cockpit;
+    use crate::display::{Frame, TRANSPARENT};
+    use crate::flight::scene::{Body, BodyKind, BODY_SRC_PLANET};
+    use crate::flight::TransitionKind;
+    use crate::font::ZX_FONT;
+    use crate::render3d::{ENGINE_IDLE, Rotation};
+
+    const W: usize = 256;
+    const H: usize = 192;
+    const PLANET: u32 = 0x00FF00;
+
+    fn launch_frame(elapsed: f32) -> Frame {
+        let mut f = Flight::new();
+        f.open(0);
+        f.planet_color = PLANET;
+        f.start_transition_kind(TransitionKind::Launch, 0);
+        f.transition.current.as_mut().unwrap().elapsed = elapsed;
+
+        let geom = cockpit::panel_geometry(W as u32, H as u32);
+        let mut frame = Frame::new(W, H);
+        frame.clear(TRANSPARENT);
+        f.draw(&mut frame, &geom, ZX_FONT);
+        frame
+    }
+
+    fn planet_pixels(frame: &Frame) -> usize {
+        frame.pixels().iter().filter(|&&p| p == PLANET).count()
+    }
+
+    #[test]
+    fn launch_tunnel_starts_with_fake_planet() {
+        let frame = launch_frame(1.0);
+        assert!(
+            planet_pixels(&frame) > 0,
+            "в начале тоннеля нет планеты в кольце-выходе"
+        );
+    }
+
+    #[test]
+    fn launch_does_not_end_with_a_full_screen_planet() {
+        let frame = launch_frame(transition::STATION_REAL_SCENE_TIME + 0.1);
+        assert_eq!(
+            planet_pixels(&frame),
+            0,
+            "на выходе осталась фейковая планета из ролика"
+        );
+    }
+
+    #[test]
+    fn launch_does_not_cover_the_exit_ring_with_a_planet() {
+        let elapsed = transition::STATION_REAL_SCENE_TIME + 0.1;
+        let mut f = Flight::new();
+        f.open(PLANET);
+        f.start_transition_kind(TransitionKind::Launch, 0);
+        f.transition.current.as_mut().unwrap().elapsed = elapsed;
+        // Планета закрывает весь вид: кольцо всё равно должно быть поверх неё.
+        f.bodies.push(Body {
+            source: BODY_SRC_PLANET,
+            kind: BodyKind::Planet,
+            model: None,
+            pos: [0.0, 0.0, 1000.0],
+            rot: Rotation::identity(),
+            radius: 1000.0,
+            color: PLANET,
+            tint: None,
+            engine: ENGINE_IDLE,
+        });
+
+        let geom = cockpit::panel_geometry(W as u32, H as u32);
+        let mut frame = Frame::new(W, H);
+        frame.clear(TRANSPARENT);
+        f.draw(&mut frame, &geom, ZX_FONT);
+
+        let view = geom.view();
+        let r = transition::station_aperture_radius(view.w as i32, view.h as i32, elapsed).unwrap();
+        let x = view.x + view.w / 2 + r.round() as i32;
+        let y = view.y + view.h / 2;
+        assert_eq!(
+            frame.pixels()[y as usize * W + x as usize],
+            STATION_RING_COLOR,
+            "планета перекрыла кольцо-выход"
+        );
+    }
 }
