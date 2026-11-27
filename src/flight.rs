@@ -427,7 +427,21 @@ impl Flight {
             return;
         }
         let was_docking = matches!(self.transition.kind(), Some(TransitionKind::Docking));
+        let was_launch = matches!(self.transition.kind(), Some(TransitionKind::Launch));
         self.transition.reset();
+        if was_launch {
+            // После вылета снимки интерполяции относятся к станции/старой сцене.
+            // Сбрасываем их, чтобы первый реальный кадр полёта не смешивался с
+            // фантомным состоянием.
+            self.prev_tick_positions = None;
+            self.prev_bodies.clear();
+            self.prev_station_bodies.clear();
+            self.prev_world_bodies.clear();
+            self.ship_accum = 0.0;
+            self.station_accum = 0.0;
+            self.world_accum = 0.0;
+            self.star_accum = 0.0;
+        }
         if !self.active {
             return;
         }
