@@ -1740,7 +1740,6 @@ impl App<'_> {
         if self.station_native {
             self.machine.release_all_keys();
             self.machine.release_joystick();
-            self.pending_key = None;
             return;
         }
         if self.menu || self.shop.active {

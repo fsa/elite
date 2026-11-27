@@ -3982,10 +3982,10 @@ use crate::world::{
         assert!(!app.pause_active, "Space не закрыл паузу на экране эмулятора");
     }
 
-    /// В нативном режиме станции эмулятор заморожен: ввод не передаётся,
-    /// отложенные клавиши очищаются, кадры Z80 не исполняются.
+    /// В нативном режиме станции эмулятор продолжает работать, но игровой ввод
+    /// в него не передаётся. Отложенная клавиша (например F1) может быть подана.
     #[test]
-    fn station_native_freezes_emulator_and_clears_input() {
+    fn station_native_blocks_input_but_runs_emulator() {
         let opts = test_options();
         let mut app = App::new(boot(), &opts);
         app.machine.intro_seen = false;
@@ -3996,25 +3996,24 @@ use crate::world::{
         app.maybe_enter_native_station();
         assert!(app.station_native, "подготовка: станция не в нативном режиме");
 
-        let frames = app.machine.frames;
-        let pc = app.machine.cpu.pc;
-        let sp = app.machine.cpu.sp;
-
         app.matrix[1][1] = true; // S
         app.kempston = [true, true, true, true, true];
-        app.pending_key = Some((1, 1));
+        app.pending_key = None;
 
         app.apply_input();
-        assert_eq!(app.pending_key, None, "pending_key не очищен в нативном режиме");
-        assert_eq!(app.machine.kempston, 0, "джойстик ушёл в замороженный эмулятор");
+        assert_eq!(app.machine.kempston, 0, "джойстик ушёл в эмулятор на станции");
         for (row, &bits) in app.machine.keyboard.iter().enumerate() {
-            assert_eq!(bits, 0xFF, "ряд {row} клавиатуры ушёл в замороженный эмулятор");
+            assert_eq!(bits, 0xFF, "ряд {row} клавиатуры ушёл в эмулятор на станции");
         }
 
-        // Без прогона кадров состояние процессора/эмулятора не меняется.
-        assert_eq!(app.machine.frames, frames, "кадры Z80 изменились без прогона");
-        assert_eq!(app.machine.cpu.pc, pc, "PC изменился без прогона Z80");
-        assert_eq!(app.machine.cpu.sp, sp, "SP изменился без прогона Z80");
+        app.pending_key = Some((1, 1));
+        app.forward_pending_key();
+        let (row, bit) = (1usize, 1u8);
+        assert_eq!(
+            app.machine.keyboard[row] & (1 << bit),
+            0,
+            "отложенная клавиша не дошла до Z80"
+        );
     }
 
     /// Гиперпрыжок, начатый под нативным экраном: отсчёт идёт в эмуляторе,

@@ -353,10 +353,26 @@ impl App<'_> {
             emulator_ran = ran;
             self.play_frame_audio(ran);
         } else if self.station_native {
-            self.machine.release_all_keys();
-            self.machine.release_joystick();
-            self.pending_key = None;
-            self.play_frame_audio(false);
+            if !self.state.menu && z80_frames > 0 {
+                self.machine.release_all_keys();
+                self.machine.release_joystick();
+                let had_pending = self.pending_key.is_some();
+                if had_pending {
+                    self.forward_pending_key();
+                }
+                self.machine.run_frames(z80_frames);
+                emulator_ran = true;
+                if had_pending {
+                    self.switch_to_flight_on_transition();
+                    self.open_pending_flight();
+                }
+                self.play_frame_audio(true);
+            } else {
+                self.machine.release_all_keys();
+                self.machine.release_joystick();
+                self.pending_key = None;
+                self.play_frame_audio(false);
+            }
         // Под заглушками `DOCKED`/`LOADING` эмулятор продолжает работать, но
         // не получает нажатий клавиш, а нативные экраны под ними не меняются.
         // Во время загрузки этот прогон нужен, чтобы Z80 дошёл до хука.
