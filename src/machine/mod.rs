@@ -99,6 +99,16 @@ pub struct Spectrum {
     pub intro_seen: bool,
     /// Частота дискретизации синтезируемого звука (Гц).
     pub audio_rate: u32,
+    /// General Sound: значение защёлки порта `0xB3` (выбранная страница/регистр).
+    pub gs_latch: u8,
+    /// General Sound: последняя команда, записанная в порт `0xBB`.
+    pub gs_command: u8,
+    /// General Sound: бит 0 статуса порта `0xBB` (1 — команда ещё обрабатывается).
+    pub gs_busy: bool,
+    /// Команды воспроизведения GS (`0x39` + значение защёлки `0xB3`), которые
+    /// игра выдала за кадр. Эмулятор не синтезирует GS-сэмплы: очередь отдаётся
+    /// нативному звуковому модулю через [`crate::sfx`].
+    pub gs_sound_requests: Vec<u8>,
     /// Переходы бипера (порт 0xFE, бит 4) в текущем кадре: (такт CPU, уровень).
     beeper_edges: Vec<(u64, bool)>,
     /// Уровень бипера на начало текущего кадра.
@@ -206,6 +216,10 @@ impl Spectrum {
             game_snapshot_valid: false,
             intro_seen: false,
             audio_rate: crate::audio::SAMPLE_RATE,
+            gs_latch: 0,
+            gs_command: 0,
+            gs_busy: false,
+            gs_sound_requests: Vec::new(),
             beeper_edges: Vec::new(),
             beeper_frame_start: false,
             beeper_filter: 0.0,

@@ -4,6 +4,9 @@
 //! `zx_src/kladov128.snapshot`. Образ и ROM 48K встроены в исполняемый файл
 //! (`src/assets.rs`), поэтому запуск не зависит от внешних файлов. Образ
 //! получен `tools/make_kladov_image.py` и хранится как `zx_bin/kladov128.bin`.
+//! По умолчанию запускается GS-версия (`zx_bin/kladov128gs.bin`), собранная
+//! `tools/make_kladov_gs_image.py`: это тот же образ состояния игры с патчами
+//! General Sound. Точка старта и регистры остаются прежними.
 //! Файл `ELITE3  C` на дискете — слепок уже работающей игры, без согласованной
 //! точки холодного старта, поэтому мы не проходим загрузчик, а возобновляем
 //! исполнение ровно там, где был прерван обработчик прерывания в снапшоте:
@@ -37,8 +40,14 @@ pub const KLADOV_STATE_DE_ALT: u16 = 0x0060;
 pub const KLADOV_STATE_HL_ALT: u16 = 0x0240;
 
 /// Загрузить 128K-образ Кладова в уже созданную машину.
+#[cfg(test)]
 pub fn load_kladov_image(machine: &mut Spectrum) {
     machine.load_game_image(assets::KLADOV_IMAGE, assets::KLADOV_PAGE_REG);
+}
+
+/// Загрузить GS-версию Кладова (используется при обычном запуске игры).
+pub fn load_kladov_gs_image(machine: &mut Spectrum) {
+    machine.load_game_image(assets::KLADOV_GS_IMAGE, assets::KLADOV_PAGE_REG);
 }
 
 /// Выставить регистры из заголовка снапшота, включая альтернативный набор.
@@ -76,7 +85,7 @@ pub fn set_kladov_cpu(machine: &mut Spectrum) {
 /// Настроить машину с загруженной игрой под версию Кладова.
 pub fn machine(opts: &Options) -> Spectrum {
     let mut machine = Spectrum::new(Some(assets::ROM_48));
-    load_kladov_image(&mut machine);
+    load_kladov_gs_image(&mut machine);
     set_kladov_cpu(&mut machine);
 
     if opts.native || env::var("ELITE_NATIVE").is_ok() {

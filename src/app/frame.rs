@@ -59,6 +59,11 @@ impl App<'_> {
     /// чтобы вывод не зависал при пропусках/избытке шагов Z80. Если Z80 не
     /// выполнялся, держим текущий уровень бипера.
     fn play_frame_audio(&mut self, run_emulator: bool) {
+        // GS-команды, накопленные за шаги Z80, превращаются в нативные звуки.
+        // Делаем это до раннего выхода, чтобы очередь не росла без звука.
+        for id in self.machine.gs_sound_requests.drain(..) {
+            self.sfx.play(crate::sfx::Sfx::Gs(id));
+        }
         if self.audio.is_none() && self.wav_samples.is_none() && !self.sfx.is_playing() {
             return;
         }

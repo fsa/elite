@@ -8055,7 +8055,7 @@ loc_6ECF:				; CODE XREF: InitSpeedAngle+Fj
 
 		ret	c
 
-		jp	loc_7344
+		jp	loc_7344		; GS: уходит в patched-рутину General Sound (см. gs_patches.asm)
 
 ; End of function InitSpeedAngle
 ; ---------------------------------------------------------------------------
@@ -9800,6 +9800,9 @@ loc_7340:				; CODE XREF: RAM:72E1j	RAM:72F9j
 		push	hl
 
 loc_7344:				; CODE XREF: InitSpeedAngle+15j
+; GS-ВЕРСИЯ: здесь patched-рутина `LD A,1; OUT (0xB3),A; LD A,0x39;
+; OUT (0xBB),A; IN A,(0xBB); RRCA; JR c,...; RET`. Разбор и точки вызова
+; `0x7346` смотри в `gs_patches.asm`.
 
 		ld	b, 6
 

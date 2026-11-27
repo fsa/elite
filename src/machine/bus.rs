@@ -29,6 +29,16 @@ impl Bus for Spectrum {
     }
 
     fn input(&mut self, port: u16) -> u8 {
+        // General Sound: порт 0xBB — статус. Игра читает его сразу после записи
+        // команды и крутится, пока взведён бит занятости (`RRCA; JR c,...` в
+        // `sub_7346`). Возвращаем «занято» ровно один раз, чтобы сохранить
+        // короткую задержку устройство->CPU, но не зациклить игру.
+        if port & 0xFF == 0xBB {
+            let status = if self.gs_busy { 0x81 } else { 0x00 };
+            self.gs_busy = false;
+            return status;
+        }
+
         let high = (port >> 8) as u8;
         // Kempston joystick: selected when A5=0 (e.g. port 0x1F / 0xFF1F).
         if port & 0x20 == 0 {
@@ -49,6 +59,25 @@ impl Bus for Spectrum {
     }
 
     fn output(&mut self, port: u16, val: u8) {
+        // General Sound: `0xB3` — защёлка регистра/страницы, `0xBB` — команда.
+        // Попадание только по младшему байту порта: в `OUT (n),A` старший байт
+        // адреса равен значению accumulator'а и у игровых команд различается.
+        let low = port as u8;
+        if low == 0xB3 {
+            self.gs_latch = val;
+            return;
+        }
+        if low == 0xBB {
+            self.gs_command = val;
+            self.gs_busy = true;
+            // `0x39` + номер из защёлки `0xB3` — команда «проиграть звук».
+            // Вместо синтеза сэмплов GS отдаём номер нативному модулю звука.
+            if val == 0x39 {
+                self.gs_sound_requests.push(self.gs_latch);
+            }
+            return;
+        }
+
         if port & 0xC002 == 0x4000 {
             // Порт пейджинга памяти 0x7FFD.
             self.paging_writes = self.paging_writes.wrapping_add(1);

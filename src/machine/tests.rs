@@ -83,6 +83,31 @@ fn hook_bound_to_upper_bank_does_not_fire_in_other_bank() {
 }
 
 #[test]
+fn general_sound_command_is_acknowledged_and_translated() {
+    let mut m = Spectrum::new(None);
+
+    // Защёлка и команда приходят разными портами; старший байт адреса у OUT
+    // равен значению accumulator'а и не должен влиять на распознавание.
+    m.output(0x0001B3, 0x0F);
+    assert_eq!(m.gs_latch, 0x0F);
+    m.output(0x0039BB, 0x39);
+    assert_eq!(m.gs_command, 0x39);
+    assert!(m.gs_busy);
+    assert_eq!(m.gs_sound_requests, vec![0x0F]);
+
+    // Цикл ожидания из `sub_7346`: первое чтение показывает «занято»,
+    // следующее — готовность, иначе игра висела бы в этом цикле.
+    assert_eq!(m.input(0x0039BB), 0x81);
+    assert!(!m.gs_busy);
+    assert_eq!(m.input(0x0039BB), 0x00);
+
+    // Служебные команды загрузчика не являются запросом звука.
+    m.output(0x00B3, 0x01);
+    m.output(0x00BB, 0xF5);
+    assert_eq!(m.gs_sound_requests, vec![0x0F]);
+}
+
+#[test]
 fn beeper_edges_become_audio() {
     let mut m = Spectrum::new(None);
     // DI ; loop: ld a,0x10 ; out (0xfe),a ; ld a,0 ; out (0xfe),a ; jr loop

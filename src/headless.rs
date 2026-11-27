@@ -99,6 +99,9 @@ pub fn run(machine: &mut Spectrum, opts: &Options) {
             }
         }
         machine.run_frame();
+        // В headless-режиме нет нативного проигрывателя звука: GS-команды
+        // только фиксируются очередью портов, здесь их просто сбрасываем.
+        machine.gs_sound_requests.clear();
         if machine.save_requested {
             machine.save_requested = false;
             let path = storage::default_save_name();

@@ -31,6 +31,7 @@ mod equip;
 mod flight;
 mod font;
 mod galaxy;
+mod gs_samples;
 mod headless;
 mod hdmap;
 mod inventory;
