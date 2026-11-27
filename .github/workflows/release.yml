@@ -5,17 +5,15 @@ on:
     tags:
       - 'v*'
 
-permissions:
-  contents: read
-
-env:
-  ELITE_VERSION: ${{ github.ref_name }}
-
 jobs:
   build:
-    name: Build ${{ matrix.target }}
+    name: ${{ matrix.target }}
     runs-on: ${{ matrix.os }}
-
+    permissions:
+      contents: read
+    env:
+      # Вшивается в бинарник через option_env!("ELITE_VERSION") в cli.rs.
+      ELITE_VERSION: ${{ github.ref_name }}
     strategy:
       fail-fast: false
       matrix:
@@ -23,10 +21,11 @@ jobs:
           - os: ubuntu-latest
             target: x86_64-unknown-linux-gnu
             binary: elite
-            features: --features audio-cpal
-            cache-key: linux-pipewire-alsa
+            # Linux использует PipeWire напрямую. Не включаем audio-cpal,
+            # чтобы не подключать CPAL/ALSA в Linux-сборке.
+            features: ''
+            cache-key: linux-pipewire
             archive: elite-${{ github.ref_name }}-linux-x86_64.tar.gz
-
           - os: windows-latest
             target: x86_64-pc-windows-msvc
             binary: elite.exe
@@ -37,14 +36,6 @@ jobs:
     steps:
       - name: Checkout
         uses: actions/checkout@v4
-
-      - name: Validate version tag
-        shell: bash
-        run: |
-          if [[ ! "$ELITE_VERSION" =~ ^v(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)(-[0-9A-Za-z.-]+)?(\+[0-9A-Za-z.-]+)?$ ]]; then
-            echo "Invalid version tag: $ELITE_VERSION"
-            exit 1
-          fi
 
       - name: Install Rust
         uses: dtolnay/rust-toolchain@stable
@@ -65,12 +56,9 @@ jobs:
         if: runner.os == 'Linux'
         run: |
           sudo apt-get update
-          sudo apt-get install -y \
-            libpipewire-0.3-dev \
-            libclang-dev \
-            libasound2-dev \
-            pkg-config
-
+          sudo apt-get install -y libpipewire-0.3-dev libclang-dev pkg-config
+          # В .cargo/config.toml могут быть пути clang/gcc хоста разработчика;
+          # на GitHub runner они мешают bindgen.
           echo "BINDGEN_EXTRA_CLANG_ARGS=" >> "$GITHUB_ENV"
 
       - name: Tests
@@ -81,8 +69,7 @@ jobs:
 
       - name: Build
         shell: bash
-        run: |
-          cargo build --release --target ${{ matrix.target }} ${{ matrix.features }}
+        run: cargo build --release --target ${{ matrix.target }} ${{ matrix.features }}
 
       - name: Check embedded version
         shell: bash
@@ -103,9 +90,7 @@ jobs:
         if: runner.os == 'Windows'
         shell: pwsh
         run: |
-          Compress-Archive `
-            -Path "target/${{ matrix.target }}/release/${{ matrix.binary }}", "${{ github.workspace }}/README.md" `
-            -DestinationPath "${{ matrix.archive }}"
+          Compress-Archive -Path "target/${{ matrix.target }}/release/${{ matrix.binary }}", "${{ github.workspace }}/README.md" -DestinationPath "${{ matrix.archive }}"
 
       - name: Upload artifact
         uses: actions/upload-artifact@v4
@@ -115,13 +100,11 @@ jobs:
           if-no-files-found: error
 
   release:
-    name: Publish GitHub Release
+    name: Publish release
     needs: build
     runs-on: ubuntu-latest
-
     permissions:
       contents: write
-
     steps:
       - name: Download artifacts
         uses: actions/download-artifact@v4
@@ -136,9 +119,8 @@ jobs:
         shell: bash
         run: |
           args=(--title "$TAG" --generate-notes)
-
+          # Stable release — only vX.Y.Z; tags with prerelease suffix are prereleases.
           if [[ ! "$TAG" =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
             args+=(--prerelease)
           fi
-
           gh release create "$TAG" dist/* "${args[@]}"
