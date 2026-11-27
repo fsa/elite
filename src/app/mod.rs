@@ -222,6 +222,10 @@ struct App<'a> {
     /// окно занимает вид из кабины и нативная приборная панель; эмулятор
     /// продолжает работать и задаёт мир, поэтому ввод идёт в игру.
     flight: flight::Flight,
+    /// Экран станции был активен в предыдущем кадре. Переход на него сбрасывает
+    /// снимок сцены: иначе он хранил бы состояние до посадки и подсовывал его
+    /// рендеру после следующего вылета.
+    was_at_station: bool,
     /// Нативная заставка (титульный экран): пока игра на интро, окно занимает
     /// нативный рендер (`splash`). Кнопка ` может временно показать родное
     /// интро эмулятора.
@@ -330,6 +334,9 @@ impl<'a> App<'a> {
         // кадр эмулятора. Значение берём до перемещения `machine` в структуру.
         let splash_emulator = machine.load_requested;
         let loading = machine.load_requested;
+        // Снапшот может сразу быть пристыкованным; это не новая посадка.
+        let was_at_station = flight::z80_is_docked(&machine.mem)
+            && !flight::z80_in_cockpit(&machine.mem);
         let mut app = Self {
             state: GameState::default(),
             machine,
@@ -368,6 +375,7 @@ impl<'a> App<'a> {
             market_mission: None,
             mission_prompt: None,
             flight: flight::Flight::new(),
+            was_at_station,
             splash: splash::Splash::with_debug(opts.debug),
             splash_emulator,
             emulator_transition_lock: false,
@@ -517,6 +525,23 @@ impl<'a> App<'a> {
     #[allow(dead_code)]
     pub(super) fn game_state(&self) -> &GameState {
         &self.state
+    }
+
+    /// Сбросить снимок сцены в момент посадки на станцию.
+    ///
+    /// Пока игра стоит на странице капитана, старый снимок не обновляется.
+    /// Без сброса нативный вылет брал бы из него картинку до посадки вместо
+    /// живой памяти, которую игра обновляет в первом же проходе после вылета.
+    pub(super) fn sync_docking_snapshot(&mut self) {
+        // `IndDanger == 0` держится и в кабине до ухода на страницу капитана,
+        // поэтому за посадку считаем только экран станции. На холодном старте
+        // экран кабины, так что старый снимок зря не сбрасывается.
+        let at_station = flight::z80_is_docked(&self.machine.mem)
+            && !flight::z80_in_cockpit(&self.machine.mem);
+        if at_station && !self.was_at_station {
+            self.machine.invalidate_game_snapshot();
+        }
+        self.was_at_station = at_station;
     }
 
     /// Обновить централизованное состояние из эмулятора и активных нативных экранов.

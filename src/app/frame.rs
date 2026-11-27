@@ -101,6 +101,14 @@ impl App<'_> {
         if !(info_overlay && in_space_flight) {
             self.follow_flight_screen();
         }
+        if self.flight.transition_kind() == Some(flight::TransitionKind::Launch) {
+            // Снимок мог быть снят ещё до нажатия `F1`: пока игра стоит на
+            // станции, `PrintCompass` успевает обновить его кадром посадки.
+            // Сам вылет не возвращается в `PrintCompass` до конца ролика,
+            // поэтому такой снимок доживал бы до первого обычного кадра после
+            // анимации и подменял бы готовящуюся сцену старой картинкой.
+            self.machine.invalidate_game_snapshot();
+        }
         if flight::z80_player_dead(&self.machine.mem) {
             // Оригинал блокирует управление, но оставляет последнюю угловую
             // скорость: без этого обломки продолжают ехать в сторону последнего
@@ -552,6 +560,7 @@ impl App<'_> {
             self.finish_pending_station_native();
             self.track_jump_countdown();
         }
+        self.sync_docking_snapshot();
 
         // Хуки старта одноразовые: как только Z80 вошёл в игру, повторное
         // нажатие `Space` на вернувшейся заставке должно ставить их заново.

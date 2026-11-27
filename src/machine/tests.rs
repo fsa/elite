@@ -145,6 +145,23 @@ fn game_state_is_snapshot_taken_at_transition_marker() {
 }
 
 #[test]
+fn invalidated_game_snapshot_returns_live_memory() {
+    let mut m = Spectrum::new(None);
+    m.snapshot_marker = Some(0x81A9);
+    m.mem[0x7000] = 0x11;
+    m.note_pc(0x81A9);
+    m.mem[0x7000] = 0x22;
+    assert_eq!(m.game_state()[0x7000], 0x11, "снимок ещё не сброшен");
+
+    m.invalidate_game_snapshot();
+    assert!(!m.game_snapshot_valid);
+    assert_eq!(m.game_state()[0x7000], 0x22, "после сброса нужна живая память");
+
+    m.note_pc(0x81A9);
+    assert_eq!(m.game_state()[0x7000], 0x22, "следующий проход снимает снимок");
+}
+
+#[test]
 fn run_frames_advances_double_and_keeps_audio_rate() {
     let mut m = Spectrum::new(None);
     let prog = [

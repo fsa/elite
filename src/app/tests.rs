@@ -2266,6 +2266,77 @@ use crate::world::{
         assert!(!app.flight.docking_blackout, "затемнение не снято");
     }
 
+    /// После посадки снимок сцены сбрасывается: пока станция заморожена, он
+    /// хранил бы вид до стыковки и подменил бы сцену после вылета.
+    #[test]
+    fn docking_drops_stale_scene_snapshot() {
+        let opts = test_options();
+        let mut app = App::new(boot(), &opts);
+        app.was_at_station = false;
+        let marker = crate::world::snapshot_marker();
+        app.machine.snapshot_marker = Some(marker);
+        app.machine.mem[flight::Z80_WHAT_ON_SCREEN] = 0x11;
+        app.machine.note_pc(marker);
+        app.machine.mem[flight::Z80_WHAT_ON_SCREEN] = 0x22;
+        assert_eq!(
+            app.machine.game_state()[flight::Z80_WHAT_ON_SCREEN],
+            0x11,
+            "снимок до посадки ещё не сброшен"
+        );
+
+        app.machine.mem[flight::Z80_IND_DANGER] = 0;
+        app.machine.mem[flight::Z80_WHAT_ON_SCREEN] = flight::Z80_SCREEN_PILOT_INFO;
+        app.sync_docking_snapshot();
+        assert!(!app.machine.game_snapshot_valid, "посадка не сбросила снимок");
+        assert_eq!(
+            app.machine.game_state()[flight::Z80_WHAT_ON_SCREEN],
+            flight::Z80_SCREEN_PILOT_INFO,
+            "после сброса рендер видит живую память"
+        );
+        app.sync_docking_snapshot();
+        assert!(app.was_at_station, "признак станции не сохранился");
+    }
+
+    /// Снимок, снятый на станции перед нажатием `F1`, не должен доживать до
+    /// конца вылета: ролик не возвращается в `PrintCompass`, и первый обычный
+    /// кадр полёта иначе показал бы сцену посадки.
+    #[test]
+    fn launch_drops_stale_scene_snapshot() {
+        let opts = test_options();
+        let mut app = App::new(boot(), &opts);
+        let marker = crate::world::snapshot_marker();
+        app.machine.snapshot_marker = Some(marker);
+        app.machine.mem[flight::Z80_WHAT_ON_SCREEN] = 0x11;
+        app.machine.note_pc(marker);
+        assert!(app.machine.game_snapshot_valid, "снимок не снят");
+        assert_eq!(
+            app.machine.game_state()[flight::Z80_WHAT_ON_SCREEN],
+            0x11,
+            "снимок должен хранить сцену посадки"
+        );
+
+        app.machine.intro_seen = false;
+        app.machine.mem[flight::Z80_WHAT_ON_SCREEN] = 0x0B;
+        app.machine.mem[flight::Z80_IND_DANGER] = 0;
+        app.machine.mem[flight::Z80_JUMP_DOCKING] = 1;
+        app.machine.mem[flight::Z80_FLG_JUMP_DOCKING] = 1;
+        app.machine.mem[flight::Z80_JUMP_COUNTDOWN] = 0;
+        app.pending_launch = true;
+        app.switch_to_flight_on_transition();
+        assert_eq!(
+            app.flight.transition_kind(),
+            Some(flight::TransitionKind::Launch),
+            "вылет не начался"
+        );
+        app.sync_flight_after_frames(1);
+        assert!(!app.machine.game_snapshot_valid, "вылет не сбросил старый снимок");
+        assert_eq!(
+            app.machine.game_state()[flight::Z80_WHAT_ON_SCREEN],
+            0x0B,
+            "после сброса нужна живая память"
+        );
+    }
+
     /// `F1` на станции должен запускать вылет, даже если кадр рендера попал
     /// между фиксированными кадрами Z80. Раньше одноразовая клавиша `1`
     /// переносилась в матрицу на каждом кадре рендера и стиралась следующим
